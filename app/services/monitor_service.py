@@ -76,7 +76,7 @@ class MonitorService:
         self.db.add(snapshot)
         self.db.flush()
 
-        if result.status == QueryStatus.SUCCESS and result.raw_response is not None:
+        if result.status in {QueryStatus.SUCCESS, QueryStatus.PARTIAL_SUCCESS} and result.raw_response is not None:
             self.alerts.handle_query_success(waybill)
             try:
                 parser = parser_registry.get(result.adapter_code)

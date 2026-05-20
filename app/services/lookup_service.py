@@ -75,7 +75,7 @@ class WaybillLookupService:
         logger.info("ad-hoc lookup %s via %s", waybill_no, mapping.adapter_code)
         result = await adapter.query(waybill_no)
 
-        if result.status != QueryStatus.SUCCESS or result.raw_response is None:
+        if result.status not in {QueryStatus.SUCCESS, QueryStatus.PARTIAL_SUCCESS} or result.raw_response is None:
             return _from_failed_result(waybill_no, result)
 
         parser = parser_registry.get(mapping.adapter_code)
@@ -121,6 +121,8 @@ def _from_parsed(
         carrier_code=result.carrier_code,
         adapter_code=result.adapter_code,
         query_method=result.query_method,
+        error_code=result.error_code,
+        error_message=result.error_message,
         official_info=official_info,
         flight_segments=[
             LookupFlightSegment(

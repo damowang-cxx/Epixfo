@@ -61,13 +61,17 @@ class CZAdapter:
             )
 
         normalized_raw = normalizer.normalize(raw)
+        has_booking = bool(raw.get("booking"))
+        is_booking_only_partial = bool(raw.get("errorInfo")) and not raw.get("awbInfo") and has_booking
 
         return CarrierQueryResult(
-            status=QueryStatus.SUCCESS,
+            status=QueryStatus.PARTIAL_SUCCESS if is_booking_only_partial else QueryStatus.SUCCESS,
             carrier_code=self.carrier_code,
             adapter_code=self.adapter_code,
             query_method=self.query_method,
             raw_response=normalized_raw,
+            error_code="awb_info_not_found" if is_booking_only_partial else None,
+            error_message=raw.get("errorInfo") if is_booking_only_partial else None,
         )
 
     def _failed(self, error_code: str, error_message: str) -> CarrierQueryResult:

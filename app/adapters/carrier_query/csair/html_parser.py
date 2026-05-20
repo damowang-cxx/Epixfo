@@ -191,10 +191,25 @@ def _build_index_to_key(table: Tag, header_map: dict[str, str]) -> dict[int, str
     headers = [_text(th) for th in table.find_all("th")]
     out: dict[int, str] = {}
     for i, header in enumerate(headers):
-        key = normalized_map.get(_normalize_header(header))
+        normalized_header = _normalize_header(header)
+        key = normalized_map.get(normalized_header)
+        if key is None:
+            key = _find_fuzzy_header_key(normalized_header, normalized_map)
         if key and i not in out:
             out[i] = key
     return out
+
+
+def _find_fuzzy_header_key(normalized_header: str, normalized_map: dict[str, str]) -> str | None:
+    """兼容官网在表头里插入 label/input 文案的情况。"""
+    if not normalized_header:
+        return None
+    for candidate, key in sorted(normalized_map.items(), key=lambda item: len(item[0]), reverse=True):
+        if not candidate:
+            continue
+        if normalized_header.startswith(candidate) or candidate in normalized_header:
+            return key
+    return None
 
 
 def _rows_by_header(table: Tag | None, header_map: dict[str, str]) -> list[dict[str, str]]:

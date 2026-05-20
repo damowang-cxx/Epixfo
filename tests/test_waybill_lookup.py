@@ -79,6 +79,42 @@ def test_lookup_success_returns_parsed_data(monkeypatch: pytest.MonkeyPatch) -> 
     assert OfficialEventType.FLIGHT_DEPARTED in types
 
 
+def test_lookup_partial_success_keeps_booking_segments(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.adapters.carrier_query.normalizers.cz import CZNormalizer
+
+    raw = _load_tang_sample()
+    raw["awbInfo"] = None
+    raw["errorInfo"] = "运单信息不存在"
+    normalized_raw = CZNormalizer().normalize(raw)
+    mapping = SimpleNamespace(
+        adapter_code="cz_adapter",
+        carrier_code="CZ",
+        query_method=CarrierQueryMethod.HYBRID,
+    )
+    adapter = _StubAdapter(
+        CarrierQueryResult(
+            status=QueryStatus.PARTIAL_SUCCESS,
+            carrier_code="CZ",
+            adapter_code="cz_adapter",
+            query_method=CarrierQueryMethod.HYBRID,
+            raw_response=normalized_raw,
+            error_code="awb_info_not_found",
+            error_message="运单信息不存在",
+        )
+    )
+
+    monkeypatch.setattr(lookup_service_module.registry, "get", lambda code: adapter)
+    service = _make_service(monkeypatch, mapping)
+
+    response = _run(service.lookup("784-83707805"))
+
+    assert response.status == QueryStatus.PARTIAL_SUCCESS
+    assert response.error_code == "awb_info_not_found"
+    assert response.error_message == "运单信息不存在"
+    assert response.official_info is None
+    assert len(response.flight_segments) == 1
+
+
 def test_lookup_invalid_waybill_no_short_circuits(monkeypatch: pytest.MonkeyPatch) -> None:
     """运单号格式错误时不应触达 carrier_repository。"""
 

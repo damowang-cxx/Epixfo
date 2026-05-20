@@ -12,6 +12,7 @@ from app.adapters.carrier_query.csair.active_flight import query_active_flight
 from app.adapters.carrier_query.csair.captcha import CaptchaFailed, pass_captcha
 from app.adapters.carrier_query.csair.html_parser import parse_result
 from app.adapters.carrier_query.csair.session import AWB_PAGE_URL, build_session, fetch_viewstate
+from app.core.config import settings
 
 logger = logging.getLogger("epixfo.csair.client")
 
@@ -98,6 +99,8 @@ def query_awb(prefix: str, no: str, debug_dir: Path | None = None) -> dict[str, 
         raise ValueError(f"运单号必须是 8 位数字，实际：{no!r}")
 
     logger.info("querying CZ awb %s-%s", prefix, no)
+    if debug_dir is None and settings.csair_captcha_debug:
+        debug_dir = Path(settings.csair_captcha_debug_dir)
 
     with build_session() as session:
         viewstate = fetch_viewstate(session)
@@ -123,11 +126,19 @@ def query_awb(prefix: str, no: str, debug_dir: Path | None = None) -> dict[str, 
 
         result = parse_result(html)
 
-        if not result.get("awbInfo") and result.get("errorInfo"):
+        booking_rows = result.get("booking") or []
+        if not result.get("awbInfo") and result.get("errorInfo") and not booking_rows:
             raise AwbNotFound(f"查询返回错误信息：{result['errorInfo']}")
+        if not result.get("awbInfo") and result.get("errorInfo") and booking_rows:
+            logger.warning(
+                "CZ awb %s-%s has booking rows but no awbInfo: %s",
+                prefix,
+                no,
+                result["errorInfo"],
+            )
 
         # 给每个 booking 补充精确的起飞 / 到达时间（计划 + 实际）。单条失败仅置 None，不冒泡。
-        _enrich_bookings_with_active_flight(session, result.get("booking") or [], debug_dir)
+        _enrich_bookings_with_active_flight(session, booking_rows, debug_dir)
 
         return {
             "awbNo": f"{prefix}-{no}",
@@ -154,6 +165,8 @@ def _enrich_bookings_with_active_flight(
 
     单条 booking 查询失败（captcha / network / 解析）只 log warning，4 字段保持 None。
     """
+    query_cache: dict[tuple[str, date, str, str], list[dict[str, Any]] | None] = {}
+
     for row in bookings:
         # 默认先置 None，便于失败时仍有键
         row.setdefault("depPlanTime", None)
@@ -172,25 +185,42 @@ def _enrich_bookings_with_active_flight(
             logger.debug("skip active flight: cannot parse date %r", flight_date_raw)
             continue
 
+        carrier_code = _flight_carrier_code(flight_no)
+        if carrier_code != "CZ":
+            logger.info(
+                "skip active flight: unsupported carrier flight_no=%s carrier=%s",
+                flight_no,
+                carrier_code or "UNKNOWN",
+            )
+            continue
+
         from_station = _airport_code(row.get("fromStation"))
         to_station = _airport_code(row.get("toStation"))
+        cache_key = (_normalize_flight_no(flight_no), flight_date, from_station, to_station)
 
-        try:
-            entries = query_active_flight(
-                session,
-                flight_no=flight_no,
-                flight_date=flight_date,
-                dep_station=from_station,
-                arr_station=to_station,
-                debug_dir=debug_dir,
-            )
-        except Exception as exc:  # noqa: BLE001  本期就是要降级吞掉
-            logger.warning(
-                "active flight query failed for %s @ %s: %r",
-                flight_no,
-                flight_date,
-                exc,
-            )
+        if cache_key not in query_cache:
+            try:
+                query_cache[cache_key] = query_active_flight(
+                    session,
+                    flight_no=flight_no,
+                    flight_date=flight_date,
+                    dep_station=from_station,
+                    arr_station=to_station,
+                    debug_dir=debug_dir,
+                )
+            except Exception as exc:  # noqa: BLE001  本期就是要降级吞掉
+                logger.warning(
+                    "active flight query failed for %s @ %s %s-%s: %r",
+                    flight_no,
+                    flight_date,
+                    from_station,
+                    to_station,
+                    exc,
+                )
+                query_cache[cache_key] = None
+
+        entries = query_cache[cache_key]
+        if entries is None:
             continue
 
         match = _pick_matching_entry(entries, flight_no, from_station, to_station)
@@ -248,6 +278,15 @@ def _normalize_flight_no(value: str) -> str:
     if m:
         return f"{m.group(1)}{m.group(2)}"
     return text
+
+
+def _flight_carrier_code(value: str) -> str | None:
+    text = (value or "").strip().upper()
+    m = _FLIGHT_NO_RE.match(text)
+    if m:
+        return m.group(1)
+    m = re.match(r"^([A-Z]{2,3})", text)
+    return m.group(1) if m else None
 
 
 def _pick_matching_entry(

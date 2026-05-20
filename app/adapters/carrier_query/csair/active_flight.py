@@ -15,6 +15,8 @@
 from __future__ import annotations
 
 import logging
+import json
+from pathlib import Path
 import re
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -62,6 +64,8 @@ def query_active_flight(
         raise ValueError("flight_no is required")
 
     logger.info("query active flight %s on %s", flight_no, flight_date.isoformat())
+    active_debug_dir = _resolve_debug_dir(debug_dir)
+    debug_prefix = _debug_prefix(flight_no, flight_date)
 
     viewstate = fetch_viewstate(session, url=ACTIVE_FLIGHT_URL)
     img_id = pass_captcha(
@@ -72,65 +76,119 @@ def query_active_flight(
     )
 
     form: dict[str, str] = {
-        "__EVENTTARGET": "ctl00$ContentPlaceHolder1$btnQuery",
+        "__EVENTTARGET": "",
         "__EVENTARGUMENT": "",
         "__LASTFOCUS": "",
+        "ctl00$lancode": "zh-cn",
         "ctl00$ContentPlaceHolder1$txtFdep": dep_station or "",
         "ctl00$ContentPlaceHolder1$txtFdest": arr_station or "",
         "ctl00$ContentPlaceHolder1$txtFlightNo": flight_no,
         "ctl00$ContentPlaceHolder1$txtFlightDepTime": flight_date.strftime("%Y-%m-%d"),
         "ctl00$ContentPlaceHolder1$selectTime": "00:01-24:00",
         "ctl00$ContentPlaceHolder1$txtImgId": img_id,
+        "ctl00$ContentPlaceHolder1$btnQuery": "查询",
     }
     for k in ("__VIEWSTATE", "__VIEWSTATEGENERATOR", "__EVENTVALIDATION", "__VIEWSTATEENCRYPTED"):
         if k in viewstate:
             form[k] = viewstate[k]
 
-    r = session.post(
-        ACTIVE_FLIGHT_URL,
-        data=form,
-        headers={
-            "Referer": ACTIVE_FLIGHT_URL,
-            "Origin": "https://tang.csair.com",
+    _write_debug_json(
+        active_debug_dir,
+        f"{debug_prefix}_submit.json",
+        {
+            "stage": "active_flight_submit",
+            "flight_no": flight_no,
+            "flight_date": flight_date.isoformat(),
+            "dep_station": dep_station,
+            "arr_station": arr_station,
+            "img_id": img_id,
+            "url": ACTIVE_FLIGHT_URL,
+            "headers": {
+                "Referer": ACTIVE_FLIGHT_URL,
+                "Origin": "https://tang.csair.com",
+            },
+            "form": _form_debug_snapshot(form),
         },
-        timeout=30,
     )
-    r.raise_for_status()
+
+    try:
+        r = session.post(
+            ACTIVE_FLIGHT_URL,
+            data=form,
+            headers={
+                "Referer": ACTIVE_FLIGHT_URL,
+                "Origin": "https://tang.csair.com",
+            },
+            timeout=30,
+        )
+    except requests.RequestException as exc:
+        _write_debug_json(
+            active_debug_dir,
+            f"{debug_prefix}_submit_error.json",
+            {
+                "stage": "active_flight_submit_error",
+                "flight_no": flight_no,
+                "flight_date": flight_date.isoformat(),
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            },
+        )
+        raise
+
+    try:
+        r.raise_for_status()
+    except requests.HTTPError as exc:
+        r.encoding = r.apparent_encoding or r.encoding
+        _write_debug_text(active_debug_dir, f"{debug_prefix}_http_error.html", r.text)
+        _write_debug_json(
+            active_debug_dir,
+            f"{debug_prefix}_http_error.json",
+            {
+                "stage": "active_flight_http_error",
+                "flight_no": flight_no,
+                "flight_date": flight_date.isoformat(),
+                "status_code": r.status_code,
+                "error": str(exc),
+                "body_preview": r.text[:1000],
+            },
+        )
+        raise
     r.encoding = r.apparent_encoding or r.encoding
 
-    active_debug_dir = debug_dir or (settings.csair_captcha_debug_dir if settings.csair_captcha_debug else None)
-    if active_debug_dir:
-        from pathlib import Path
-
-        debug_path = Path(active_debug_dir)
-        debug_path.mkdir(parents=True, exist_ok=True)
-        ts = datetime.now().strftime("%Y%m%d%H%M%S")
-        (debug_path / f"active_flight_{flight_no}_{flight_date}_{ts}.html").write_text(
-            r.text, encoding="utf-8"
+    _write_debug_text(active_debug_dir, f"{debug_prefix}_response.html", r.text)
+    selected_flight_date = _extract_selected_flight_date(r.text)
+    requested_flight_date = flight_date.isoformat()
+    if selected_flight_date and selected_flight_date != requested_flight_date:
+        _write_debug_json(
+            active_debug_dir,
+            f"{debug_prefix}_date_mismatch.json",
+            {
+                "stage": "active_flight_date_mismatch",
+                "flight_no": flight_no,
+                "requested_flight_date": requested_flight_date,
+                "selected_flight_date": selected_flight_date,
+            },
+        )
+        raise RuntimeError(
+            f"ActiveFlight selected date mismatch: requested={requested_flight_date}, "
+            f"selected={selected_flight_date}"
         )
 
     rows = parse_active_flight_result(r.text, flight_date)
-    if active_debug_dir:
-        from pathlib import Path
-        import json
-
-        debug_path = Path(active_debug_dir)
-        ts = datetime.now().strftime("%Y%m%d%H%M%S")
-        (debug_path / f"active_flight_{flight_no}_{flight_date}_{ts}.json").write_text(
-            json.dumps(
-                {
-                    "flight_no": flight_no,
-                    "flight_date": flight_date.isoformat(),
-                    "dep_station": dep_station,
-                    "arr_station": arr_station,
-                    "row_count": len(rows),
-                    "rows": rows,
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
+    _write_debug_json(
+        active_debug_dir,
+        f"{debug_prefix}_rows.json",
+        {
+            "stage": "active_flight_parse",
+            "flight_no": flight_no,
+            "flight_date": flight_date.isoformat(),
+            "selected_flight_date": selected_flight_date,
+            "dep_station": dep_station,
+            "arr_station": arr_station,
+            "row_count": len(rows),
+            "rows": rows,
+        },
+    )
     logger.info(
         "active_flight_parse flight=%s date=%s rows=%d",
         flight_no,
@@ -138,6 +196,62 @@ def query_active_flight(
         len(rows),
     )
     return rows
+
+
+def _resolve_debug_dir(debug_dir: Any | None) -> Path | None:
+    if debug_dir:
+        return Path(debug_dir)
+    if settings.csair_captcha_debug:
+        return Path(settings.csair_captcha_debug_dir)
+    return None
+
+
+def _debug_prefix(flight_no: str, flight_date: date) -> str:
+    stamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
+    safe_flight_no = re.sub(r"[^A-Za-z0-9_.-]+", "_", flight_no).strip("_") or "flight"
+    return f"active_flight_{safe_flight_no}_{flight_date.isoformat()}_{stamp}"
+
+
+def _form_debug_snapshot(form: dict[str, str]) -> dict[str, Any]:
+    snapshot: dict[str, Any] = {}
+    for key, value in form.items():
+        if key.startswith("__VIEWSTATE") or key == "__EVENTVALIDATION":
+            snapshot[key] = {"present": True, "length": len(value)}
+        else:
+            snapshot[key] = value
+    return snapshot
+
+
+def _write_debug_json(base_dir: Path | None, filename: str, payload: dict[str, Any]) -> None:
+    if base_dir is None:
+        return
+    try:
+        base_dir.mkdir(parents=True, exist_ok=True)
+        (base_dir / filename).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("active flight debug json write failed: %r", exc)
+
+
+def _write_debug_text(base_dir: Path | None, filename: str, text: str) -> None:
+    if base_dir is None:
+        return
+    try:
+        base_dir.mkdir(parents=True, exist_ok=True)
+        (base_dir / filename).write_text(text, encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("active flight debug text write failed: %r", exc)
+
+
+def _extract_selected_flight_date(html: str) -> str | None:
+    soup = BeautifulSoup(html, "lxml")
+    node = soup.find(id="ctl00_ContentPlaceHolder1_txtFlightDepTime")
+    if node is None:
+        return None
+    value = str(node.get("value") or "").strip()
+    return value or None
 
 
 def parse_active_flight_result(html: str, dep_date: date) -> list[dict[str, Any]]:

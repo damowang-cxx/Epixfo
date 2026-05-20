@@ -221,3 +221,24 @@ def test_awb_summary_skips_unrelated_first_table() -> None:
     assert info["totalPieces"] == "50"
     assert info["totalWeightKg"] == "1041"
     assert info["totalVolume"] == "4.03"
+
+
+def test_cargo_state_time_header_with_extra_controls() -> None:
+    html = """
+    <table id="ctl00_ContentPlaceHolder1_gvCargoState">
+        <tr>
+            <th>操作时间  <label id='currentTimeArea'>当前时区</label><input value='当地时间' /></th>
+            <th>操作城市</th><th>航班号</th><th>货物状态</th><th>件数</th><th>重量</th>
+        </tr>
+        <tr>
+            <td>2026年05月02日 01:02:36</td>
+            <td>广州</td><td>CZ307</td><td>航班已起飞。</td><td></td><td></td>
+        </tr>
+    </table>
+    """
+
+    result = parse_result(html)
+
+    assert result["cargoState"][0]["time"] == "2026-05-02 01:02:36"
+    assert result["cargoState"][0]["flight"] == "CZ307"
+    assert result["cargoState"][0]["status"] == "航班已起飞。"

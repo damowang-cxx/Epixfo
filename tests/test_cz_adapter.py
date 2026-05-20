@@ -60,6 +60,26 @@ def test_query_accepts_unformatted_waybill_no(monkeypatch: pytest.MonkeyPatch) -
     assert captured == {"prefix": "784", "no": "83707805"}
 
 
+def test_query_booking_only_returns_partial_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    raw = _load_tang_sample()
+    raw["awbInfo"] = None
+    raw["errorInfo"] = "运单信息不存在"
+
+    def fake_query_awb(prefix: str, no: str, debug_dir=None):
+        return raw
+
+    monkeypatch.setattr(cz_adapter_module, "query_awb", fake_query_awb)
+
+    result = _run(CZAdapter().query("784-83707805"))
+
+    assert result.status == QueryStatus.PARTIAL_SUCCESS
+    assert result.error_code == "awb_info_not_found"
+    assert result.error_message == "运单信息不存在"
+    assert result.raw_response is not None
+    assert result.raw_response["waybill_info"] is None
+    assert len(result.raw_response["booking_info"]) == 1
+
+
 def test_query_rejects_invalid_waybill_no(monkeypatch: pytest.MonkeyPatch) -> None:
     def must_not_be_called(*args, **kwargs):
         raise AssertionError("query_awb should not be called for invalid waybill_no")

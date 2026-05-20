@@ -5,6 +5,11 @@ import pytest
 from app.adapters.carrier_query.csair import captcha
 
 
+@pytest.fixture(autouse=True)
+def _disable_captcha_debug(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(captcha.settings, "csair_captcha_debug", False)
+
+
 class _Response:
     def __init__(self, text: str = "", status_code: int = 200, payload=None):
         self.text = text
