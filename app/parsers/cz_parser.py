@@ -93,6 +93,10 @@ class CZParser:
                     weight=_decimal(_pick(row, "重量", "weight")),
                     volume=_decimal(_pick(row, "体积", "volume")),
                     booking_type=_pick(row, "订舱性质", "booking_type"),
+                    departure_planned_time=_datetime(_pick(row, "起飞计划时间", "departure_planned_time")),
+                    departure_actual_time=_datetime(_pick(row, "起飞实际时间", "departure_actual_time")),
+                    arrival_planned_time=_datetime(_pick(row, "到达计划时间", "arrival_planned_time")),
+                    arrival_actual_time=_datetime(_pick(row, "到达实际时间", "arrival_actual_time")),
                     raw_data=row,
                 )
             )

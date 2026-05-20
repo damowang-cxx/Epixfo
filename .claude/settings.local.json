@@ -15,7 +15,9 @@
       "Bash(powershell.exe -Command \"taskkill /F /PID 30352\")",
       "Bash(netstat -ano)",
       "Bash(powershell.exe -Command \"Get-Process python -ErrorAction SilentlyContinue | Select-Object Id, Path\")",
-      "Bash(curl.exe -i -X POST http://127.0.0.1:8000/api/v1/waybills/lookup -H \"Content-Type: application/json\" -d \"{\\\\\"waybill_no\\\\\":\\\\\"784-83707805\\\\\"}\")"
+      "Bash(curl.exe -i -X POST http://127.0.0.1:8000/api/v1/waybills/lookup -H \"Content-Type: application/json\" -d \"{\\\\\"waybill_no\\\\\":\\\\\"784-83707805\\\\\"}\")",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/test_csair_html_parser.py -v)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/test_csair_active_flight_parser.py tests/test_cz_normalizer_active_flight.py -v)"
     ]
   }
 }

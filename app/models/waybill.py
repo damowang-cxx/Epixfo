@@ -204,6 +204,10 @@ class WaybillOfficialFlightSegment(Base, TimestampMixin):
     weight: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 3))
     volume: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 3))
     booking_type: Mapped[Optional[str]] = mapped_column(String(32))
+    departure_planned_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=False))
+    departure_actual_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=False))
+    arrival_planned_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=False))
+    arrival_actual_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=False))
     raw_data: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
     source_snapshot_id: Mapped[Optional[int]] = mapped_column(BigInteger)
 

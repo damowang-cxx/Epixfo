@@ -79,6 +79,11 @@ def _normalize_booking(row: dict[str, Any]) -> dict[str, Any]:
         "weight": row.get("weight"),
         "volume": row.get("volume"),
         "booking_type": row.get("bookingType"),
+        # 来自航班动态查询（active_flight.py）的精确时间，已为 ISO 字符串或 None
+        "departure_planned_time": row.get("depPlanTime"),
+        "departure_actual_time": row.get("depActualTime"),
+        "arrival_planned_time": row.get("arrPlanTime"),
+        "arrival_actual_time": row.get("arrActualTime"),
     }
 
 

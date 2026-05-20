@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     weight_mismatch_percent_threshold: float = 0.02
     volume_mismatch_absolute_threshold: float = 0.01
     volume_mismatch_percent_threshold: float = 0.02
+    csair_captcha_debug: bool = False
+    csair_captcha_debug_dir: str = "./runtime/csair-captcha"
+    csair_captcha_offset_range: int = 3
 
     model_config = SettingsConfigDict(
         env_file=".env",

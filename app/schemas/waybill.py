@@ -134,6 +134,10 @@ class WaybillOfficialFlightSegmentOut(BaseModel):
     weight: Decimal | None = None
     volume: Decimal | None = None
     booking_type: str | None = None
+    departure_planned_time: datetime | None = None
+    departure_actual_time: datetime | None = None
+    arrival_planned_time: datetime | None = None
+    arrival_actual_time: datetime | None = None
     raw_data: dict[str, Any]
 
 

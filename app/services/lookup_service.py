@@ -134,6 +134,10 @@ def _from_parsed(
                 weight=seg.weight,
                 volume=seg.volume,
                 booking_type=seg.booking_type,
+                departure_planned_time=seg.departure_planned_time,
+                departure_actual_time=seg.departure_actual_time,
+                arrival_planned_time=seg.arrival_planned_time,
+                arrival_actual_time=seg.arrival_actual_time,
             )
             for seg in parsed.flight_segments
         ],

@@ -10,7 +10,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { apiClient, ApiError } from "@/lib/client-api";
-import { compact, formatDateTime } from "@/lib/utils";
+import { compact, computeRatio, formatDateTime } from "@/lib/utils";
 import type { WaybillLookupResponse } from "@/lib/types";
 
 function FieldGrid({ items }: { items: Array<[string, unknown]> }) {
@@ -23,6 +23,15 @@ function FieldGrid({ items }: { items: Array<[string, unknown]> }) {
         </div>
       ))}
     </div>
+  );
+}
+
+function hasDetailedTimes(segment: WaybillLookupResponse["flight_segments"][number]) {
+  return Boolean(
+    segment.departure_planned_time ||
+      segment.departure_actual_time ||
+      segment.arrival_planned_time ||
+      segment.arrival_actual_time
   );
 }
 
@@ -60,7 +69,7 @@ export default function WaybillLookupPage() {
     <>
       <PageHeader
         title="运单速查"
-        description="输入运单号直接查询承运人官网数据，结果仅供查看，不会创建运单也不会写入数据库"
+        description="输入运单号直接查询承运人官网数据，结果仅供查看，不会创建运单，也不会写入数据库"
       />
       <Panel title="查询">
         <div className="flex flex-col gap-2 sm:flex-row">
@@ -103,11 +112,12 @@ export default function WaybillLookupPage() {
                   ["货物品名", result.official_info.goods_name],
                   ["总件数", result.official_info.total_pieces],
                   ["总重量", result.official_info.total_weight],
-                  ["总体积", result.official_info.total_volume]
+                  ["总体积", result.official_info.total_volume],
+                  ["密度", computeRatio(result.official_info.total_weight, result.official_info.total_volume)]
                 ]}
               />
             ) : (
-              <EmptyState title="暂无官方运单信息" description="官网未返回运单摘要数据。" />
+              <EmptyState title="暂无官方运单信息" description="官网未返回运单概要数据。" />
             )}
           </Panel>
 
@@ -119,10 +129,15 @@ export default function WaybillLookupPage() {
                     <TH>序号</TH>
                     <TH>订舱号</TH>
                     <TH>航班</TH>
-                    <TH>日期</TH>
+                    <TH>航班日期</TH>
                     <TH>出发</TH>
                     <TH>到达</TH>
-                    <TH>件/重/体</TH>
+                    <TH className="border-l border-slate-200">起飞计划</TH>
+                    <TH>起飞实际</TH>
+                    <TH className="border-l border-slate-200">到达计划</TH>
+                    <TH>到达实际</TH>
+                    <TH className="border-l border-slate-200">件 / 重 / 方</TH>
+                    <TH>精确时间</TH>
                   </TR>
                 </THead>
                 <TBody>
@@ -134,8 +149,17 @@ export default function WaybillLookupPage() {
                       <TD>{compact(item.flight_date)}</TD>
                       <TD>{compact(item.departure_airport)}</TD>
                       <TD>{compact(item.arrival_airport)}</TD>
-                      <TD>
+                      <TD className="border-l border-slate-100">{formatDateTime(item.departure_planned_time)}</TD>
+                      <TD>{formatDateTime(item.departure_actual_time)}</TD>
+                      <TD className="border-l border-slate-100">{formatDateTime(item.arrival_planned_time)}</TD>
+                      <TD>{formatDateTime(item.arrival_actual_time)}</TD>
+                      <TD className="border-l border-slate-100">
                         {compact(item.pieces)} / {compact(item.weight)} / {compact(item.volume)}
+                      </TD>
+                      <TD>
+                        <Badge variant={hasDetailedTimes(item) ? "green" : "amber"}>
+                          {hasDetailedTimes(item) ? "已返回" : "未返回"}
+                        </Badge>
                       </TD>
                     </TR>
                   ))}
@@ -156,7 +180,7 @@ export default function WaybillLookupPage() {
                     <TH>航班</TH>
                     <TH>状态</TH>
                     <TH>类型</TH>
-                    <TH>件/重</TH>
+                    <TH>件 / 重</TH>
                   </TR>
                 </THead>
                 <TBody>
@@ -190,7 +214,7 @@ export default function WaybillLookupPage() {
                     <TH>城市</TH>
                     <TH>状态</TH>
                     <TH>板号</TH>
-                    <TH>件/重</TH>
+                    <TH>件 / 重</TH>
                   </TR>
                 </THead>
                 <TBody>

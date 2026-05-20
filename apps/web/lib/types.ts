@@ -180,6 +180,10 @@ export interface OfficialFlightSegment {
   weight?: string | number | null;
   volume?: string | number | null;
   booking_type?: string | null;
+  departure_planned_time?: string | null;
+  departure_actual_time?: string | null;
+  arrival_planned_time?: string | null;
+  arrival_actual_time?: string | null;
   raw_data: Record<string, unknown>;
 }
 
@@ -274,6 +278,10 @@ export interface LookupFlightSegment {
   weight?: string | number | null;
   volume?: string | number | null;
   booking_type?: string | null;
+  departure_planned_time?: string | null;
+  departure_actual_time?: string | null;
+  arrival_planned_time?: string | null;
+  arrival_actual_time?: string | null;
 }
 
 export interface LookupStatusEvent {

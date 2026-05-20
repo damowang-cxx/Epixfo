@@ -16,6 +16,7 @@ from app.schemas.carrier import (
     CarrierAgentUpdate,
     CarrierCreate,
     CarrierOut,
+    CarrierUpdate,
     CarrierPrefixMappingCreate,
     CarrierPrefixMappingOut,
     CarrierPrefixMappingUpdate,
@@ -35,6 +36,20 @@ def list_carriers(current_user=Depends(get_current_user), db: Session = Depends(
 def create_carrier(payload: CarrierCreate, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
     PermissionService.require_any(current_user, {UserRoleCode.ADMIN, UserRoleCode.ROUTE_STAFF})
     return CarrierService(db).create_carrier(payload)
+
+
+@router.patch("/carriers/{carrier_code}", response_model=CarrierOut)
+def update_carrier(
+    carrier_code: str,
+    payload: CarrierUpdate,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    PermissionService.require_any(current_user, {UserRoleCode.ADMIN, UserRoleCode.ROUTE_STAFF})
+    carrier = CarrierService(db).update_carrier(carrier_code, payload)
+    if carrier is None:
+        raise not_found("Carrier not found")
+    return carrier
 
 
 @router.get("/carrier-prefix-mappings", response_model=list[CarrierPrefixMappingOut])

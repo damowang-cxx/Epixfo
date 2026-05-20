@@ -12,6 +12,12 @@ class CarrierCreate(BaseModel):
     enabled: bool = True
 
 
+class CarrierUpdate(BaseModel):
+    carrier_name: str | None = Field(default=None, max_length=128)
+    carrier_name_en: str | None = Field(default=None, max_length=128)
+    enabled: bool | None = None
+
+
 class CarrierOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

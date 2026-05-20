@@ -3,6 +3,7 @@ import re
 import requests
 
 AWB_PAGE_URL = "https://tang.csair.com/WebFace/Tang.WebFace.Cargo/AgentAwbBrower.aspx?menuID=1"
+ACTIVE_FLIGHT_URL = "https://tang.csair.com/WebFace/Tang.WebFace.ActiveFlight/NewActiveFlightQuery.aspx?menuID=1"
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -29,8 +30,12 @@ def build_session() -> requests.Session:
     return s
 
 
-def fetch_viewstate(session: requests.Session, timeout: int = 20) -> dict[str, str]:
-    r = session.get(AWB_PAGE_URL, timeout=timeout)
+def fetch_viewstate(
+    session: requests.Session,
+    url: str = AWB_PAGE_URL,
+    timeout: int = 20,
+) -> dict[str, str]:
+    r = session.get(url, timeout=timeout)
     r.raise_for_status()
     r.encoding = r.apparent_encoding or r.encoding
     html = r.text
@@ -45,6 +50,6 @@ def fetch_viewstate(session: requests.Session, timeout: int = 20) -> dict[str, s
             fields[name] = m.group(1)
 
     if "__VIEWSTATE" not in fields:
-        raise RuntimeError("无法从首页提取 __VIEWSTATE，页面结构可能已变更")
+        raise RuntimeError(f"无法从 {url} 提取 __VIEWSTATE，页面结构可能已变更")
 
     return fields

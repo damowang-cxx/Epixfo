@@ -16,7 +16,7 @@ import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { WaybillForm } from "@/components/waybills/waybill-form";
 import { useAuth } from "@/components/layout/auth-provider";
 import { apiClient } from "@/lib/client-api";
-import { compact, formatDateTime } from "@/lib/utils";
+import { compact, computeRatio, formatDateTime } from "@/lib/utils";
 import { lifecycleLabels } from "@/lib/constants";
 import type {
   Alert,
@@ -201,14 +201,50 @@ export default function WaybillDetailPage() {
                 ["货物品名", officialInfo?.goods_name],
                 ["总件数", officialInfo?.total_pieces],
                 ["总重量", officialInfo?.total_weight],
-                ["总体积", officialInfo?.total_volume]
+                ["总体积", officialInfo?.total_volume],
+                ["比例", computeRatio(officialInfo?.total_weight, officialInfo?.total_volume)]
               ]}
             />
           </Panel>
           <Panel title="官方订舱航段" className="mt-4">
             {segments.length ? (
-              <Table><THead><TR><TH>序号</TH><TH>订舱号</TH><TH>航班</TH><TH>日期</TH><TH>出发</TH><TH>到达</TH><TH>件/重/体</TH></TR></THead>
-                <TBody>{segments.map((item) => <TR key={item.id}><TD>{item.segment_order}</TD><TD>{compact(item.booking_no)}</TD><TD>{compact(item.flight_no)}</TD><TD>{compact(item.flight_date)}</TD><TD>{compact(item.departure_airport)}</TD><TD>{compact(item.arrival_airport)}</TD><TD>{compact(item.pieces)} / {compact(item.weight)} / {compact(item.volume)}</TD></TR>)}</TBody>
+              <Table>
+                <THead>
+                  <TR>
+                    <TH rowSpan={2}>序号</TH>
+                    <TH rowSpan={2}>订舱号</TH>
+                    <TH rowSpan={2}>航班</TH>
+                    <TH rowSpan={2}>日期</TH>
+                    <TH rowSpan={2}>出发</TH>
+                    <TH rowSpan={2}>到达</TH>
+                    <TH colSpan={2} className="border-l border-slate-200 text-center">起飞时间</TH>
+                    <TH colSpan={2} className="border-l border-slate-200 text-center">到达时间</TH>
+                    <TH rowSpan={2} className="border-l border-slate-200">件/重/体</TH>
+                  </TR>
+                  <TR>
+                    <TH className="border-l border-slate-200">计划</TH>
+                    <TH>实际</TH>
+                    <TH className="border-l border-slate-200">计划</TH>
+                    <TH>实际</TH>
+                  </TR>
+                </THead>
+                <TBody>
+                  {segments.map((item) => (
+                    <TR key={item.id}>
+                      <TD>{item.segment_order}</TD>
+                      <TD>{compact(item.booking_no)}</TD>
+                      <TD>{compact(item.flight_no)}</TD>
+                      <TD>{compact(item.flight_date)}</TD>
+                      <TD>{compact(item.departure_airport)}</TD>
+                      <TD>{compact(item.arrival_airport)}</TD>
+                      <TD className="border-l border-slate-100">{formatDateTime(item.departure_planned_time)}</TD>
+                      <TD>{formatDateTime(item.departure_actual_time)}</TD>
+                      <TD className="border-l border-slate-100">{formatDateTime(item.arrival_planned_time)}</TD>
+                      <TD>{formatDateTime(item.arrival_actual_time)}</TD>
+                      <TD className="border-l border-slate-100">{compact(item.pieces)} / {compact(item.weight)} / {compact(item.volume)}</TD>
+                    </TR>
+                  ))}
+                </TBody>
               </Table>
             ) : <EmptyState title="暂无官方航段" description="真实航司查询接入后会写入订舱航段。" />}
           </Panel>

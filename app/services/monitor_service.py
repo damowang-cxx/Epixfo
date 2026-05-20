@@ -135,6 +135,10 @@ class MonitorService:
                 weight=segment.weight,
                 volume=segment.volume,
                 booking_type=segment.booking_type,
+                departure_planned_time=segment.departure_planned_time,
+                departure_actual_time=segment.departure_actual_time,
+                arrival_planned_time=segment.arrival_planned_time,
+                arrival_actual_time=segment.arrival_actual_time,
                 raw_data=segment.raw_data,
                 source_snapshot_id=snapshot_id,
             )

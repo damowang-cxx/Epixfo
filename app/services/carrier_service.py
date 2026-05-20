@@ -10,6 +10,7 @@ from app.schemas.carrier import (
     CarrierAgentCreate,
     CarrierAgentUpdate,
     CarrierCreate,
+    CarrierUpdate,
     CarrierPrefixMappingCreate,
     CarrierPrefixMappingUpdate,
 )
@@ -34,6 +35,16 @@ class CarrierService:
     def create_carrier(self, payload: CarrierCreate) -> Carrier:
         carrier = Carrier(**payload.model_dump())
         self.db.add(carrier)
+        self.db.commit()
+        self.db.refresh(carrier)
+        return carrier
+
+    def update_carrier(self, carrier_code: str, payload: CarrierUpdate) -> Carrier | None:
+        carrier = self.repo.get_carrier(carrier_code)
+        if carrier is None:
+            return None
+        for key, value in payload.model_dump(exclude_unset=True).items():
+            setattr(carrier, key, value)
         self.db.commit()
         self.db.refresh(carrier)
         return carrier

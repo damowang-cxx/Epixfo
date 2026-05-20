@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Pencil, Plus, Save } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,22 +13,18 @@ import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { apiClient } from "@/lib/client-api";
 import type { Carrier, CarrierAgent, CarrierPrefixMapping } from "@/lib/types";
 
-type QueryMethod = "protocol" | "playwright" | "hybrid";
-
 export default function CarriersPage() {
   const [carriers, setCarriers] = useState<Carrier[]>([]);
   const [mappings, setMappings] = useState<CarrierPrefixMapping[]>([]);
   const [agents, setAgents] = useState<CarrierAgent[]>([]);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [carrierCode, setCarrierCode] = useState("CZ");
   const [prefix, setPrefix] = useState("");
+  const [carrierCode, setCarrierCode] = useState("CZ");
+  const [carrierName, setCarrierName] = useState("");
+  const [carrierNameEn, setCarrierNameEn] = useState("");
   const [adapterCode, setAdapterCode] = useState("cz_adapter");
-  const [queryMethod, setQueryMethod] = useState<QueryMethod>("hybrid");
   const [enabled, setEnabled] = useState(true);
   const [remark, setRemark] = useState("");
-  const [newCarrierCode, setNewCarrierCode] = useState("");
-  const [newCarrierName, setNewCarrierName] = useState("");
-  const [newCarrierNameEn, setNewCarrierNameEn] = useState("");
   const [editingAgentId, setEditingAgentId] = useState<number | null>(null);
   const [agentCarrierCode, setAgentCarrierCode] = useState("");
   const [agentName, setAgentName] = useState("");
@@ -36,6 +32,10 @@ export default function CarriersPage() {
   const [agentContactPhone, setAgentContactPhone] = useState("");
   const [agentEnabled, setAgentEnabled] = useState(true);
   const [agentRemark, setAgentRemark] = useState("");
+
+  const carrierByCode = useMemo(() => {
+    return new Map(carriers.map((carrier) => [carrier.carrier_code, carrier]));
+  }, [carriers]);
 
   const load = useCallback(() => {
     apiClient.get<Carrier[]>("/carriers").then(setCarriers);
@@ -47,61 +47,70 @@ export default function CarriersPage() {
     load();
   }, [load]);
 
-  function resetMappingForm() {
+  function resetCarrierForm() {
     setEditingId(null);
     setPrefix("");
     setCarrierCode("CZ");
+    setCarrierName("");
+    setCarrierNameEn("");
     setAdapterCode("cz_adapter");
-    setQueryMethod("hybrid");
     setEnabled(true);
     setRemark("");
   }
 
-  function editMapping(item: CarrierPrefixMapping) {
+  function editCarrierConfig(item: CarrierPrefixMapping) {
+    const carrier = carrierByCode.get(item.carrier_code);
     setEditingId(item.id);
     setPrefix(item.prefix);
     setCarrierCode(item.carrier_code);
+    setCarrierName(carrier?.carrier_name || "");
+    setCarrierNameEn(carrier?.carrier_name_en || "");
     setAdapterCode(item.adapter_code);
-    setQueryMethod(item.query_method);
     setEnabled(item.enabled);
     setRemark(item.remark || "");
   }
 
-  async function saveMapping(event: React.FormEvent<HTMLFormElement>) {
+  async function saveCarrierConfig(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+
+    const normalizedPrefix = prefix.trim();
+    const normalizedCarrierCode = carrierCode.trim().toUpperCase();
+    const normalizedAdapterCode = adapterCode.trim();
+    const existingCarrier = carrierByCode.get(normalizedCarrierCode);
+
+    if (existingCarrier) {
+      await apiClient.patch<Carrier>(`/carriers/${normalizedCarrierCode}`, {
+        carrier_name: carrierName,
+        carrier_name_en: carrierNameEn || null,
+        enabled: true
+      });
+    } else {
+      await apiClient.post<Carrier>("/carriers", {
+        carrier_code: normalizedCarrierCode,
+        carrier_name: carrierName,
+        carrier_name_en: carrierNameEn || null,
+        enabled: true
+      });
+    }
+
     if (editingId) {
       await apiClient.patch<CarrierPrefixMapping>(`/carrier-prefix-mappings/${editingId}`, {
-        carrier_code: carrierCode,
-        adapter_code: adapterCode,
-        query_method: queryMethod,
+        carrier_code: normalizedCarrierCode,
+        adapter_code: normalizedAdapterCode,
         enabled,
         remark: remark || null
       });
     } else {
       await apiClient.post<CarrierPrefixMapping>("/carrier-prefix-mappings", {
-        prefix,
-        carrier_code: carrierCode,
-        adapter_code: adapterCode,
-        query_method: queryMethod,
+        prefix: normalizedPrefix,
+        carrier_code: normalizedCarrierCode,
+        adapter_code: normalizedAdapterCode,
         enabled,
         remark: remark || null
       });
     }
-    resetMappingForm();
-    load();
-  }
 
-  async function createCarrier(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    await apiClient.post<Carrier>("/carriers", {
-      carrier_code: newCarrierCode,
-      carrier_name: newCarrierName,
-      carrier_name_en: newCarrierNameEn || null,
-      enabled: true
-    });
-    setNewCarrierCode("");
-    setNewCarrierName("");
-    setNewCarrierNameEn("");
+    resetCarrierForm();
     load();
   }
 
@@ -151,34 +160,52 @@ export default function CarriersPage() {
 
   return (
     <>
-      <PageHeader title="航司配置" description="维护航司和运单前三位前缀映射" />
-      <div className="grid gap-4 xl:grid-cols-[1fr_360px]">
-        <Panel title="前缀映射">
+      <PageHeader title="航司配置" description="维护运单前三位前缀对应的航司识别规则和航司代理信息" />
+      <div className="grid gap-4 xl:grid-cols-[1fr_400px]">
+        <Panel title="航司识别配置">
           <Table>
-            <THead><TR><TH>前缀</TH><TH>航司</TH><TH>适配器</TH><TH>方式</TH><TH>状态</TH><TH>操作</TH></TR></THead>
+            <THead>
+              <TR>
+                <TH>前缀</TH>
+                <TH>航司代码</TH>
+                <TH>航司名称</TH>
+                <TH>英文名</TH>
+                <TH>适配器</TH>
+                <TH>状态</TH>
+                <TH>操作</TH>
+              </TR>
+            </THead>
             <TBody>
-              {mappings.map((item) => (
-                <TR key={item.id}>
-                  <TD className="font-medium">{item.prefix}</TD>
-                  <TD>{item.carrier_code}</TD>
-                  <TD>{item.adapter_code}</TD>
-                  <TD>{item.query_method}</TD>
-                  <TD><Badge variant={item.enabled ? "green" : "gray"}>{item.enabled ? "启用" : "停用"}</Badge></TD>
-                  <TD>
-                    <Button variant="ghost" size="sm" onClick={() => editMapping(item)}>
-                      <Pencil className="h-4 w-4" />
-                      编辑
-                    </Button>
-                  </TD>
-                </TR>
-              ))}
+              {mappings.map((item) => {
+                const carrier = carrierByCode.get(item.carrier_code);
+                return (
+                  <TR key={item.id}>
+                    <TD className="font-medium">{item.prefix}</TD>
+                    <TD>{item.carrier_code}</TD>
+                    <TD>{carrier?.carrier_name || "-"}</TD>
+                    <TD>{carrier?.carrier_name_en || "-"}</TD>
+                    <TD>{item.adapter_code}</TD>
+                    <TD>
+                      <Badge variant={item.enabled ? "green" : "gray"}>
+                        {item.enabled ? "启用" : "停用"}
+                      </Badge>
+                    </TD>
+                    <TD>
+                      <Button variant="ghost" size="sm" onClick={() => editCarrierConfig(item)}>
+                        <Pencil className="h-4 w-4" />
+                        编辑
+                      </Button>
+                    </TD>
+                  </TR>
+                );
+              })}
             </TBody>
           </Table>
         </Panel>
-        <Panel title={editingId ? "编辑映射" : "新建映射"}>
-          <form onSubmit={saveMapping} className="space-y-3">
+        <Panel title={editingId ? "编辑航司" : "新建航司"}>
+          <form onSubmit={saveCarrierConfig} className="space-y-3">
             <div className="space-y-1.5">
-              <Label>前缀</Label>
+              <Label>运单前缀</Label>
               <Input value={prefix} onChange={(event) => setPrefix(event.target.value)} required readOnly={Boolean(editingId)} />
             </div>
             <div className="space-y-1.5">
@@ -186,19 +213,16 @@ export default function CarriersPage() {
               <Input value={carrierCode} onChange={(event) => setCarrierCode(event.target.value)} required />
             </div>
             <div className="space-y-1.5">
-              <Label>适配器</Label>
-              <Input value={adapterCode} onChange={(event) => setAdapterCode(event.target.value)} required />
+              <Label>航司名称</Label>
+              <Input value={carrierName} onChange={(event) => setCarrierName(event.target.value)} required />
             </div>
             <div className="space-y-1.5">
-              <Label>查询方式</Label>
-              <Select value={queryMethod} onValueChange={(value) => setQueryMethod(value as QueryMethod)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="protocol">protocol</SelectItem>
-                  <SelectItem value="playwright">playwright</SelectItem>
-                  <SelectItem value="hybrid">hybrid</SelectItem>
-                </SelectContent>
-              </Select>
+              <Label>英文名称</Label>
+              <Input value={carrierNameEn} onChange={(event) => setCarrierNameEn(event.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>适配器代码</Label>
+              <Input value={adapterCode} onChange={(event) => setAdapterCode(event.target.value)} required />
             </div>
             <div className="space-y-1.5">
               <Label>备注</Label>
@@ -206,50 +230,31 @@ export default function CarriersPage() {
             </div>
             <label className="flex items-center gap-2 text-sm text-slate-700">
               <input type="checkbox" className="h-4 w-4 rounded border-slate-300" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
-              启用映射
+              启用识别配置
             </label>
             <div className="flex gap-2">
               <Button className="flex-1">
-                <Save className="h-4 w-4" />
-                保存映射
+                {editingId ? <Save className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+                {editingId ? "保存航司" : "创建航司"}
               </Button>
-              {editingId ? <Button type="button" variant="secondary" onClick={resetMappingForm}>取消</Button> : null}
+              {editingId ? <Button type="button" variant="secondary" onClick={resetCarrierForm}>取消</Button> : null}
             </div>
           </form>
         </Panel>
       </div>
-      <div className="mt-4 grid gap-4 xl:grid-cols-[1fr_360px]">
-        <Panel title="航司列表">
-          <Table>
-            <THead><TR><TH>代码</TH><TH>名称</TH><TH>英文名</TH><TH>状态</TH></TR></THead>
-            <TBody>
-              {carriers.map((item) => (
-                <TR key={item.id}>
-                  <TD className="font-medium">{item.carrier_code}</TD>
-                  <TD>{item.carrier_name}</TD>
-                  <TD>{item.carrier_name_en || "-"}</TD>
-                  <TD><Badge variant={item.enabled ? "green" : "gray"}>{item.enabled ? "启用" : "停用"}</Badge></TD>
-                </TR>
-              ))}
-            </TBody>
-          </Table>
-        </Panel>
-        <Panel title="新建航司">
-          <form onSubmit={createCarrier} className="space-y-3">
-            <div className="space-y-1.5"><Label>航司代码</Label><Input value={newCarrierCode} onChange={(event) => setNewCarrierCode(event.target.value)} required /></div>
-            <div className="space-y-1.5"><Label>中文名称</Label><Input value={newCarrierName} onChange={(event) => setNewCarrierName(event.target.value)} required /></div>
-            <div className="space-y-1.5"><Label>英文名称</Label><Input value={newCarrierNameEn} onChange={(event) => setNewCarrierNameEn(event.target.value)} /></div>
-            <Button className="w-full">
-              <Plus className="h-4 w-4" />
-              创建航司
-            </Button>
-          </form>
-        </Panel>
-      </div>
-      <div className="mt-4 grid gap-4 xl:grid-cols-[1fr_360px]">
+      <div className="mt-4 grid gap-4 xl:grid-cols-[1fr_400px]">
         <Panel title="航司代理">
           <Table>
-            <THead><TR><TH>航司</TH><TH>代理名</TH><TH>联系人</TH><TH>电话</TH><TH>状态</TH><TH>操作</TH></TR></THead>
+            <THead>
+              <TR>
+                <TH>航司</TH>
+                <TH>代理名</TH>
+                <TH>联系人</TH>
+                <TH>电话</TH>
+                <TH>状态</TH>
+                <TH>操作</TH>
+              </TR>
+            </THead>
             <TBody>
               {agents.map((item) => (
                 <TR key={item.id}>
@@ -257,7 +262,11 @@ export default function CarriersPage() {
                   <TD>{item.agent_name}</TD>
                   <TD>{item.contact_person || "-"}</TD>
                   <TD>{item.contact_phone || "-"}</TD>
-                  <TD><Badge variant={item.enabled ? "green" : "gray"}>{item.enabled ? "启用" : "停用"}</Badge></TD>
+                  <TD>
+                    <Badge variant={item.enabled ? "green" : "gray"}>
+                      {item.enabled ? "启用" : "停用"}
+                    </Badge>
+                  </TD>
                   <TD>
                     <Button variant="ghost" size="sm" onClick={() => editAgent(item)}>
                       <Pencil className="h-4 w-4" />
@@ -280,7 +289,7 @@ export default function CarriersPage() {
                   <SelectTrigger><SelectValue placeholder="选择航司" /></SelectTrigger>
                   <SelectContent>
                     {carriers.filter((c) => c.enabled).map((c) => (
-                      <SelectItem key={c.carrier_code} value={c.carrier_code}>{c.carrier_code} · {c.carrier_name}</SelectItem>
+                      <SelectItem key={c.carrier_code} value={c.carrier_code}>{c.carrier_code} / {c.carrier_name}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
