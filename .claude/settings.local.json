@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/Scripts/python.exe -m pip install -e \".[dev]\" --quiet)",
+      "Bash(.venv/Scripts/python.exe -c \"import requests, bs4, lxml, cv2, numpy; print\\('all ok'\\)\")",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/ -v)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/)",
+      "Bash(npm run *)",
+      "Bash(.venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8765)",
+      "Bash(Start-Sleep -Seconds 3)",
+      "Bash(curl.exe -i -X POST http://127.0.0.1:8765/api/v1/waybills/lookup -H \"Content-Type: application/json\" -d \"{\\\\\"waybill_no\\\\\":\\\\\"784-83707805\\\\\"}\")",
+      "Bash(taskkill.exe /F /PID 30352)",
+      "Bash(Start-Sleep -Seconds 1)",
+      "Bash(powershell.exe -Command \"Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | Select-Object LocalPort,State,OwningProcess\")",
+      "Bash(powershell.exe -Command \"taskkill /F /PID 30352\")",
+      "Bash(netstat -ano)",
+      "Bash(powershell.exe -Command \"Get-Process python -ErrorAction SilentlyContinue | Select-Object Id, Path\")",
+      "Bash(curl.exe -i -X POST http://127.0.0.1:8000/api/v1/waybills/lookup -H \"Content-Type: application/json\" -d \"{\\\\\"waybill_no\\\\\":\\\\\"784-83707805\\\\\"}\")"
+    ]
+  }
+}

@@ -1,0 +1,10 @@
+.env
+.pytest_cache/
+*.egg-info/
+__pycache__/
+*.py[cod]
+
+.venv/
+venv/
+
+alembic/versions/__pycache__/

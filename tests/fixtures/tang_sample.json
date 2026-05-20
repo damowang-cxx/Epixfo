@@ -1,0 +1,71 @@
+{
+  "awbNo": "784-83707805",
+  "awbType": "international",
+  "queriedAt": "2026-05-19T16:23:34.920826+08:00",
+  "booking": [
+    {
+      "bookingNo": "B202605101234",
+      "route": "CAN-PKX-AMS",
+      "fromStation": "广州(CAN)",
+      "toStation": "阿姆斯特丹(AMS)",
+      "flight": "CZ3105",
+      "flightDate": "2026-05-12",
+      "pieces": "20",
+      "weight": "1059",
+      "volume": "5.20",
+      "bookingType": "正常订舱"
+    }
+  ],
+  "awbInfo": {
+    "awbNo": "784-83707805",
+    "carrier": "CZ/CZ",
+    "route": "广州(CAN)--北京大兴(PKX)--阿姆斯特丹(AMS)",
+    "commodity": "GENERAL CARGO",
+    "totalPieces": "20",
+    "totalWeightKg": "1059",
+    "totalVolume": "5.20"
+  },
+  "milestones": {
+    "received": {"status": "done", "src": "/image/icon_100.gif"},
+    "loaded": {"status": "done", "src": "/image/icon_110.gif"},
+    "departed": {"status": "done", "src": "/image/icon_120.gif"},
+    "arrived": {"status": "pending", "src": "/image/icon_132.gif"},
+    "delivered": {"status": "pending", "src": "/image/icon_142.gif"}
+  },
+  "cargoState": [
+    {
+      "time": "2026-05-10 13:58:55",
+      "city": "广州",
+      "flight": "CZ3105",
+      "status": "货物已接收",
+      "pieces": "20",
+      "weight": "1059"
+    },
+    {
+      "time": "2026-05-12 10:15:00",
+      "city": "广州",
+      "flight": "CZ3105",
+      "status": "货物已装机",
+      "pieces": "20",
+      "weight": "1059"
+    },
+    {
+      "time": "2026-05-12 12:30:00",
+      "city": "广州",
+      "flight": "CZ3105",
+      "status": "航班已起飞",
+      "pieces": "20",
+      "weight": "1059"
+    }
+  ],
+  "combine": [
+    {
+      "time": "2026-05-11 09:20:00",
+      "city": "广州",
+      "status": "货物组装（AKE12345CZ）",
+      "pieces": "20",
+      "weight": "1059"
+    }
+  ],
+  "errorInfo": null
+}
