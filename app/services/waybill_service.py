@@ -41,6 +41,7 @@ class WaybillService:
             raise bad_request("Waybill already exists")
 
         prefix, carrier_code, _adapter_code = self.carriers.identify_waybill(waybill_no)
+        agent_snapshot = self._resolve_agent_snapshot(payload.carrier_agent_id, carrier_code)
         plan_data = {field: getattr(payload, field) for field in PLAN_FIELDS}
         first_monitor_at, next_query_at = compute_monitor_window(plan_data.get("planned_flight_date"))
         monitor_enabled = carrier_code != "UNKNOWN"
@@ -48,12 +49,17 @@ class WaybillService:
         if monitor_enabled and first_monitor_at:
             lifecycle_status = WaybillLifecycleStatus.WAITING_MONITOR if local_now() < first_monitor_at else WaybillLifecycleStatus.MONITORING
 
-        waybill_data = payload.model_dump(exclude=set(PLAN_FIELDS) | {"waybill_no"}, exclude_none=True)
+        waybill_data = payload.model_dump(
+            exclude=set(PLAN_FIELDS) | {"waybill_no", "carrier_agent_id"},
+            exclude_none=True,
+        )
         waybill = AirWaybill(
             **waybill_data,
             waybill_no=waybill_no,
             carrier_prefix=prefix,
             carrier_code=carrier_code,
+            carrier_agent_id=agent_snapshot[0] if agent_snapshot else None,
+            agent=agent_snapshot[1] if agent_snapshot else None,
             lifecycle_status=lifecycle_status,
             monitor_enabled=monitor_enabled,
             first_monitor_at=first_monitor_at,
@@ -82,6 +88,13 @@ class WaybillService:
             raise bad_request("Voided waybill cannot be updated")
         data = payload.model_dump(exclude_unset=True)
         plan_data = {key: data.pop(key) for key in list(data.keys()) if key in PLAN_FIELDS}
+        if "carrier_agent_id" in data:
+            agent_snapshot = self._resolve_agent_snapshot(data.pop("carrier_agent_id"), waybill.carrier_code)
+            if agent_snapshot is None:
+                waybill.carrier_agent_id = None
+                waybill.agent = None
+            else:
+                waybill.carrier_agent_id, waybill.agent = agent_snapshot
         for key, value in data.items():
             if key in {"include_tc", "notify_pickup"} and value is None:
                 continue
@@ -182,3 +195,18 @@ class WaybillService:
         if waybill is None:
             raise not_found("Waybill not found")
         return await MonitorService(self.db).trigger_query(waybill)
+
+    def _resolve_agent_snapshot(
+        self,
+        carrier_agent_id: int | None,
+        carrier_code: str | None,
+    ) -> tuple[int, str] | None:
+        """根据 carrier_agent_id 查代理实体，返回 (id, agent_name) 快照对。None 表示未指定。"""
+        if carrier_agent_id is None:
+            return None
+        agent = self.carriers.get_agent(carrier_agent_id)
+        if agent is None:
+            raise bad_request("carrier_agent_not_found")
+        if carrier_code and agent.carrier_code != carrier_code:
+            raise bad_request("carrier_agent_carrier_mismatch")
+        return agent.id, agent.agent_name

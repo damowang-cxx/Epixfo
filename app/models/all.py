@@ -4,7 +4,7 @@ from app.models.alert import WaybillAlert
 from app.models.audit import AuditLog
 from app.models.auth import UserRefreshToken
 from app.models.box import Box, BoxDocument
-from app.models.carrier import Carrier, CarrierPrefixMapping, CarrierQueryConfig
+from app.models.carrier import Carrier, CarrierAgent, CarrierPrefixMapping, CarrierQueryConfig
 from app.models.presence import UserDailyOnlineStats, UserLoginLog, UserPresenceLog
 from app.models.user import Role, User, UserRole
 from app.models.waybill import (
@@ -23,6 +23,7 @@ __all__ = [
     "Box",
     "BoxDocument",
     "Carrier",
+    "CarrierAgent",
     "CarrierPrefixMapping",
     "CarrierQueryConfig",
     "Role",

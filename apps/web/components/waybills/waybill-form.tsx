@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Save } from "lucide-react";
 import type { FormEvent } from "react";
@@ -8,14 +8,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Panel } from "@/components/ui/panel";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { apiClient } from "@/lib/client-api";
-import type { Waybill } from "@/lib/types";
+import type { CarrierAgent, Waybill } from "@/lib/types";
 
 type FormState = {
   waybill_no: string;
   destination_port: string;
-  agent: string;
+  carrier_agent_id: string;
   warehouse_no: string;
   consignee: string;
   planned_flight_no: string;
@@ -42,7 +43,6 @@ type FormState = {
 const fields: Array<{ key: keyof FormState; label: string; type?: string; readonlyOnEdit?: boolean }> = [
   { key: "waybill_no", label: "运单号", readonlyOnEdit: true },
   { key: "destination_port", label: "目的港" },
-  { key: "agent", label: "航代" },
   { key: "warehouse_no", label: "入仓号" },
   { key: "consignee", label: "收货人" },
   { key: "planned_flight_no", label: "计划航班号" },
@@ -70,7 +70,7 @@ function initialState(waybill?: Waybill): FormState {
   return {
     waybill_no: waybill?.waybill_no || "",
     destination_port: waybill?.destination_port || "",
-    agent: waybill?.agent || "",
+    carrier_agent_id: waybill?.carrier_agent_id?.toString() || "",
     warehouse_no: waybill?.warehouse_no || "",
     consignee: waybill?.consignee || "",
     planned_flight_no: waybill?.plan?.planned_flight_no || "",
@@ -99,6 +99,10 @@ function payloadFromState(state: FormState, editing: boolean) {
   const payload: Record<string, string | number | boolean | null> = {};
   Object.entries(state).forEach(([key, value]) => {
     if (editing && key === "waybill_no") return;
+    if (key === "carrier_agent_id") {
+      payload[key] = value === "" ? null : Number(value);
+      return;
+    }
     payload[key] = value === "" ? null : value;
   });
   return payload;
@@ -110,6 +114,16 @@ export function WaybillForm({ waybill }: { waybill?: Waybill }) {
   const [state, setState] = useState<FormState>(() => initialState(waybill));
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [agents, setAgents] = useState<CarrierAgent[]>([]);
+
+  useEffect(() => {
+    apiClient.get<CarrierAgent[]>("/carrier-agents").then(setAgents).catch(() => setAgents([]));
+  }, []);
+
+  // 只列启用代理；当前已选中的代理即使被停用也要展示，避免显示空白
+  const visibleAgents = agents.filter(
+    (agent) => agent.enabled || state.carrier_agent_id === String(agent.id)
+  );
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -147,6 +161,28 @@ export function WaybillForm({ waybill }: { waybill?: Waybill }) {
               />
             </div>
           ))}
+          <div className="space-y-1.5">
+            <Label htmlFor="carrier_agent_id">航代</Label>
+            <Select
+              value={state.carrier_agent_id || "__none__"}
+              onValueChange={(value) =>
+                setState((prev) => ({ ...prev, carrier_agent_id: value === "__none__" ? "" : value }))
+              }
+            >
+              <SelectTrigger id="carrier_agent_id">
+                <SelectValue placeholder="选择代理" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">未指定</SelectItem>
+                {visibleAgents.map((agent) => (
+                  <SelectItem key={agent.id} value={String(agent.id)}>
+                    [{agent.carrier_code}] {agent.agent_name}
+                    {!agent.enabled ? "（已停用）" : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
         <div className="mt-4 flex flex-wrap gap-6 text-sm text-slate-700">
           <label className="flex items-center gap-2">

@@ -39,6 +39,7 @@ class AirWaybill(Base, TimestampMixin):
         Index("idx_air_waybills_next_query_at", "next_query_at"),
         Index("idx_air_waybills_created_at", "created_at"),
         Index("idx_air_waybills_route_staff_id", "route_staff_id"),
+        Index("idx_air_waybills_carrier_agent_id", "carrier_agent_id"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
@@ -49,6 +50,7 @@ class AirWaybill(Base, TimestampMixin):
 
     destination_port: Mapped[Optional[str]] = mapped_column(String(16))
     agent: Mapped[Optional[str]] = mapped_column(String(128))
+    carrier_agent_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("carrier_agents.id"))
     warehouse_no: Mapped[Optional[str]] = mapped_column(String(128))
     consignee: Mapped[Optional[str]] = mapped_column(String(255))
 
@@ -97,6 +99,7 @@ class AirWaybill(Base, TimestampMixin):
     created_by: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"))
     updated_by: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"))
 
+    carrier_agent = relationship("CarrierAgent", lazy="joined")
     plan: Mapped[Optional[WaybillPlan]] = relationship(back_populates="waybill", cascade="all, delete-orphan")
     official_info: Mapped[Optional[WaybillOfficialInfo]] = relationship(
         back_populates="waybill",

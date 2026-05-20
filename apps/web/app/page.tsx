@@ -38,10 +38,10 @@ export default function DashboardPage() {
         {cards.map((card) => {
           const Icon = card.icon;
           return (
-            <Link key={card.label} href={card.href} className="rounded-md border border-slate-200 bg-white p-4 hover:border-teal-300">
+            <Link key={card.label} href={card.href} className="rounded-md border border-slate-200 bg-white p-4 hover:border-purple-300">
               <div className="flex items-center justify-between">
                 <div className="text-sm text-slate-500">{card.label}</div>
-                <Icon className="h-4 w-4 text-teal-700" />
+                <Icon className="h-4 w-4 text-purple-700" />
               </div>
               <div className="mt-3 text-2xl font-semibold text-slate-950">{card.value}</div>
             </Link>

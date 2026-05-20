@@ -4,9 +4,15 @@ patch_platform_wmi()
 
 from sqlalchemy.orm import Session
 
-from app.models import Carrier, CarrierPrefixMapping
+from app.models import Carrier, CarrierAgent, CarrierPrefixMapping
 from app.repositories.carrier_repository import CarrierRepository
-from app.schemas.carrier import CarrierCreate, CarrierPrefixMappingCreate, CarrierPrefixMappingUpdate
+from app.schemas.carrier import (
+    CarrierAgentCreate,
+    CarrierAgentUpdate,
+    CarrierCreate,
+    CarrierPrefixMappingCreate,
+    CarrierPrefixMappingUpdate,
+)
 from app.utils.waybill_utils import carrier_prefix_from_waybill
 
 
@@ -51,3 +57,26 @@ class CarrierService:
         self.db.commit()
         self.db.refresh(mapping)
         return mapping
+
+    def list_agents(self, carrier_code: str | None = None) -> list[CarrierAgent]:
+        return self.repo.list_agents(carrier_code)
+
+    def create_agent(self, payload: CarrierAgentCreate) -> CarrierAgent:
+        agent = CarrierAgent(**payload.model_dump())
+        self.db.add(agent)
+        self.db.commit()
+        self.db.refresh(agent)
+        return agent
+
+    def update_agent(self, agent_id: int, payload: CarrierAgentUpdate) -> CarrierAgent | None:
+        agent = self.repo.get_agent(agent_id)
+        if agent is None:
+            return None
+        for key, value in payload.model_dump(exclude_unset=True).items():
+            setattr(agent, key, value)
+        self.db.commit()
+        self.db.refresh(agent)
+        return agent
+
+    def get_agent(self, agent_id: int) -> CarrierAgent | None:
+        return self.repo.get_agent(agent_id)

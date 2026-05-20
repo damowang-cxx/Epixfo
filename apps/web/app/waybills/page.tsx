@@ -98,6 +98,7 @@ export default function WaybillsPage() {
             <TR>
               <TH>运单号</TH>
               <TH>航司</TH>
+              <TH>航代</TH>
               <TH>目的港</TH>
               <TH>计划航班</TH>
               <TH>生命周期</TH>
@@ -111,6 +112,7 @@ export default function WaybillsPage() {
               <TR key={item.id}>
                 <TD className="font-medium">{item.waybill_no}</TD>
                 <TD>{compact(item.carrier_code)}</TD>
+                <TD>{compact(item.agent)}</TD>
                 <TD>{compact(item.destination_port)}</TD>
                 <TD>{compact(item.plan?.planned_flight_no)} / {compact(item.plan?.planned_flight_date)}</TD>
                 <TD><LifecycleBadge value={item.lifecycle_status} /></TD>

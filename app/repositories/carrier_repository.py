@@ -7,7 +7,7 @@ patch_platform_wmi()
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Carrier, CarrierPrefixMapping, CarrierQueryConfig
+from app.models import Carrier, CarrierAgent, CarrierPrefixMapping, CarrierQueryConfig
 
 
 class CarrierRepository:
@@ -39,3 +39,12 @@ class CarrierRepository:
                 CarrierQueryConfig.enabled.is_(True),
             )
         )
+
+    def list_agents(self, carrier_code: str | None = None) -> list[CarrierAgent]:
+        stmt = select(CarrierAgent).order_by(CarrierAgent.carrier_code, CarrierAgent.agent_name)
+        if carrier_code:
+            stmt = stmt.where(CarrierAgent.carrier_code == carrier_code)
+        return list(self.db.scalars(stmt))
+
+    def get_agent(self, agent_id: int) -> CarrierAgent | None:
+        return self.db.get(CarrierAgent, agent_id)

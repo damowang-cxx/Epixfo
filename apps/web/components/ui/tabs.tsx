@@ -14,7 +14,7 @@ export function TabsTrigger({ className, ...props }: ComponentPropsWithoutRef<ty
   return (
     <TabsPrimitive.Trigger
       className={cn(
-        "h-10 border-b-2 border-transparent px-3 text-sm text-slate-600 data-[state=active]:border-teal-700 data-[state=active]:text-teal-800",
+        "h-10 border-b-2 border-transparent px-3 text-sm text-slate-600 data-[state=active]:border-purple-700 data-[state=active]:text-purple-800",
         className
       )}
       {...props}

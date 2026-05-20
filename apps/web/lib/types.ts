@@ -68,6 +68,8 @@ export interface Waybill {
   carrier_code?: string | null;
   destination_port?: string | null;
   agent?: string | null;
+  carrier_agent_id?: number | null;
+  carrier_agent?: CarrierAgent | null;
   warehouse_no?: string | null;
   consignee?: string | null;
   document_operator_id?: number | null;
@@ -123,6 +125,18 @@ export interface Carrier {
   carrier_name: string;
   carrier_name_en?: string | null;
   enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CarrierAgent {
+  id: number;
+  carrier_code: string;
+  agent_name: string;
+  contact_person?: string | null;
+  contact_phone?: string | null;
+  enabled: boolean;
+  remark?: string | null;
   created_at: string;
   updated_at: string;
 }

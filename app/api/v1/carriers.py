@@ -11,6 +11,9 @@ from app.core.database import get_db
 from app.core.exceptions import not_found
 from app.models.enums import UserRoleCode
 from app.schemas.carrier import (
+    CarrierAgentCreate,
+    CarrierAgentOut,
+    CarrierAgentUpdate,
     CarrierCreate,
     CarrierOut,
     CarrierPrefixMappingCreate,
@@ -61,3 +64,36 @@ def update_mapping(
     if mapping is None:
         raise not_found("Carrier prefix mapping not found")
     return mapping
+
+
+@router.get("/carrier-agents", response_model=list[CarrierAgentOut])
+def list_agents(
+    carrier_code: str | None = None,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return CarrierService(db).list_agents(carrier_code)
+
+
+@router.post("/carrier-agents", response_model=CarrierAgentOut)
+def create_agent(
+    payload: CarrierAgentCreate,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    PermissionService.require_any(current_user, {UserRoleCode.ADMIN, UserRoleCode.ROUTE_STAFF})
+    return CarrierService(db).create_agent(payload)
+
+
+@router.patch("/carrier-agents/{agent_id}", response_model=CarrierAgentOut)
+def update_agent(
+    agent_id: int,
+    payload: CarrierAgentUpdate,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    PermissionService.require_any(current_user, {UserRoleCode.ADMIN, UserRoleCode.ROUTE_STAFF})
+    agent = CarrierService(db).update_agent(agent_id, payload)
+    if agent is None:
+        raise not_found("Carrier agent not found")
+    return agent

@@ -6,7 +6,7 @@ from app.core.platform_patch import patch_platform_wmi
 
 patch_platform_wmi()
 
-from sqlalchemy import BigInteger, Boolean, Enum, ForeignKey, String, Text, UniqueConstraint, text
+from sqlalchemy import BigInteger, Boolean, Enum, ForeignKey, Index, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -26,6 +26,7 @@ class Carrier(Base, TimestampMixin):
 
     prefix_mappings: Mapped[list[CarrierPrefixMapping]] = relationship(back_populates="carrier")
     query_configs: Mapped[list[CarrierQueryConfig]] = relationship(back_populates="carrier")
+    agents: Mapped[list[CarrierAgent]] = relationship(back_populates="carrier")
 
 
 class CarrierPrefixMapping(Base, TimestampMixin):
@@ -74,3 +75,25 @@ class CarrierQueryConfig(Base, TimestampMixin):
     remark: Mapped[Optional[str]] = mapped_column(Text)
 
     carrier: Mapped[Carrier] = relationship(back_populates="query_configs")
+
+
+class CarrierAgent(Base, TimestampMixin):
+    __tablename__ = "carrier_agents"
+    __table_args__ = (
+        UniqueConstraint("carrier_code", "agent_name", name="uq_carrier_agent_name"),
+        Index("idx_carrier_agents_carrier_code", "carrier_code"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    carrier_code: Mapped[str] = mapped_column(
+        String(16),
+        ForeignKey("carriers.carrier_code"),
+        nullable=False,
+    )
+    agent_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    contact_person: Mapped[Optional[str]] = mapped_column(String(128))
+    contact_phone: Mapped[Optional[str]] = mapped_column(String(64))
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    remark: Mapped[Optional[str]] = mapped_column(Text)
+
+    carrier: Mapped[Carrier] = relationship(back_populates="agents")

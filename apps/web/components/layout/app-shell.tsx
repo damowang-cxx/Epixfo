@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -11,7 +12,6 @@ import {
   Plane,
   RadioTower,
   Search,
-  Settings,
   ShieldCheck,
   Users
 } from "lucide-react";
@@ -60,7 +60,7 @@ function NavLink({ href, label, icon: Icon, active }: (typeof navItems)[number] 
       href={href}
       className={cn(
         "flex h-9 shrink-0 items-center gap-2 rounded-md px-3 text-sm text-slate-700 hover:bg-slate-100",
-        active && "bg-teal-50 font-medium text-teal-800"
+        active && "bg-purple-50 font-medium text-purple-800"
       )}
     >
       <Icon className="h-4 w-4" />
@@ -90,12 +90,17 @@ function ShellContent({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen bg-slate-100">
       <aside className="fixed inset-y-0 left-0 z-20 hidden w-60 border-r border-slate-200 bg-white md:block">
-        <div className="flex h-14 items-center gap-2 border-b border-slate-200 px-4">
-          <Settings className="h-5 w-5 text-teal-700" />
-          <div>
-            <div className="text-sm font-semibold text-slate-950">航空头程监控</div>
-            <div className="text-xs text-slate-500">Waybill Monitor</div>
-          </div>
+        <div className="flex h-16 items-center justify-center border-b border-slate-200 px-3">
+          <Link href="/" className="block">
+            <Image
+              src="/logo.png"
+              alt="元大物流 Yuanda Cargo Logistics"
+              width={800}
+              height={200}
+              priority
+              className="h-10 w-auto"
+            />
+          </Link>
         </div>
         <nav className="space-y-1 p-3">
           {visibleNav.map((item) => (

@@ -8,19 +8,24 @@ export function backendBaseUrl() {
   return process.env.BACKEND_API_URL || "http://127.0.0.1:8000/api/v1";
 }
 
+function authCookieSecure() {
+  return process.env.AUTH_COOKIE_SECURE === "true";
+}
+
 export async function setAuthCookies(accessToken: string, refreshToken: string) {
   const cookieStore = await cookies();
+  const secure = authCookieSecure();
   cookieStore.set(ACCESS_COOKIE, accessToken, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure,
     path: "/",
     maxAge: 60 * 30
   });
   cookieStore.set(REFRESH_COOKIE, refreshToken, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure,
     path: "/",
     maxAge: 60 * 60 * 24 * 14
   });

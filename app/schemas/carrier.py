@@ -53,3 +53,34 @@ class CarrierPrefixMappingOut(BaseModel):
     remark: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class CarrierAgentCreate(BaseModel):
+    carrier_code: str = Field(max_length=16)
+    agent_name: str = Field(max_length=128)
+    contact_person: str | None = Field(default=None, max_length=128)
+    contact_phone: str | None = Field(default=None, max_length=64)
+    enabled: bool = True
+    remark: str | None = None
+
+
+class CarrierAgentUpdate(BaseModel):
+    agent_name: str | None = Field(default=None, max_length=128)
+    contact_person: str | None = Field(default=None, max_length=128)
+    contact_phone: str | None = Field(default=None, max_length=64)
+    enabled: bool | None = None
+    remark: str | None = None
+
+
+class CarrierAgentOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    carrier_code: str
+    agent_name: str
+    contact_person: str | None = None
+    contact_phone: str | None = None
+    enabled: bool
+    remark: str | None = None
+    created_at: datetime
+    updated_at: datetime

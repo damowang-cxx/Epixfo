@@ -5,6 +5,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.enums import AlertLevel, CarrierQueryMethod, OfficialEventType, QueryStatus, WaybillLifecycleStatus
+from app.schemas.carrier import CarrierAgentOut
 
 
 class WaybillPlanIn(BaseModel):
@@ -16,7 +17,7 @@ class WaybillPlanIn(BaseModel):
 
 class WaybillBaseIn(BaseModel):
     destination_port: str | None = Field(default=None, max_length=16)
-    agent: str | None = Field(default=None, max_length=128)
+    carrier_agent_id: int | None = None
     warehouse_no: str | None = Field(default=None, max_length=128)
     consignee: str | None = Field(default=None, max_length=255)
     document_operator_id: int | None = None
@@ -69,6 +70,8 @@ class WaybillOut(BaseModel):
     carrier_code: str | None = None
     destination_port: str | None = None
     agent: str | None = None
+    carrier_agent_id: int | None = None
+    carrier_agent: CarrierAgentOut | None = None
     warehouse_no: str | None = None
     consignee: str | None = None
     document_operator_id: int | None = None

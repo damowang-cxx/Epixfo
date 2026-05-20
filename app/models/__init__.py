@@ -5,6 +5,7 @@ _MODEL_EXPORTS = {
     "Box": ("app.models.box", "Box"),
     "BoxDocument": ("app.models.box", "BoxDocument"),
     "Carrier": ("app.models.carrier", "Carrier"),
+    "CarrierAgent": ("app.models.carrier", "CarrierAgent"),
     "CarrierPrefixMapping": ("app.models.carrier", "CarrierPrefixMapping"),
     "CarrierQueryConfig": ("app.models.carrier", "CarrierQueryConfig"),
     "Role": ("app.models.user", "Role"),
