@@ -12,6 +12,29 @@ function authCookieSecure() {
   return process.env.AUTH_COOKIE_SECURE === "true";
 }
 
+function buildBackendHeaders(requestHeaders: Headers) {
+  const headers = new Headers(requestHeaders);
+
+  // Hop-by-hop headers are only valid for the current connection. Forwarding
+  // them through Node fetch can make undici reject the request before it
+  // reaches FastAPI, especially behind Nginx.
+  [
+    "host",
+    "cookie",
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+    "content-length"
+  ].forEach((header) => headers.delete(header));
+
+  return headers;
+}
+
 export async function setAuthCookies(accessToken: string, refreshToken: string) {
   const cookieStore = await cookies();
   const secure = authCookieSecure();
@@ -66,9 +89,7 @@ export async function refreshAccessToken() {
 export async function proxyToBackend(request: Request, path: string[]) {
   const url = new URL(request.url);
   const target = `${backendBaseUrl()}/${path.join("/")}${url.search}`;
-  const headers = new Headers(request.headers);
-  headers.delete("host");
-  headers.delete("cookie");
+  const headers = buildBackendHeaders(request.headers);
   const accessToken = await getAccessToken();
   if (accessToken) headers.set("authorization", `Bearer ${accessToken}`);
 
