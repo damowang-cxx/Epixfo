@@ -53,7 +53,7 @@ export default function AuditLogsPage() {
             </TBody>
           </Table>
         ) : (
-          <EmptyState title="暂无审计日志" description="发生登录、运单、异常等操作后会写入记录。" />
+          <EmptyState title="暂无审计日志" description="发生登录、提单、异常等操作后会写入记录。" />
         )}
       </Panel>
     </>

@@ -30,7 +30,7 @@ export default function MonitorPage() {
 
   return (
     <>
-      <PageHeader title="监控任务" description="手动触发到期运单扫描，便于本地验收和生产排查" />
+      <PageHeader title="监控任务" description="手动触发到期提单扫描，便于本地验收和生产排查" />
       <div className="grid gap-4 lg:grid-cols-[420px_1fr]">
         <Panel title="手动扫描">
           <div className="space-y-4">
@@ -44,7 +44,7 @@ export default function MonitorPage() {
             </Button>
             {processed !== null ? (
               <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
-                本次处理 {processed} 票到期运单。
+                本次处理 {processed} 票到期提单。
               </div>
             ) : null}
             {error ? <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div> : null}
@@ -56,7 +56,7 @@ export default function MonitorPage() {
               <RadioTower className="mt-1 h-4 w-4 shrink-0 text-purple-700" />
               <p>后端调度由配置项 <span className="font-mono text-slate-900">ENABLE_MONITOR_SCHEDULER</span> 控制。本地默认关闭，避免开发热重载重复执行。</p>
             </div>
-            <p>手动扫描会调用后端 <span className="font-mono text-slate-900">/monitor/due-waybills/run</span>，扫描 <span className="font-mono text-slate-900">next_query_at &lt;= now()</span> 的运单，并走同一套查询快照、生命周期和异常规则。</p>
+            <p>手动扫描会调用后端 <span className="font-mono text-slate-900">/monitor/due-waybills/run</span>，扫描 <span className="font-mono text-slate-900">next_query_at &lt;= now()</span> 的提单，并走同一套查询快照、生命周期和异常规则。</p>
           </div>
         </Panel>
       </div>

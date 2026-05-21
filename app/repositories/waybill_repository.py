@@ -47,6 +47,16 @@ class WaybillRepository:
         count_query = select(func.count()).select_from(query.order_by(None).subquery())
         return int(self.db.scalar(count_query) or 0)
 
+    def count_by_status(self, query: Select[tuple[AirWaybill]]) -> dict[WaybillLifecycleStatus, int]:
+        """对已应用权限/筛选的 query 做 group_by(lifecycle_status) 计数。
+
+        借助 subquery 的方式保留传入 query 的 join + where 条件，再在外层 group_by。
+        """
+        sub = query.order_by(None).subquery()
+        stmt = select(sub.c.lifecycle_status, func.count()).group_by(sub.c.lifecycle_status)
+        rows = self.db.execute(stmt).all()
+        return {row[0]: int(row[1]) for row in rows}
+
     def apply_filters(
         self,
         query: Select[tuple[AirWaybill]],

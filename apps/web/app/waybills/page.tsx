@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Plus, Search } from "lucide-react";
-import { AlertLevelBadge, LifecycleBadge } from "@/components/ui/status-badge";
+import { AlertLevelBadge, LifecycleBadge, LIFECYCLE_VARIANT, type LifecycleBadgeVariant } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
@@ -11,26 +11,68 @@ import { Panel } from "@/components/ui/panel";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { apiClient } from "@/lib/client-api";
-import { compact, formatDateTime } from "@/lib/utils";
+import { LIFECYCLE_ORDER, lifecycleLabels } from "@/lib/constants";
+import { cn, compact, formatDateTime } from "@/lib/utils";
 import type { LifecycleStatus, PageResponse, Waybill } from "@/lib/types";
 
 const lifecycleOptions: Array<{ value: LifecycleStatus | "all"; label: string }> = [
   { value: "all", label: "全部状态" },
-  { value: "created", label: "已创建" },
-  { value: "waiting_monitor", label: "待监控" },
-  { value: "monitoring", label: "监控中" },
-  { value: "warehouse_received", label: "已入仓" },
-  { value: "loaded", label: "已装机" },
-  { value: "departed", label: "已起飞" },
-  { value: "arrived", label: "已到达" },
-  { value: "pickup_notified", label: "已通知提取" },
-  { value: "picked_up", label: "已提取" },
-  { value: "closed", label: "已结束" },
-  { value: "voided", label: "已作废" }
+  ...LIFECYCLE_ORDER.map((status) => ({ value: status as LifecycleStatus, label: lifecycleLabels[status] }))
 ];
+
+interface StatusCount {
+  status: LifecycleStatus;
+  count: number;
+}
+
+/** Status card 的背景 / 边框配色（-100 / -300 比 Badge 用的 -50 / -200 重一档，让卡片更醒目）。 */
+const CARD_BG: Record<LifecycleBadgeVariant, string> = {
+  default: "border-slate-200 bg-white hover:bg-slate-50",
+  gray: "border-slate-300 bg-slate-100 hover:bg-slate-200",
+  blue: "border-blue-300 bg-blue-100 hover:bg-blue-200",
+  green: "border-emerald-300 bg-emerald-100 hover:bg-emerald-200",
+  amber: "border-amber-300 bg-amber-100 hover:bg-amber-200",
+  red: "border-red-300 bg-red-100 hover:bg-red-200",
+  purple: "border-violet-300 bg-violet-100 hover:bg-violet-200",
+  cyan: "border-cyan-300 bg-cyan-100 hover:bg-cyan-200",
+  indigo: "border-indigo-300 bg-indigo-100 hover:bg-indigo-200",
+  orange: "border-orange-300 bg-orange-100 hover:bg-orange-200",
+  teal: "border-teal-300 bg-teal-100 hover:bg-teal-200",
+  pink: "border-pink-300 bg-pink-100 hover:bg-pink-200"
+};
+
+function StatusCard({
+  label,
+  count,
+  variant,
+  active,
+  onClick
+}: {
+  label: string;
+  count: number;
+  variant: LifecycleBadgeVariant;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "rounded-md border p-2 text-left transition",
+        CARD_BG[variant],
+        active && "ring-2 ring-purple-400"
+      )}
+    >
+      <div className="text-xs text-slate-600">{label}</div>
+      <div className="mt-0.5 text-xl font-semibold text-slate-900">{count}</div>
+    </button>
+  );
+}
 
 export default function WaybillsPage() {
   const [data, setData] = useState<PageResponse<Waybill> | null>(null);
+  const [counts, setCounts] = useState<Record<string, number>>({});
   const [waybillNo, setWaybillNo] = useState("");
   const [carrierCode, setCarrierCode] = useState("");
   const [destinationPort, setDestinationPort] = useState("");
@@ -52,32 +94,71 @@ export default function WaybillsPage() {
     apiClient.get<PageResponse<Waybill>>(`/waybills?${query.toString()}`).then(setData);
   }, [query]);
 
+  const loadCounts = useCallback(() => {
+    apiClient
+      .get<StatusCount[]>("/waybills/status-counts")
+      .then((rows) => setCounts(Object.fromEntries(rows.map((r) => [r.status, r.count]))))
+      .catch(() => undefined);
+  }, []);
+
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    loadCounts();
+  }, [data, loadCounts]);
+
+  const totalCount = useMemo(() => Object.values(counts).reduce((a, b) => a + b, 0), [counts]);
 
   function applyFilters() {
     setPage(1);
     load();
   }
 
+  function selectStatus(status: LifecycleStatus | "all") {
+    setLifecycleStatus(status);
+    setPage(1);
+  }
+
   return (
     <>
       <PageHeader
-        title="运单管理"
-        description="录入、筛选、追踪航空头程运单"
+        title="提单管理"
+        description="录入、筛选、追踪航空头程提单"
         action={
           <Button asChild>
             <Link href="/waybills/new">
               <Plus className="h-4 w-4" />
-              新建运单
+              新建提单
             </Link>
           </Button>
         }
       />
-      <Panel>
+      <Panel title="状态总览">
+        <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-6 xl:grid-cols-12">
+          <StatusCard
+            label="全部"
+            count={totalCount}
+            variant="default"
+            active={lifecycleStatus === "all"}
+            onClick={() => selectStatus("all")}
+          />
+          {LIFECYCLE_ORDER.map((status) => (
+            <StatusCard
+              key={status}
+              label={lifecycleLabels[status]}
+              count={counts[status] || 0}
+              variant={LIFECYCLE_VARIANT[status]}
+              active={lifecycleStatus === status}
+              onClick={() => selectStatus(status as LifecycleStatus)}
+            />
+          ))}
+        </div>
+      </Panel>
+      <Panel className="mt-4">
         <div className="mb-4 grid gap-2 lg:grid-cols-[1.2fr_0.8fr_0.8fr_1fr_180px_44px]">
-          <Input placeholder="运单号" value={waybillNo} onChange={(event) => setWaybillNo(event.target.value)} />
+          <Input placeholder="提单号" value={waybillNo} onChange={(event) => setWaybillNo(event.target.value)} />
           <Input placeholder="航司代码" value={carrierCode} onChange={(event) => setCarrierCode(event.target.value)} />
           <Input placeholder="目的港" value={destinationPort} onChange={(event) => setDestinationPort(event.target.value)} />
           <Input placeholder="计划航班" value={plannedFlightNo} onChange={(event) => setPlannedFlightNo(event.target.value)} />
@@ -96,9 +177,9 @@ export default function WaybillsPage() {
         <Table>
           <THead>
             <TR>
-              <TH>运单号</TH>
-              <TH>航司</TH>
+              <TH>提单号</TH>
               <TH>航代</TH>
+              <TH>始发港</TH>
               <TH>目的港</TH>
               <TH>计划航班</TH>
               <TH>生命周期</TH>
@@ -111,8 +192,8 @@ export default function WaybillsPage() {
             {(data?.items || []).map((item) => (
               <TR key={item.id}>
                 <TD className="font-medium">{item.waybill_no}</TD>
-                <TD>{compact(item.carrier_code)}</TD>
                 <TD>{compact(item.agent)}</TD>
+                <TD>{compact(item.departure_port)}</TD>
                 <TD>{compact(item.destination_port)}</TD>
                 <TD>{compact(item.plan?.planned_flight_no)} / {compact(item.plan?.planned_flight_date)}</TD>
                 <TD><LifecycleBadge value={item.lifecycle_status} /></TD>

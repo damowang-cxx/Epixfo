@@ -49,7 +49,7 @@ export default function LoginPage() {
           />
           <div className="text-center">
             <h1 className="text-lg font-semibold text-slate-950">系统登录</h1>
-            <p className="text-sm text-slate-500">航空头程运单监控后台</p>
+            <p className="text-sm text-slate-500">航空头程提单监控后台</p>
           </div>
         </div>
         <div className="space-y-4">

@@ -8,7 +8,12 @@ const variants: Record<string, string> = {
   amber: "border-amber-200 bg-amber-50 text-amber-800",
   red: "border-red-200 bg-red-50 text-red-700",
   purple: "border-violet-200 bg-violet-50 text-violet-700",
-  gray: "border-slate-300 bg-slate-50 text-slate-500"
+  gray: "border-slate-300 bg-slate-50 text-slate-500",
+  cyan: "border-cyan-200 bg-cyan-50 text-cyan-700",
+  indigo: "border-indigo-200 bg-indigo-50 text-indigo-700",
+  orange: "border-orange-200 bg-orange-50 text-orange-700",
+  teal: "border-teal-200 bg-teal-50 text-teal-700",
+  pink: "border-pink-200 bg-pink-50 text-pink-700"
 };
 
 export function Badge({

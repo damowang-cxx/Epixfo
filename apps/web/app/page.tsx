@@ -25,7 +25,7 @@ export default function DashboardPage() {
   }, []);
 
   const cards = [
-    { label: "运单总数", value: waybills?.total ?? "-", icon: ClipboardList, href: "/waybills" },
+    { label: "提单总数", value: waybills?.total ?? "-", icon: ClipboardList, href: "/waybills" },
     { label: "活动异常", value: alerts.length, icon: AlertTriangle, href: "/alerts" },
     { label: "在线用户", value: onlineUsers.length, icon: Users, href: "/presence" },
     { label: "监控任务", value: "手动", icon: RadioTower, href: "/monitor" }
@@ -33,7 +33,7 @@ export default function DashboardPage() {
 
   return (
     <>
-      <PageHeader title="总览" description="航空头程运单监控系统运行概况" />
+      <PageHeader title="总览" description="航空头程提单监控系统运行概况" />
       <div className="grid gap-4 md:grid-cols-4">
         {cards.map((card) => {
           const Icon = card.icon;
@@ -49,12 +49,12 @@ export default function DashboardPage() {
         })}
       </div>
       <div className="mt-4 grid gap-4 xl:grid-cols-2">
-        <Panel title="最近运单" action={<Button asChild variant="secondary" size="sm"><Link href="/waybills">查看全部</Link></Button>}>
+        <Panel title="最近提单" action={<Button asChild variant="secondary" size="sm"><Link href="/waybills">查看全部</Link></Button>}>
           {(waybills?.items || []).length ? (
             <Table>
               <THead>
                 <TR>
-                  <TH>运单号</TH>
+                  <TH>提单号</TH>
                   <TH>目的港</TH>
                   <TH>生命周期</TH>
                   <TH>下次查询</TH>
@@ -72,7 +72,7 @@ export default function DashboardPage() {
               </TBody>
             </Table>
           ) : (
-            <EmptyState title="暂无运单" description="创建第一票运单后，这里会显示最新记录。" />
+            <EmptyState title="暂无提单" description="创建第一票提单后，这里会显示最新记录。" />
           )}
         </Panel>
         <Panel title="活动异常" action={<Button asChild variant="secondary" size="sm"><Link href="/alerts">处理异常</Link></Button>}>

@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     csair_captcha_debug: bool = False
     csair_captcha_debug_dir: str = "./runtime/csair-captcha"
     csair_captcha_offset_range: int = 3
+    emirates_skycargo_base_url: str = "https://eskycargo.emirates.com"
+    emirates_skycargo_cache_dir: str = "./runtime/emirates-skycargo"
+    emirates_skycargo_cache_ttl_seconds: int = 1800
+    emirates_skycargo_timeout_seconds: int = 60
 
     model_config = SettingsConfigDict(
         env_file=".env",

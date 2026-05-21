@@ -11,6 +11,7 @@ import { Panel } from "@/components/ui/panel";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { apiClient } from "@/lib/client-api";
+import { carrierAdapterLabels, carrierAdapterOptions } from "@/lib/constants";
 import type { Carrier, CarrierAgent, CarrierPrefixMapping } from "@/lib/types";
 
 export default function CarriersPage() {
@@ -160,7 +161,7 @@ export default function CarriersPage() {
 
   return (
     <>
-      <PageHeader title="航司配置" description="维护运单前三位前缀对应的航司识别规则和航司代理信息" />
+      <PageHeader title="航司配置" description="维护提单前三位前缀对应的航司识别规则和航司代理信息" />
       <div className="grid gap-4 xl:grid-cols-[1fr_400px]">
         <Panel title="航司识别配置">
           <Table>
@@ -184,7 +185,7 @@ export default function CarriersPage() {
                     <TD>{item.carrier_code}</TD>
                     <TD>{carrier?.carrier_name || "-"}</TD>
                     <TD>{carrier?.carrier_name_en || "-"}</TD>
-                    <TD>{item.adapter_code}</TD>
+                    <TD>{carrierAdapterLabels[item.adapter_code] || item.adapter_code}</TD>
                     <TD>
                       <Badge variant={item.enabled ? "green" : "gray"}>
                         {item.enabled ? "启用" : "停用"}
@@ -205,7 +206,7 @@ export default function CarriersPage() {
         <Panel title={editingId ? "编辑航司" : "新建航司"}>
           <form onSubmit={saveCarrierConfig} className="space-y-3">
             <div className="space-y-1.5">
-              <Label>运单前缀</Label>
+              <Label>提单前缀</Label>
               <Input value={prefix} onChange={(event) => setPrefix(event.target.value)} required readOnly={Boolean(editingId)} />
             </div>
             <div className="space-y-1.5">
@@ -221,8 +222,19 @@ export default function CarriersPage() {
               <Input value={carrierNameEn} onChange={(event) => setCarrierNameEn(event.target.value)} />
             </div>
             <div className="space-y-1.5">
-              <Label>适配器代码</Label>
-              <Input value={adapterCode} onChange={(event) => setAdapterCode(event.target.value)} required />
+              <Label>适配器</Label>
+              <Select value={adapterCode} onValueChange={setAdapterCode}>
+                <SelectTrigger>
+                  <SelectValue placeholder="选择适配器" />
+                </SelectTrigger>
+                <SelectContent>
+                  {carrierAdapterOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-1.5">
               <Label>备注</Label>

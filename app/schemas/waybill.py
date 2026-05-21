@@ -16,6 +16,7 @@ class WaybillPlanIn(BaseModel):
 
 
 class WaybillBaseIn(BaseModel):
+    departure_port: str | None = Field(default=None, max_length=16)
     destination_port: str | None = Field(default=None, max_length=16)
     carrier_agent_id: int | None = None
     warehouse_no: str | None = Field(default=None, max_length=128)
@@ -51,6 +52,11 @@ class ManualStatusRequest(BaseModel):
     lifecycle_status: WaybillLifecycleStatus
 
 
+class WaybillStatusCount(BaseModel):
+    status: WaybillLifecycleStatus
+    count: int
+
+
 class WaybillPlanOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -68,6 +74,7 @@ class WaybillOut(BaseModel):
     waybill_no: str
     carrier_prefix: str | None = None
     carrier_code: str | None = None
+    departure_port: str | None = None
     destination_port: str | None = None
     agent: str | None = None
     carrier_agent_id: int | None = None

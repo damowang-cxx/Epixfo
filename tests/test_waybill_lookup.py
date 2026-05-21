@@ -11,6 +11,7 @@ from app.services import lookup_service as lookup_service_module
 from app.services.lookup_service import WaybillLookupService
 
 FIXTURE = Path(__file__).parent / "fixtures" / "tang_sample.json"
+EK_FIXTURE = Path(__file__).parent / "fixtures" / "emirates_skycargo_sample.json"
 
 
 def _run(coro):
@@ -19,6 +20,10 @@ def _run(coro):
 
 def _load_tang_sample() -> dict:
     return json.loads(FIXTURE.read_text(encoding="utf-8"))
+
+
+def _load_ek_sample() -> dict:
+    return json.loads(EK_FIXTURE.read_text(encoding="utf-8"))
 
 
 def _make_service(monkeypatch: pytest.MonkeyPatch, mapping):
@@ -205,3 +210,38 @@ def test_lookup_normalizes_waybill_no_to_dashed(monkeypatch: pytest.MonkeyPatch)
 
     assert response.waybill_no == "784-83707805"
     assert captured["waybill_no"] == "784-83707805"
+
+
+def test_lookup_ek_success_returns_parsed_data(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.adapters.carrier_query.normalizers.ek import EKNormalizer
+
+    normalized_raw = EKNormalizer().normalize(_load_ek_sample())
+    mapping = SimpleNamespace(
+        adapter_code="ek_adapter",
+        carrier_code="EK",
+        query_method=CarrierQueryMethod.PROTOCOL,
+    )
+    adapter = _StubAdapter(
+        CarrierQueryResult(
+            status=QueryStatus.SUCCESS,
+            carrier_code="EK",
+            adapter_code="ek_adapter",
+            query_method=CarrierQueryMethod.PROTOCOL,
+            raw_response=normalized_raw,
+        )
+    )
+
+    monkeypatch.setattr(lookup_service_module.registry, "get", lambda code: adapter)
+    service = _make_service(monkeypatch, mapping)
+
+    response = _run(service.lookup("17628780780"))
+
+    assert response.status == QueryStatus.SUCCESS
+    assert response.waybill_no == "176-28780780"
+    assert response.carrier_code == "EK"
+    assert response.official_info is not None
+    assert response.official_info.official_waybill_no == "176-28780780"
+    assert len(response.flight_segments) == 2
+    assert response.flight_segments[0].flight_no == "EK9873"
+    assert response.flight_segments[0].departure_actual_time is not None
+    assert any(event.normalized_event_type == OfficialEventType.PICKUP_NOTIFIED for event in response.status_events)

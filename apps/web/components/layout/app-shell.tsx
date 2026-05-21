@@ -30,8 +30,8 @@ const navItems: Array<{
   roles?: RoleCode[];
 }> = [
   { href: "/", label: "总览", icon: Home },
-  { href: "/waybills", label: "运单管理", icon: ClipboardList },
-  { href: "/waybills/lookup", label: "运单速查", icon: Search, roles: ["admin", "route_staff"] },
+  { href: "/waybills", label: "提单管理", icon: ClipboardList },
+  { href: "/waybills/lookup", label: "提单速查", icon: Search, roles: ["admin", "route_staff"] },
   { href: "/alerts", label: "异常中心", icon: AlertTriangle },
   { href: "/carriers", label: "航司配置", icon: Plane, roles: ["admin", "route_staff"] },
   { href: "/users", label: "用户管理", icon: Users, roles: ["admin", "route_staff"] },
@@ -111,7 +111,7 @@ function ShellContent({ children }: { children: ReactNode }) {
       <div className="md:pl-60">
         <header className="sticky top-0 z-10 border-b border-slate-200 bg-white">
           <div className="flex h-14 items-center justify-between gap-3 px-4 md:px-5">
-            <div className="min-w-0 text-sm font-medium text-slate-700">物流航空头程运单监控后台</div>
+            <div className="min-w-0 text-sm font-medium text-slate-700">物流航空头程提单监控后台</div>
             <div className="flex items-center gap-3">
               <div className="hidden items-center gap-1 sm:flex">
                 {user.roles.map((role) => (

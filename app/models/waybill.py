@@ -48,6 +48,7 @@ class AirWaybill(Base, TimestampMixin):
     carrier_prefix: Mapped[Optional[str]] = mapped_column(String(8))
     carrier_code: Mapped[Optional[str]] = mapped_column(String(16), ForeignKey("carriers.carrier_code"))
 
+    departure_port: Mapped[Optional[str]] = mapped_column(String(16))
     destination_port: Mapped[Optional[str]] = mapped_column(String(16))
     agent: Mapped[Optional[str]] = mapped_column(String(128))
     carrier_agent_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("carrier_agents.id"))

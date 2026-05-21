@@ -68,8 +68,8 @@ export default function WaybillLookupPage() {
   return (
     <>
       <PageHeader
-        title="运单速查"
-        description="输入运单号直接查询承运人官网数据，结果仅供查看，不会创建运单，也不会写入数据库"
+        title="提单速查"
+        description="输入提单号直接查询承运人官网数据，结果仅供查看，不会创建提单，也不会写入数据库"
       />
       <Panel title="查询">
         <div className="flex flex-col gap-2 sm:flex-row">
@@ -102,11 +102,11 @@ export default function WaybillLookupPage() {
 
       {result && result.status === "success" ? (
         <>
-          <Panel title="官方运单信息" className="mt-4">
+          <Panel title="官方提单信息" className="mt-4">
             {result.official_info ? (
               <FieldGrid
                 items={[
-                  ["官方运单号", result.official_info.official_waybill_no],
+                  ["官方提单号", result.official_info.official_waybill_no],
                   ["承运人", result.official_info.carrier_text],
                   ["航程", result.official_info.route_text],
                   ["货物品名", result.official_info.goods_name],
@@ -117,7 +117,7 @@ export default function WaybillLookupPage() {
                 ]}
               />
             ) : (
-              <EmptyState title="暂无官方运单信息" description="官网未返回运单概要数据。" />
+              <EmptyState title="暂无官方提单信息" description="官网未返回提单概要数据。" />
             )}
           </Panel>
 

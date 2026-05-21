@@ -32,7 +32,7 @@ export default function AlertsPage() {
 
   return (
     <>
-      <PageHeader title="异常中心" description="处理运单查询、航班变化和官方数据差异异常" />
+      <PageHeader title="异常中心" description="处理提单查询、航班变化和官方数据差异异常" />
       <Panel>
         <div className="mb-4 w-48">
           <Select value={status} onValueChange={(value) => setStatus(value as AlertStatus | "all")}>
@@ -49,7 +49,7 @@ export default function AlertsPage() {
         {items.length ? (
           <Table>
             <THead>
-              <TR><TH>标题</TH><TH>运单ID</TH><TH>类型</TH><TH>等级</TH><TH>状态</TH><TH>描述</TH><TH>时间</TH><TH>操作</TH></TR>
+              <TR><TH>标题</TH><TH>提单ID</TH><TH>类型</TH><TH>等级</TH><TH>状态</TH><TH>描述</TH><TH>时间</TH><TH>操作</TH></TR>
             </THead>
             <TBody>
               {items.map((item) => (

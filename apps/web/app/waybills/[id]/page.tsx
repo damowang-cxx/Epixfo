@@ -106,16 +106,16 @@ export default function WaybillDetailPage() {
   async function voidWaybill() {
     if (!id) return;
     await apiClient.post<Waybill>(`/waybills/${id}/void`);
-    setMessage("运单已作废。");
+    setMessage("提单已作废。");
     load();
   }
 
-  if (!waybill) return <div className="text-sm text-slate-500">正在加载运单...</div>;
+  if (!waybill) return <div className="text-sm text-slate-500">正在加载提单...</div>;
 
   return (
     <>
       <PageHeader
-        title={`运单 ${waybill.waybill_no}`}
+        title={`提单 ${waybill.waybill_no}`}
         description="查看生命周期、官方事件、查询快照和异常"
         action={
           <div className="flex flex-wrap gap-2">
@@ -155,9 +155,10 @@ export default function WaybillDetailPage() {
           <TabsTrigger value="edit">编辑</TabsTrigger>
         </TabsList>
         <TabsContent value="base">
-          <Panel title="运单信息">
+          <Panel title="提单信息">
             <FieldGrid
               items={[
+                ["始发港", waybill.departure_port],
                 ["目的港", waybill.destination_port],
                 ["航代", waybill.agent],
                 ["入仓号", waybill.warehouse_no],
@@ -192,10 +193,10 @@ export default function WaybillDetailPage() {
           </Panel>
         </TabsContent>
         <TabsContent value="official">
-          <Panel title="官方运单信息">
+          <Panel title="官方提单信息">
             <FieldGrid
               items={[
-                ["官方运单号", officialInfo?.official_waybill_no],
+                ["官方提单号", officialInfo?.official_waybill_no],
                 ["承运人", officialInfo?.carrier_text],
                 ["航程", officialInfo?.route_text],
                 ["货物品名", officialInfo?.goods_name],
@@ -280,7 +281,7 @@ export default function WaybillDetailPage() {
               <Table><THead><TR><TH>标题</TH><TH>类型</TH><TH>等级</TH><TH>状态</TH><TH>新值</TH><TH>时间</TH></TR></THead>
                 <TBody>{alerts.map((item) => <TR key={item.id}><TD>{item.title}</TD><TD>{item.alert_type}</TD><TD><AlertLevelBadge value={item.alert_level} /></TD><TD>{item.status}</TD><TD>{compact(item.new_value)}</TD><TD>{formatDateTime(item.created_at)}</TD></TR>)}</TBody>
               </Table>
-            ) : <EmptyState title="暂无异常" description="这票运单当前没有异常记录。" />}
+            ) : <EmptyState title="暂无异常" description="这票提单当前没有异常记录。" />}
           </Panel>
         </TabsContent>
         <TabsContent value="edit">

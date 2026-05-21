@@ -23,6 +23,7 @@ from app.schemas.waybill import (
     WaybillOfficialInfoOut,
     WaybillOut,
     WaybillQuerySnapshotOut,
+    WaybillStatusCount,
     WaybillStatusEventOut,
     WaybillUpdate,
 )
@@ -77,6 +78,11 @@ def list_waybills(
 def create_waybill(payload: WaybillCreate, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
     waybill = WaybillService(db).create(payload, current_user)
     return _waybill_response(waybill, current_user)
+
+
+@router.get("/status-counts", response_model=list[WaybillStatusCount])
+def status_counts(current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    return WaybillService(db).status_counts(current_user)
 
 
 @router.post("/lookup", response_model=WaybillLookupResponse)

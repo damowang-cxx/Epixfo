@@ -66,6 +66,7 @@ export interface Waybill {
   waybill_no: string;
   carrier_prefix?: string | null;
   carrier_code?: string | null;
+  departure_port?: string | null;
   destination_port?: string | null;
   agent?: string | null;
   carrier_agent_id?: number | null;

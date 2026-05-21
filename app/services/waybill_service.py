@@ -12,7 +12,7 @@ from app.core.exceptions import bad_request, forbidden, not_found
 from app.models import AirWaybill, User, WaybillPlan
 from app.models.enums import AlertLevel, UserRoleCode, WaybillLifecycleStatus
 from app.repositories.waybill_repository import WaybillRepository
-from app.schemas.waybill import ManualStatusRequest, WaybillCreate, WaybillUpdate
+from app.schemas.waybill import ManualStatusRequest, WaybillCreate, WaybillStatusCount, WaybillUpdate
 from app.services.alert_service import AlertService
 from app.services.carrier_service import CarrierService
 from app.services.monitor_service import MonitorService
@@ -188,6 +188,19 @@ class WaybillService:
         waybill.updated_by = current_user.id
         self.db.commit()
         return self.repo.get(waybill.id) or waybill
+
+    def status_counts(self, current_user: User) -> list[WaybillStatusCount]:
+        """按生命周期状态聚合当前角色可见的运单数量。
+
+        全集返回 11 个状态（缺失为 0），顺序与 `WaybillLifecycleStatus` 枚举一致。
+        """
+        query = self.repo.base_query()
+        query = PermissionService.filter_waybill_query(query, current_user)
+        counts_by_status = self.repo.count_by_status(query)
+        return [
+            WaybillStatusCount(status=status, count=counts_by_status.get(status, 0))
+            for status in WaybillLifecycleStatus
+        ]
 
     async def trigger_query(self, waybill_id: int, current_user: User):
         PermissionService.assert_waybill_write(current_user)

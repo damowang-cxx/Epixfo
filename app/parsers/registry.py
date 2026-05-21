@@ -1,10 +1,14 @@
 from app.parsers.base import CarrierParser
 from app.parsers.cz_parser import CZParser
+from app.parsers.ek_parser import EKParser
 
 
 class CarrierParserRegistry:
     def __init__(self) -> None:
-        self._parsers: dict[str, CarrierParser] = {"cz_adapter": CZParser()}
+        self._parsers: dict[str, CarrierParser] = {
+            "cz_adapter": CZParser(),
+            "ek_adapter": EKParser(),
+        }
 
     def get(self, adapter_code: str | None) -> CarrierParser | None:
         if adapter_code is None:
