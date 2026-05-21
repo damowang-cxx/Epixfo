@@ -9,7 +9,7 @@ patch_platform_wmi()
 from sqlalchemy.orm import Session
 
 from app.adapters.carrier_query.base import CarrierQueryResult
-from app.adapters.carrier_query.registry import registry
+from app.adapters.carrier_query.registry import GENERAL_ADAPTER_CODE, registry
 from app.models.enums import QueryStatus
 from app.parsers.base import ParsedCarrierData
 from app.parsers.registry import parser_registry
@@ -53,32 +53,38 @@ class WaybillLookupService:
         prefix = carrier_prefix_from_waybill(waybill_no)
 
         mapping = self.carriers.get_mapping_by_prefix(prefix)
-        if mapping is None:
-            return WaybillLookupResponse(
-                waybill_no=waybill_no,
-                status=QueryStatus.FAILED,
-                error_code="carrier_prefix_unmapped",
-                error_message=f"前缀 {prefix} 未在承运人映射表中配置",
+        adapter_code = mapping.adapter_code if mapping is not None else GENERAL_ADAPTER_CODE
+        carrier_code = mapping.carrier_code if mapping is not None else "UNKNOWN"
+        adapter = registry.get(adapter_code)
+        if adapter is None and adapter_code != GENERAL_ADAPTER_CODE:
+            logger.warning(
+                "adapter %s not found for prefix %s, falling back to %s",
+                adapter_code,
+                prefix,
+                GENERAL_ADAPTER_CODE,
             )
+            adapter_code = GENERAL_ADAPTER_CODE
+            adapter = registry.get_general()
 
-        adapter = registry.get(mapping.adapter_code)
         if adapter is None:
             return WaybillLookupResponse(
                 waybill_no=waybill_no,
                 status=QueryStatus.FAILED,
-                carrier_code=mapping.carrier_code,
-                adapter_code=mapping.adapter_code,
+                carrier_code=carrier_code,
+                adapter_code=adapter_code,
                 error_code="adapter_not_found",
-                error_message=f"adapter_code={mapping.adapter_code!r} 未在 registry 中注册",
+                error_message=f"adapter_code={adapter_code!r} 未在 registry 中注册",
             )
 
-        logger.info("ad-hoc lookup %s via %s", waybill_no, mapping.adapter_code)
+        logger.info("ad-hoc lookup %s via %s", waybill_no, adapter_code)
         result = await adapter.query(waybill_no)
+        if result.adapter_code == GENERAL_ADAPTER_CODE:
+            result.carrier_code = carrier_code
 
         if result.status not in {QueryStatus.SUCCESS, QueryStatus.PARTIAL_SUCCESS} or result.raw_response is None:
             return _from_failed_result(waybill_no, result)
 
-        parser = parser_registry.get(mapping.adapter_code)
+        parser = parser_registry.get(result.adapter_code)
         parsed = parser.parse(result.raw_response) if parser is not None else ParsedCarrierData()
 
         return _from_parsed(waybill_no, result, parsed)

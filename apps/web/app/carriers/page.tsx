@@ -11,7 +11,7 @@ import { Panel } from "@/components/ui/panel";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { apiClient } from "@/lib/client-api";
-import { carrierAdapterLabels, carrierAdapterOptions } from "@/lib/constants";
+import { carrierAdapterLabels, carrierAdapterOptions, carrierAdapterQueryMethods } from "@/lib/constants";
 import type { Carrier, CarrierAgent, CarrierPrefixMapping } from "@/lib/types";
 
 export default function CarriersPage() {
@@ -77,6 +77,7 @@ export default function CarriersPage() {
     const normalizedPrefix = prefix.trim();
     const normalizedCarrierCode = carrierCode.trim().toUpperCase();
     const normalizedAdapterCode = adapterCode.trim();
+    const queryMethod = carrierAdapterQueryMethods[normalizedAdapterCode] || "hybrid";
     const existingCarrier = carrierByCode.get(normalizedCarrierCode);
 
     if (existingCarrier) {
@@ -98,6 +99,7 @@ export default function CarriersPage() {
       await apiClient.patch<CarrierPrefixMapping>(`/carrier-prefix-mappings/${editingId}`, {
         carrier_code: normalizedCarrierCode,
         adapter_code: normalizedAdapterCode,
+        query_method: queryMethod,
         enabled,
         remark: remark || null
       });
@@ -106,6 +108,7 @@ export default function CarriersPage() {
         prefix: normalizedPrefix,
         carrier_code: normalizedCarrierCode,
         adapter_code: normalizedAdapterCode,
+        query_method: queryMethod,
         enabled,
         remark: remark || null
       });

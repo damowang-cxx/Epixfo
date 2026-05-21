@@ -65,6 +65,9 @@ export default function WaybillLookupPage() {
     if (event.key === "Enter") submit();
   }
 
+  const canShowDetails = result?.status === "success" || result?.status === "partial_success";
+  const isPartial = result?.status === "partial_success";
+
   return (
     <>
       <PageHeader
@@ -87,9 +90,19 @@ export default function WaybillLookupPage() {
           </Button>
         </div>
         {error ? (
-          <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          <div
+            className={
+              isPartial
+                ? "mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700"
+                : "mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+            }
+          >
             {error}
-            {result?.error_code ? <span className="ml-2 text-xs text-red-500">({result.error_code})</span> : null}
+            {result?.error_code ? (
+              <span className={isPartial ? "ml-2 text-xs text-amber-600" : "ml-2 text-xs text-red-500"}>
+                ({result.error_code})
+              </span>
+            ) : null}
           </div>
         ) : null}
         {result && result.status === "success" ? (
@@ -100,7 +113,7 @@ export default function WaybillLookupPage() {
         ) : null}
       </Panel>
 
-      {result && result.status === "success" ? (
+      {result && canShowDetails ? (
         <>
           <Panel title="官方提单信息" className="mt-4">
             {result.official_info ? (

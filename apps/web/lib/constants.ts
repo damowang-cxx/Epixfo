@@ -49,10 +49,18 @@ export const roleOptions = [
 
 export const carrierAdapterOptions = [
   { value: "cz_adapter", label: "南航 CZ（cz_adapter）" },
-  { value: "ek_adapter", label: "阿联酋航空 EK（ek_adapter）" }
+  { value: "ek_adapter", label: "阿联酋航空 EK（ek_adapter）" },
+  { value: "general_adapter", label: "通用航班查询（general_adapter）" }
 ] as const;
 
 export const carrierAdapterLabels: Record<string, string> = {
   cz_adapter: "南航 CZ（cz_adapter）",
-  ek_adapter: "阿联酋航空 EK（ek_adapter）"
+  ek_adapter: "阿联酋航空 EK（ek_adapter）",
+  general_adapter: "通用航班查询（general_adapter）"
+};
+
+export const carrierAdapterQueryMethods: Record<string, "protocol" | "playwright" | "hybrid"> = {
+  cz_adapter: "hybrid",
+  ek_adapter: "protocol",
+  general_adapter: "protocol"
 };

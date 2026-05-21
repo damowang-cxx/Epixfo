@@ -1,6 +1,7 @@
 from app.parsers.base import CarrierParser
 from app.parsers.cz_parser import CZParser
 from app.parsers.ek_parser import EKParser
+from app.parsers.general_parser import GeneralParser
 
 
 class CarrierParserRegistry:
@@ -8,6 +9,7 @@ class CarrierParserRegistry:
         self._parsers: dict[str, CarrierParser] = {
             "cz_adapter": CZParser(),
             "ek_adapter": EKParser(),
+            "general_adapter": GeneralParser(),
         }
 
     def get(self, adapter_code: str | None) -> CarrierParser | None:

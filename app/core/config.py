@@ -24,6 +24,12 @@ class Settings(BaseSettings):
     emirates_skycargo_cache_dir: str = "./runtime/emirates-skycargo"
     emirates_skycargo_cache_ttl_seconds: int = 1800
     emirates_skycargo_timeout_seconds: int = 60
+    fiftyone_tracking_base_url: str = "https://www.51tracking.com"
+    fiftyone_tracking_cache_dir: str = "./runtime/51tracking-aircargo"
+    fiftyone_tracking_cache_ttl_seconds: int = 1800
+    fiftyone_tracking_timeout_seconds: int = 60
+    fiftyone_tracking_lang: str = "cn"
+    fiftyone_tracking_allow_stale_on_error: bool = True
 
     model_config = SettingsConfigDict(
         env_file=".env",

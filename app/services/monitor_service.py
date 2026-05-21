@@ -6,7 +6,7 @@ patch_platform_wmi()
 
 from sqlalchemy.orm import Session
 
-from app.adapters.carrier_query.registry import registry
+from app.adapters.carrier_query.registry import GENERAL_ADAPTER_CODE, registry
 from app.models import (
     AirWaybill,
     WaybillAssemblyEvent,
@@ -39,7 +39,12 @@ class MonitorService:
         if waybill.carrier_code and waybill.carrier_code != "UNKNOWN":
             mapping = self.carriers.get_mapping_by_prefix(waybill.carrier_prefix or "")
             adapter_code = mapping.adapter_code if mapping else None
+        if adapter_code is None:
+            adapter_code = GENERAL_ADAPTER_CODE
         adapter = registry.get(adapter_code)
+        if adapter is None and adapter_code != GENERAL_ADAPTER_CODE:
+            adapter_code = GENERAL_ADAPTER_CODE
+            adapter = registry.get_general()
         started_at = utc_now()
         if adapter is None:
             snapshot = WaybillQuerySnapshot(
@@ -60,6 +65,8 @@ class MonitorService:
             return snapshot
 
         result = await adapter.query(waybill.waybill_no)
+        if result.adapter_code == GENERAL_ADAPTER_CODE and waybill.carrier_code:
+            result.carrier_code = waybill.carrier_code
         snapshot = WaybillQuerySnapshot(
             waybill_id=waybill.id,
             carrier_code=result.carrier_code,

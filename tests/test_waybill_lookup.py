@@ -12,6 +12,7 @@ from app.services.lookup_service import WaybillLookupService
 
 FIXTURE = Path(__file__).parent / "fixtures" / "tang_sample.json"
 EK_FIXTURE = Path(__file__).parent / "fixtures" / "emirates_skycargo_sample.json"
+GENERAL_FIXTURE = Path(__file__).parent / "fixtures" / "fiftyone_tracking_aircargo_sample.json"
 
 
 def _run(coro):
@@ -24,6 +25,10 @@ def _load_tang_sample() -> dict:
 
 def _load_ek_sample() -> dict:
     return json.loads(EK_FIXTURE.read_text(encoding="utf-8"))
+
+
+def _load_general_sample() -> dict:
+    return json.loads(GENERAL_FIXTURE.read_text(encoding="utf-8"))
 
 
 def _make_service(monkeypatch: pytest.MonkeyPatch, mapping):
@@ -136,14 +141,29 @@ def test_lookup_invalid_waybill_no_short_circuits(monkeypatch: pytest.MonkeyPatc
     assert response.error_code == "invalid_waybill_no"
 
 
-def test_lookup_unmapped_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_lookup_unmapped_prefix_falls_back_to_general_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.adapters.carrier_query.normalizers.general import GeneralNormalizer
+
+    normalized_raw = GeneralNormalizer().normalize(_load_general_sample())
+    adapter = _StubAdapter(
+        CarrierQueryResult(
+            status=QueryStatus.SUCCESS,
+            carrier_code="UNKNOWN",
+            adapter_code="general_adapter",
+            query_method=CarrierQueryMethod.PROTOCOL,
+            raw_response=normalized_raw,
+        )
+    )
+    monkeypatch.setattr(lookup_service_module.registry, "get", lambda code: adapter if code == "general_adapter" else None)
     service = _make_service(monkeypatch, mapping=None)
 
     response = _run(service.lookup("999-12345678"))
 
-    assert response.status == QueryStatus.FAILED
-    assert response.error_code == "carrier_prefix_unmapped"
-    assert "999" in (response.error_message or "")
+    assert response.status == QueryStatus.SUCCESS
+    assert response.carrier_code == "UNKNOWN"
+    assert response.adapter_code == "general_adapter"
+    assert response.official_info is not None
+    assert response.official_info.carrier_text == "China Southern"
 
 
 def test_lookup_adapter_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -155,6 +175,30 @@ def test_lookup_adapter_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert response.status == QueryStatus.FAILED
     assert response.error_code == "adapter_not_found"
+
+
+def test_lookup_unknown_adapter_falls_back_to_general_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.adapters.carrier_query.normalizers.general import GeneralNormalizer
+
+    normalized_raw = GeneralNormalizer().normalize(_load_general_sample())
+    mapping = SimpleNamespace(adapter_code="missing_adapter", carrier_code="ZZ")
+    adapter = _StubAdapter(
+        CarrierQueryResult(
+            status=QueryStatus.SUCCESS,
+            carrier_code="UNKNOWN",
+            adapter_code="general_adapter",
+            query_method=CarrierQueryMethod.PROTOCOL,
+            raw_response=normalized_raw,
+        )
+    )
+    monkeypatch.setattr(lookup_service_module.registry, "get", lambda code: adapter if code == "general_adapter" else None)
+    service = _make_service(monkeypatch, mapping)
+
+    response = _run(service.lookup("784-83707805"))
+
+    assert response.status == QueryStatus.SUCCESS
+    assert response.carrier_code == "ZZ"
+    assert response.adapter_code == "general_adapter"
 
 
 def test_lookup_passes_through_adapter_failed_result(monkeypatch: pytest.MonkeyPatch) -> None:

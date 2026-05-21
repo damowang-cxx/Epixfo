@@ -44,7 +44,7 @@ class WaybillService:
         agent_snapshot = self._resolve_agent_snapshot(payload.carrier_agent_id, carrier_code)
         plan_data = {field: getattr(payload, field) for field in PLAN_FIELDS}
         first_monitor_at, next_query_at = compute_monitor_window(plan_data.get("planned_flight_date"))
-        monitor_enabled = carrier_code != "UNKNOWN"
+        monitor_enabled = True
         lifecycle_status = WaybillLifecycleStatus.CREATED
         if monitor_enabled and first_monitor_at:
             lifecycle_status = WaybillLifecycleStatus.WAITING_MONITOR if local_now() < first_monitor_at else WaybillLifecycleStatus.MONITORING
