@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 14
     app_timezone: str = "Asia/Shanghai"
-    enable_monitor_scheduler: bool = False
+    enable_monitor_scheduler: bool = True
     monitor_scheduler_interval_seconds: int = 60
     weight_mismatch_absolute_threshold: float = 1.0
     weight_mismatch_percent_threshold: float = 0.02
@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     fiftyone_tracking_timeout_seconds: int = 60
     fiftyone_tracking_lang: str = "cn"
     fiftyone_tracking_allow_stale_on_error: bool = True
+    warehouse_file_storage_dir: str = "./runtime/warehouse-files"
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Plus, Search } from "lucide-react";
+import { Pencil, Plus, Search } from "lucide-react";
 import { AlertLevelBadge, LifecycleBadge, LIFECYCLE_VARIANT, type LifecycleBadgeVariant } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,6 +10,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
+import { WarehouseFileUploadButton } from "@/components/waybills/warehouse-file-upload-button";
 import { apiClient } from "@/lib/client-api";
 import { LIFECYCLE_ORDER, lifecycleLabels } from "@/lib/constants";
 import { cn, compact, formatDateTime } from "@/lib/utils";
@@ -79,6 +80,7 @@ export default function WaybillsPage() {
   const [plannedFlightNo, setPlannedFlightNo] = useState("");
   const [lifecycleStatus, setLifecycleStatus] = useState<LifecycleStatus | "all">("all");
   const [page, setPage] = useState(1);
+  const [message, setMessage] = useState("");
 
   const query = useMemo(() => {
     const params = new URLSearchParams({ page: String(page), page_size: "20" });
@@ -121,6 +123,12 @@ export default function WaybillsPage() {
     setPage(1);
   }
 
+  function handleUploadSuccess(warehouseNo: string, successCount: number, errorCount: number) {
+    setMessage(`入仓文件已上传：${warehouseNo}，绑定 ${successCount} 条货物明细${errorCount ? `，${errorCount} 行未导入` : ""}。`);
+    load();
+    loadCounts();
+  }
+
   return (
     <>
       <PageHeader
@@ -135,6 +143,9 @@ export default function WaybillsPage() {
           </Button>
         }
       />
+      {message ? (
+        <div className="mb-4 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">{message}</div>
+      ) : null}
       <Panel title="状态总览">
         <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-6 xl:grid-cols-12">
           <StatusCard
@@ -179,9 +190,12 @@ export default function WaybillsPage() {
             <TR>
               <TH>提单号</TH>
               <TH>航代</TH>
+              <TH>入仓号/入仓文件</TH>
               <TH>始发港</TH>
               <TH>目的港</TH>
               <TH>计划航班</TH>
+              <TH>约定航班起飞日期</TH>
+              <TH>官方预计航班日期</TH>
               <TH>生命周期</TH>
               <TH>异常</TH>
               <TH>下次查询</TH>
@@ -193,13 +207,39 @@ export default function WaybillsPage() {
               <TR key={item.id}>
                 <TD className="font-medium">{item.waybill_no}</TD>
                 <TD>{compact(item.agent)}</TD>
+                <TD>
+                  <div className="flex min-w-40 flex-col items-start gap-1">
+                    {item.warehouse_no ? <span className="font-medium text-slate-800">{item.warehouse_no}</span> : null}
+                    <WarehouseFileUploadButton
+                      waybillId={item.id}
+                      label={item.warehouse_no ? "上传新入仓文件" : "上传入仓文件"}
+                      variant={item.warehouse_no ? "ghost" : "secondary"}
+                      onUploaded={(result) =>
+                        handleUploadSuccess(result.warehouse_no, result.success_count, result.errors.length)
+                      }
+                      onError={setMessage}
+                    />
+                  </div>
+                </TD>
                 <TD>{compact(item.departure_port)}</TD>
                 <TD>{compact(item.destination_port)}</TD>
-                <TD>{compact(item.plan?.planned_flight_no)} / {compact(item.plan?.planned_flight_date)}</TD>
+                <TD>{compact(item.plan?.planned_flight_no)}</TD>
+                <TD>{compact(item.plan?.planned_flight_date)}</TD>
+                <TD>{item.official_estimated_flight_date || ""}</TD>
                 <TD><LifecycleBadge value={item.lifecycle_status} /></TD>
                 <TD><AlertLevelBadge value={item.alert_level} /></TD>
                 <TD>{formatDateTime(item.next_query_at)}</TD>
-                <TD><Button asChild variant="ghost" size="sm"><Link href={`/waybills/${item.id}`}>详情</Link></Button></TD>
+                <TD>
+                  <div className="flex flex-wrap gap-1">
+                    <Button asChild variant="ghost" size="sm"><Link href={`/waybills/${item.id}`}>详情</Link></Button>
+                    <Button asChild variant="ghost" size="sm">
+                      <Link href={`/waybills/${item.id}/edit`}>
+                        <Pencil className="h-4 w-4" />
+                        编辑
+                      </Link>
+                    </Button>
+                  </div>
+                </TD>
               </TR>
             ))}
           </TBody>

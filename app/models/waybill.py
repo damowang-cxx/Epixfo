@@ -40,6 +40,7 @@ class AirWaybill(Base, TimestampMixin):
         Index("idx_air_waybills_created_at", "created_at"),
         Index("idx_air_waybills_route_staff_id", "route_staff_id"),
         Index("idx_air_waybills_carrier_agent_id", "carrier_agent_id"),
+        Index("idx_air_waybills_consignee_contact_id", "consignee_contact_id"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
@@ -54,6 +55,7 @@ class AirWaybill(Base, TimestampMixin):
     carrier_agent_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("carrier_agents.id"))
     warehouse_no: Mapped[Optional[str]] = mapped_column(String(128))
     consignee: Mapped[Optional[str]] = mapped_column(String(255))
+    consignee_contact_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("consignee_contacts.id"))
 
     document_operator_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"))
     route_staff_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"))
@@ -66,7 +68,7 @@ class AirWaybill(Base, TimestampMixin):
     booked_volume: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 3))
     density: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 3))
 
-    quotation: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2))
+    quotation: Mapped[Optional[str]] = mapped_column(String(64))
     include_tc: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
 
     warehouse_data_remark: Mapped[Optional[str]] = mapped_column(Text)
@@ -77,6 +79,7 @@ class AirWaybill(Base, TimestampMixin):
     customer_remark: Mapped[Optional[str]] = mapped_column(Text)
 
     air_freight_cost: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2))
+    other_charge: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2))
     payment_date: Mapped[Optional[date]] = mapped_column(Date)
 
     lifecycle_status: Mapped[WaybillLifecycleStatus] = mapped_column(
@@ -101,6 +104,7 @@ class AirWaybill(Base, TimestampMixin):
     updated_by: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"))
 
     carrier_agent = relationship("CarrierAgent", lazy="joined")
+    consignee_contact = relationship("ConsigneeContact", lazy="joined")
     plan: Mapped[Optional[WaybillPlan]] = relationship(back_populates="waybill", cascade="all, delete-orphan")
     official_info: Mapped[Optional[WaybillOfficialInfo]] = relationship(
         back_populates="waybill",
@@ -122,6 +126,13 @@ class AirWaybill(Base, TimestampMixin):
         back_populates="waybill",
         cascade="all, delete-orphan",
     )
+
+    @property
+    def official_estimated_flight_date(self) -> date | None:
+        for segment in sorted(self.official_flight_segments, key=lambda item: item.segment_order):
+            if segment.flight_date is not None:
+                return segment.flight_date
+        return None
 
 
 class WaybillPlan(Base, TimestampMixin):

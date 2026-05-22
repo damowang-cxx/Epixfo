@@ -11,6 +11,7 @@ from app.models.enums import CarrierQueryMethod, OfficialEventType, QueryStatus
 
 class WaybillLookupRequest(BaseModel):
     waybill_no: str = Field(min_length=11, max_length=12)
+    adapter_code: str | None = Field(default=None, max_length=64)
 
 
 class LookupOfficialInfo(BaseModel):

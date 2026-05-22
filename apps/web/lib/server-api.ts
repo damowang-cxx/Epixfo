@@ -99,7 +99,7 @@ export async function proxyToBackend(request: Request, path: string[]) {
     cache: "no-store"
   };
   if (!["GET", "HEAD"].includes(request.method)) {
-    init.body = await request.text();
+    init.body = await request.arrayBuffer();
   }
 
   let response = await fetch(target, init);

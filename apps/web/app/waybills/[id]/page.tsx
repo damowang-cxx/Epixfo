@@ -13,7 +13,9 @@ import { Panel } from "@/components/ui/panel";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
+import { CargoBoxesTable } from "@/components/waybills/cargo-boxes-table";
 import { WaybillForm } from "@/components/waybills/waybill-form";
+import { WarehouseFileUploadButton } from "@/components/waybills/warehouse-file-upload-button";
 import { useAuth } from "@/components/layout/auth-provider";
 import { apiClient } from "@/lib/client-api";
 import { compact, computeRatio, formatDateTime } from "@/lib/utils";
@@ -21,6 +23,7 @@ import { lifecycleLabels } from "@/lib/constants";
 import type {
   Alert,
   AssemblyEvent,
+  CargoBox,
   LifecycleStatus,
   OfficialFlightSegment,
   OfficialInfo,
@@ -66,6 +69,7 @@ export default function WaybillDetailPage() {
   const [segments, setSegments] = useState<OfficialFlightSegment[]>([]);
   const [events, setEvents] = useState<StatusEvent[]>([]);
   const [assemblies, setAssemblies] = useState<AssemblyEvent[]>([]);
+  const [boxes, setBoxes] = useState<CargoBox[]>([]);
   const [snapshots, setSnapshots] = useState<QuerySnapshot[]>([]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [manualStatus, setManualStatus] = useState<LifecycleStatus>("created");
@@ -81,6 +85,7 @@ export default function WaybillDetailPage() {
     apiClient.get<OfficialFlightSegment[]>(`/waybills/${id}/official-flight-segments`).then(setSegments);
     apiClient.get<StatusEvent[]>(`/waybills/${id}/status-events`).then(setEvents);
     apiClient.get<AssemblyEvent[]>(`/waybills/${id}/assembly-events`).then(setAssemblies);
+    apiClient.get<CargoBox[]>(`/waybills/${id}/boxes`).then(setBoxes);
     apiClient.get<QuerySnapshot[]>(`/waybills/${id}/query-snapshots`).then(setSnapshots);
     apiClient.get<Alert[]>(`/waybills/${id}/alerts`).then(setAlerts);
   }, [id]);
@@ -123,6 +128,12 @@ export default function WaybillDetailPage() {
               <Link href="/waybills">
                 <Pencil className="h-4 w-4" />
                 返回列表
+              </Link>
+            </Button>
+            <Button asChild variant="secondary">
+              <Link href={`/waybills/${id}/edit`}>
+                <Pencil className="h-4 w-4" />
+                编辑
               </Link>
             </Button>
             <Button onClick={triggerQuery}>
@@ -171,6 +182,7 @@ export default function WaybillDetailPage() {
                 ["密度", waybill.density],
                 ["报价", waybill.quotation],
                 ["航空费", waybill.air_freight_cost],
+                ["其他费用", waybill.other_charge],
                 ["付款日期", waybill.payment_date],
                 ["做数据收费", waybill.data_charge],
                 ["客服备注", waybill.customer_remark],
@@ -190,6 +202,23 @@ export default function WaybillDetailPage() {
                 <Button variant="secondary" onClick={updateManualStatus}>手动更新状态</Button>
               </div>
             ) : null}
+          </Panel>
+          <Panel
+            title="入仓货物明细"
+            className="mt-4"
+            action={
+              <WarehouseFileUploadButton
+                waybillId={waybill.id}
+                label={waybill.warehouse_no ? "上传新入仓文件" : "上传入仓文件"}
+                onUploaded={(result) => {
+                  setMessage(`入仓文件已上传：${result.warehouse_no}，绑定 ${result.success_count} 条货物明细${result.errors.length ? `，${result.errors.length} 行未导入` : ""}。`);
+                  load();
+                }}
+                onError={setMessage}
+              />
+            }
+          >
+            <CargoBoxesTable boxes={boxes} />
           </Panel>
         </TabsContent>
         <TabsContent value="official">

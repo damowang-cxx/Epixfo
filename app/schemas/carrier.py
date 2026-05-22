@@ -66,6 +66,7 @@ class CarrierAgentCreate(BaseModel):
     agent_name: str = Field(max_length=128)
     contact_person: str | None = Field(default=None, max_length=128)
     contact_phone: str | None = Field(default=None, max_length=64)
+    contact_emails: str | None = Field(default=None, max_length=2000)
     enabled: bool = True
     remark: str | None = None
 
@@ -74,6 +75,7 @@ class CarrierAgentUpdate(BaseModel):
     agent_name: str | None = Field(default=None, max_length=128)
     contact_person: str | None = Field(default=None, max_length=128)
     contact_phone: str | None = Field(default=None, max_length=64)
+    contact_emails: str | None = Field(default=None, max_length=2000)
     enabled: bool | None = None
     remark: str | None = None
 
@@ -86,6 +88,7 @@ class CarrierAgentOut(BaseModel):
     agent_name: str
     contact_person: str | None = None
     contact_phone: str | None = None
+    contact_emails: str | None = None
     enabled: bool
     remark: str | None = None
     created_at: datetime

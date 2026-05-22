@@ -166,6 +166,61 @@ def test_lookup_unmapped_prefix_falls_back_to_general_adapter(monkeypatch: pytes
     assert response.official_info.carrier_text == "China Southern"
 
 
+def test_lookup_explicit_general_adapter_overrides_mapped_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.adapters.carrier_query.normalizers.general import GeneralNormalizer
+
+    normalized_raw = GeneralNormalizer().normalize(_load_general_sample())
+    mapping = SimpleNamespace(adapter_code="cz_adapter", carrier_code="CZ")
+    adapter = _StubAdapter(
+        CarrierQueryResult(
+            status=QueryStatus.SUCCESS,
+            carrier_code="UNKNOWN",
+            adapter_code="general_adapter",
+            query_method=CarrierQueryMethod.PROTOCOL,
+            raw_response=normalized_raw,
+        )
+    )
+    requested_codes: list[str | None] = []
+
+    def get_adapter(code: str | None):
+        requested_codes.append(code)
+        return adapter if code == "general_adapter" else None
+
+    monkeypatch.setattr(lookup_service_module.registry, "get", get_adapter)
+    service = _make_service(monkeypatch, mapping)
+
+    response = _run(service.lookup("784-83707805", adapter_code="general_adapter"))
+
+    assert requested_codes == ["general_adapter"]
+    assert response.status == QueryStatus.SUCCESS
+    assert response.carrier_code == "CZ"
+    assert response.adapter_code == "general_adapter"
+
+
+def test_lookup_explicit_unknown_adapter_does_not_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    mapping = SimpleNamespace(adapter_code="cz_adapter", carrier_code="CZ")
+    requested_codes: list[str | None] = []
+
+    def get_adapter(code: str | None):
+        requested_codes.append(code)
+        return None
+
+    def get_general():
+        raise AssertionError("explicit adapter override should not fall back")
+
+    monkeypatch.setattr(lookup_service_module.registry, "get", get_adapter)
+    monkeypatch.setattr(lookup_service_module.registry, "get_general", get_general)
+    service = _make_service(monkeypatch, mapping)
+
+    response = _run(service.lookup("784-83707805", adapter_code="missing_adapter"))
+
+    assert requested_codes == ["missing_adapter"]
+    assert response.status == QueryStatus.FAILED
+    assert response.carrier_code == "CZ"
+    assert response.adapter_code == "missing_adapter"
+    assert response.error_code == "adapter_not_found"
+
+
 def test_lookup_adapter_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
     mapping = SimpleNamespace(adapter_code="unknown_adapter", carrier_code="UN")
     monkeypatch.setattr(lookup_service_module.registry, "get", lambda code: None)

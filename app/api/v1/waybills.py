@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, UploadFile
 
 from app.core.platform_patch import patch_platform_wmi
 
@@ -13,6 +13,7 @@ from app.core.database import get_db
 from app.models.enums import AlertLevel, UserRoleCode, WaybillLifecycleStatus
 from app.repositories.waybill_repository import WaybillRepository
 from app.schemas.alert import AlertOut
+from app.schemas.box import BoxOut, WarehouseFileUploadResult
 from app.schemas.common import PageResponse
 from app.schemas.lookup import WaybillLookupRequest, WaybillLookupResponse
 from app.schemas.waybill import (
@@ -29,6 +30,7 @@ from app.schemas.waybill import (
 )
 from app.services.lookup_service import WaybillLookupService
 from app.services.permission_service import PermissionService
+from app.services.warehouse_file_service import WarehouseFileService
 from app.services.waybill_service import WaybillService
 
 router = APIRouter(prefix="/waybills", tags=["waybills"])
@@ -92,7 +94,7 @@ async def lookup_waybill(
     db: Session = Depends(get_db),
 ):
     PermissionService.require_any(current_user, {UserRoleCode.ADMIN, UserRoleCode.ROUTE_STAFF})
-    return await WaybillLookupService(db).lookup(payload.waybill_no)
+    return await WaybillLookupService(db).lookup(payload.waybill_no, adapter_code=payload.adapter_code)
 
 
 @router.get("/{waybill_id}", response_model=WaybillOut)
@@ -110,6 +112,28 @@ def update_waybill(
 ):
     waybill = WaybillService(db).update(waybill_id, payload, current_user)
     return _waybill_response(waybill, current_user)
+
+
+@router.get("/{waybill_id}/boxes", response_model=list[BoxOut])
+def waybill_boxes(waybill_id: int, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    WaybillService(db).get_visible(waybill_id, current_user)
+    return WarehouseFileService(db).list_boxes(waybill_id)
+
+
+@router.post("/{waybill_id}/warehouse-file", response_model=WarehouseFileUploadResult)
+async def upload_warehouse_file(
+    waybill_id: int,
+    file: UploadFile = File(...),
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    content = await file.read()
+    return WarehouseFileService(db).upload_for_waybill(
+        waybill_id=waybill_id,
+        file_name=file.filename or "warehouse-file.xlsx",
+        content=content,
+        current_user=current_user,
+    )
 
 
 @router.post("/{waybill_id}/void", response_model=WaybillOut)

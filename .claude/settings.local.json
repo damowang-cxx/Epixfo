@@ -19,7 +19,8 @@
       "Bash(.venv/Scripts/python.exe -m pytest tests/test_csair_html_parser.py -v)",
       "Bash(.venv/Scripts/python.exe -m pytest tests/test_csair_active_flight_parser.py tests/test_cz_normalizer_active_flight.py -v)",
       "Bash(.venv/Scripts/python.exe -m pytest tests/test_waybill_status_counts.py -v)",
-      "mcp__Claude_in_Chrome__list_connected_browsers"
+      "mcp__Claude_in_Chrome__list_connected_browsers",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/test_consignee_snapshot.py -v)"
     ]
   }
 }

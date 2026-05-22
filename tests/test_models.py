@@ -1,6 +1,9 @@
+from datetime import date
+
 import app.models.all
 from app.core.database import Base
 from app.models.enums import CarrierQueryMethod, UserRoleCode, WaybillLifecycleStatus
+from app.models.waybill import AirWaybill, WaybillOfficialFlightSegment
 
 
 def test_core_model_tables_are_registered() -> None:
@@ -11,6 +14,10 @@ def test_core_model_tables_are_registered() -> None:
         "carriers",
         "carrier_prefix_mappings",
         "carrier_query_configs",
+        "consignees",
+        "consignee_contacts",
+        "consignee_notify_parties",
+        "auto_flight_query_settings",
         "air_waybills",
         "waybill_plans",
         "waybill_official_flight_segments",
@@ -49,5 +56,51 @@ def test_waybill_table_has_monitoring_columns() -> None:
     assert "consecutive_query_failures" in waybill_columns
 
 
+def test_boxes_table_has_warehouse_file_detail_columns() -> None:
+    box_columns = Base.metadata.tables["boxes"].columns
+
+    for column in [
+        "warehouse_waybill_no",
+        "goods_name",
+        "quantity",
+        "weight",
+        "volume",
+        "weight_volume_ratio",
+        "source_row_number",
+    ]:
+        assert column in box_columns
+
+
 def test_import_side_effect_registers_models() -> None:
     assert app.models.all.AirWaybill.__tablename__ == "air_waybills"
+
+
+def test_waybill_official_estimated_flight_date_uses_first_available_segment_date() -> None:
+    waybill = AirWaybill(
+        waybill_no="784-83707805",
+        include_tc=False,
+        notify_pickup=False,
+        lifecycle_status=WaybillLifecycleStatus.CREATED,
+        monitor_enabled=True,
+        consecutive_query_failures=0,
+    )
+    waybill.official_flight_segments = [
+        WaybillOfficialFlightSegment(segment_order=3, flight_date=date(2026, 5, 13), raw_data={}),
+        WaybillOfficialFlightSegment(segment_order=1, flight_date=None, raw_data={}),
+        WaybillOfficialFlightSegment(segment_order=2, flight_date=date(2026, 5, 12), raw_data={}),
+    ]
+
+    assert waybill.official_estimated_flight_date == date(2026, 5, 12)
+
+
+def test_waybill_official_estimated_flight_date_is_none_without_scraped_dates() -> None:
+    waybill = AirWaybill(
+        waybill_no="784-83707805",
+        include_tc=False,
+        notify_pickup=False,
+        lifecycle_status=WaybillLifecycleStatus.CREATED,
+        monitor_enabled=True,
+        consecutive_query_failures=0,
+    )
+
+    assert waybill.official_estimated_flight_date is None

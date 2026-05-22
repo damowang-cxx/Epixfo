@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.enums import AlertLevel, CarrierQueryMethod, OfficialEventType, QueryStatus, WaybillLifecycleStatus
 from app.schemas.carrier import CarrierAgentOut
+from app.schemas.consignee import ConsigneeContactOut
 
 
 class WaybillPlanIn(BaseModel):
@@ -21,6 +22,7 @@ class WaybillBaseIn(BaseModel):
     carrier_agent_id: int | None = None
     warehouse_no: str | None = Field(default=None, max_length=128)
     consignee: str | None = Field(default=None, max_length=255)
+    consignee_contact_id: int | None = None
     document_operator_id: int | None = None
     route_staff_id: int | None = None
     data_charge: Decimal | None = None
@@ -29,7 +31,7 @@ class WaybillBaseIn(BaseModel):
     booked_weight: Decimal | None = None
     booked_volume: Decimal | None = None
     density: Decimal | None = None
-    quotation: Decimal | None = None
+    quotation: str | None = Field(default=None, max_length=64)
     include_tc: bool | None = None
     warehouse_data_remark: str | None = None
     notify_pickup: bool | None = None
@@ -37,6 +39,7 @@ class WaybillBaseIn(BaseModel):
     internal_remark: str | None = None
     customer_remark: str | None = None
     air_freight_cost: Decimal | None = None
+    other_charge: Decimal | None = None
     payment_date: date | None = None
 
 
@@ -81,6 +84,8 @@ class WaybillOut(BaseModel):
     carrier_agent: CarrierAgentOut | None = None
     warehouse_no: str | None = None
     consignee: str | None = None
+    consignee_contact_id: int | None = None
+    consignee_contact: ConsigneeContactOut | None = None
     document_operator_id: int | None = None
     route_staff_id: int | None = None
     data_charge: Decimal | None = None
@@ -89,7 +94,7 @@ class WaybillOut(BaseModel):
     booked_weight: Decimal | None = None
     booked_volume: Decimal | None = None
     density: Decimal | None = None
-    quotation: Decimal | None = None
+    quotation: str | None = None
     include_tc: bool
     warehouse_data_remark: str | None = None
     notify_pickup: bool
@@ -97,6 +102,7 @@ class WaybillOut(BaseModel):
     internal_remark: str | None = None
     customer_remark: str | None = None
     air_freight_cost: Decimal | None = None
+    other_charge: Decimal | None = None
     payment_date: date | None = None
     lifecycle_status: WaybillLifecycleStatus
     alert_level: AlertLevel | None = None
@@ -106,6 +112,7 @@ class WaybillOut(BaseModel):
     next_query_at: datetime | None = None
     consecutive_query_failures: int
     plan: WaybillPlanOut | None = None
+    official_estimated_flight_date: date | None = None
     created_at: datetime
     updated_at: datetime
 

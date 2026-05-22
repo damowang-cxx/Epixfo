@@ -5,7 +5,9 @@ from app.models.audit import AuditLog
 from app.models.auth import UserRefreshToken
 from app.models.box import Box, BoxDocument
 from app.models.carrier import Carrier, CarrierAgent, CarrierPrefixMapping, CarrierQueryConfig
+from app.models.consignee import Consignee, ConsigneeContact, ConsigneeNotifyParty
 from app.models.presence import UserDailyOnlineStats, UserLoginLog, UserPresenceLog
+from app.models.system import AutoFlightQuerySettings
 from app.models.user import Role, User, UserRole
 from app.models.waybill import (
     AirWaybill,
@@ -26,6 +28,10 @@ __all__ = [
     "CarrierAgent",
     "CarrierPrefixMapping",
     "CarrierQueryConfig",
+    "Consignee",
+    "ConsigneeContact",
+    "ConsigneeNotifyParty",
+    "AutoFlightQuerySettings",
     "Role",
     "User",
     "UserDailyOnlineStats",

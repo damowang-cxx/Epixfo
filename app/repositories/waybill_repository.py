@@ -27,7 +27,14 @@ class WaybillRepository:
         self.db = db
 
     def base_query(self) -> Select[tuple[AirWaybill]]:
-        return select(AirWaybill).options(selectinload(AirWaybill.plan)).order_by(AirWaybill.id.desc())
+        return (
+            select(AirWaybill)
+            .options(
+                selectinload(AirWaybill.plan),
+                selectinload(AirWaybill.official_flight_segments),
+            )
+            .order_by(AirWaybill.id.desc())
+        )
 
     def get(self, waybill_id: int) -> AirWaybill | None:
         return self.db.scalar(self.base_query().where(AirWaybill.id == waybill_id))

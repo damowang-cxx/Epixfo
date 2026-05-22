@@ -139,7 +139,7 @@ npm run dev
 | `JWT_SECRET` | `change-me-in-production` | JWT 签名密钥，生产环境必须替换 |
 | `ENVIRONMENT` | `local` | 运行环境 |
 | `APP_TIMEZONE` | `Asia/Shanghai` | 业务时间判断使用的时区 |
-| `ENABLE_MONITOR_SCHEDULER` | `false` | 是否启动应用内监控调度 |
+| `ENABLE_MONITOR_SCHEDULER` | `true` | 是否启动应用内监控调度 |
 | `MONITOR_SCHEDULER_INTERVAL_SECONDS` | `60` | 调度扫描间隔 |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `30` | access token 有效期 |
 | `REFRESH_TOKEN_EXPIRE_DAYS` | `14` | refresh token 有效期 |

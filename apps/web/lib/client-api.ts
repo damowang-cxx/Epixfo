@@ -9,7 +9,8 @@ export class ApiError extends Error {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
-  if (!headers.has("content-type")) headers.set("content-type", "application/json");
+  const isFormData = typeof FormData !== "undefined" && init?.body instanceof FormData;
+  if (!isFormData && !headers.has("content-type")) headers.set("content-type", "application/json");
 
   const response = await fetch(`/api/backend${path}`, {
     ...init,
@@ -33,6 +34,16 @@ export const apiClient = {
   post: <T>(path: string, body?: unknown) =>
     request<T>(path, {
       method: "POST",
+      body: body === undefined ? undefined : JSON.stringify(body)
+    }),
+  postForm: <T>(path: string, body: FormData) =>
+    request<T>(path, {
+      method: "POST",
+      body
+    }),
+  put: <T>(path: string, body?: unknown) =>
+    request<T>(path, {
+      method: "PUT",
       body: body === undefined ? undefined : JSON.stringify(body)
     }),
   patch: <T>(path: string, body?: unknown) =>

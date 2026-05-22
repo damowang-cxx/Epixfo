@@ -54,7 +54,7 @@ export default function MonitorPage() {
           <div className="space-y-3 text-sm leading-6 text-slate-700">
             <div className="flex gap-2">
               <RadioTower className="mt-1 h-4 w-4 shrink-0 text-purple-700" />
-              <p>后端调度由配置项 <span className="font-mono text-slate-900">ENABLE_MONITOR_SCHEDULER</span> 控制。本地默认关闭，避免开发热重载重复执行。</p>
+              <p>后端调度由配置项 <span className="font-mono text-slate-900">ENABLE_MONITOR_SCHEDULER</span> 控制，可在自动航班查询设置中查看当前状态。</p>
             </div>
             <p>手动扫描会调用后端 <span className="font-mono text-slate-900">/monitor/due-waybills/run</span>，扫描 <span className="font-mono text-slate-900">next_query_at &lt;= now()</span> 的提单，并走同一套查询快照、生命周期和异常规则。</p>
           </div>

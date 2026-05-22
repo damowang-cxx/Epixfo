@@ -93,6 +93,7 @@ class CarrierAgent(Base, TimestampMixin):
     agent_name: Mapped[str] = mapped_column(String(128), nullable=False)
     contact_person: Mapped[Optional[str]] = mapped_column(String(128))
     contact_phone: Mapped[Optional[str]] = mapped_column(String(64))
+    contact_emails: Mapped[Optional[str]] = mapped_column(Text)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     remark: Mapped[Optional[str]] = mapped_column(Text)
 

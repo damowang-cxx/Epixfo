@@ -71,6 +71,8 @@ export interface Waybill {
   agent?: string | null;
   carrier_agent_id?: number | null;
   carrier_agent?: CarrierAgent | null;
+  consignee_contact_id?: number | null;
+  consignee_contact?: ConsigneeContact | null;
   warehouse_no?: string | null;
   consignee?: string | null;
   document_operator_id?: number | null;
@@ -89,6 +91,7 @@ export interface Waybill {
   internal_remark?: string | null;
   customer_remark?: string | null;
   air_freight_cost?: string | number | null;
+  other_charge?: string | number | null;
   payment_date?: string | null;
   lifecycle_status: LifecycleStatus;
   alert_level?: AlertLevel | null;
@@ -98,8 +101,52 @@ export interface Waybill {
   next_query_at?: string | null;
   consecutive_query_failures: number;
   plan?: WaybillPlan | null;
+  official_estimated_flight_date?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface BoxDocument {
+  id: number;
+  file_name: string;
+  file_path?: string | null;
+  file_hash?: string | null;
+  bound_waybill_id?: number | null;
+  uploaded_by?: number | null;
+  uploaded_at: string;
+}
+
+export interface CargoBox {
+  id: number;
+  box_no: string;
+  document_id?: number | null;
+  current_waybill_id?: number | null;
+  warehouse_waybill_no?: string | null;
+  goods_name?: string | null;
+  quantity?: number | null;
+  weight?: string | number | null;
+  volume?: string | number | null;
+  weight_volume_ratio?: string | number | null;
+  source_row_number?: number | null;
+  status: string;
+  raw_data: Record<string, unknown>;
+  document?: BoxDocument | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WarehouseFileImportError {
+  row_number: number;
+  message: string;
+}
+
+export interface WarehouseFileUploadResult {
+  file_name: string;
+  warehouse_no: string;
+  document_id: number;
+  success_count: number;
+  skipped_count: number;
+  errors: WarehouseFileImportError[];
 }
 
 export interface Alert {
@@ -130,12 +177,51 @@ export interface Carrier {
   updated_at: string;
 }
 
+export interface Consignee {
+  id: number;
+  name: string;
+  enabled: boolean;
+  remark?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ConsigneeContact {
+  id: number;
+  consignee_id: number;
+  name: string;
+  address?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  tax_info?: string | null;
+  notify_info?: string | null;
+  remark?: string | null;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ConsigneeNotifyParty {
+  id: number;
+  consignee_contact_id: number;
+  name: string;
+  address?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  tax_info?: string | null;
+  remark?: string | null;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface CarrierAgent {
   id: number;
   carrier_code: string;
   agent_name: string;
   contact_person?: string | null;
   contact_phone?: string | null;
+  contact_emails?: string | null;
   enabled: boolean;
   remark?: string | null;
   created_at: string;
@@ -230,6 +316,17 @@ export interface QuerySnapshot {
   started_at?: string | null;
   finished_at?: string | null;
   queried_at: string;
+}
+
+export interface AutoFlightQuerySettings {
+  fallback_enabled: boolean;
+  fallback_adapter_code: string;
+  query_interval_hours: number;
+  scan_limit: number;
+  scheduler_process_enabled: boolean;
+  scheduler_interval_seconds: number;
+  created_at?: string | null;
+  updated_at?: string | null;
 }
 
 export interface OnlineUser {

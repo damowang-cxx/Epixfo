@@ -9,9 +9,11 @@ import {
   ClipboardList,
   Home,
   LogOut,
+  PackageCheck,
   Plane,
   RadioTower,
   Search,
+  Settings,
   ShieldCheck,
   Users
 } from "lucide-react";
@@ -34,9 +36,11 @@ const navItems: Array<{
   { href: "/waybills/lookup", label: "提单速查", icon: Search, roles: ["admin", "route_staff"] },
   { href: "/alerts", label: "异常中心", icon: AlertTriangle },
   { href: "/carriers", label: "航司配置", icon: Plane, roles: ["admin", "route_staff"] },
+  { href: "/consignees", label: "收件人管理", icon: PackageCheck, roles: ["admin", "route_staff"] },
   { href: "/users", label: "用户管理", icon: Users, roles: ["admin", "route_staff"] },
   { href: "/presence", label: "在线状态", icon: Activity, roles: ["admin"] },
   { href: "/monitor", label: "监控任务", icon: RadioTower, roles: ["admin"] },
+  { href: "/monitor/settings", label: "自动航班查询设置", icon: Settings, roles: ["admin"] },
   { href: "/audit-logs", label: "审计日志", icon: ShieldCheck, roles: ["admin"] }
 ];
 

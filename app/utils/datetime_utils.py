@@ -34,6 +34,7 @@ def compute_next_query_at(
     planned_flight_date: date | None,
     lifecycle_status: WaybillLifecycleStatus,
     now: datetime | None = None,
+    interval_hours: int = 2,
 ) -> datetime | None:
     if planned_flight_date is None:
         return None
@@ -47,9 +48,6 @@ def compute_next_query_at(
     if current.tzinfo is None:
         current = current.replace(tzinfo=app_timezone())
     first_monitor_at = local_day_start(planned_flight_date - timedelta(days=3))
-    hourly_at = local_day_start(planned_flight_date - timedelta(days=1))
     if current < first_monitor_at:
         return first_monitor_at
-    if current < hourly_at:
-        return current + timedelta(hours=3)
-    return current + timedelta(hours=1)
+    return current + timedelta(hours=interval_hours)

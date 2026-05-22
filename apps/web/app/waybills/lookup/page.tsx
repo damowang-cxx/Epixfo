@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -8,10 +8,14 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { apiClient, ApiError } from "@/lib/client-api";
+import { carrierAdapterLabels, carrierAdapterOptions } from "@/lib/constants";
 import { compact, computeRatio, formatDateTime } from "@/lib/utils";
-import type { WaybillLookupResponse } from "@/lib/types";
+import type { Carrier, CarrierPrefixMapping, WaybillLookupResponse } from "@/lib/types";
+
+const DEFAULT_ADAPTER_CODE = "general_adapter";
 
 function FieldGrid({ items }: { items: Array<[string, unknown]> }) {
   return (
@@ -35,11 +39,68 @@ function hasDetailedTimes(segment: WaybillLookupResponse["flight_segments"][numb
   );
 }
 
+function extractCarrierPrefix(value: string) {
+  const digits = value.replace(/\D/g, "");
+  return digits.length >= 3 ? digits.slice(0, 3) : "";
+}
+
 export default function WaybillLookupPage() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<WaybillLookupResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [carriers, setCarriers] = useState<Carrier[]>([]);
+  const [mappings, setMappings] = useState<CarrierPrefixMapping[]>([]);
+  const [configError, setConfigError] = useState<string | null>(null);
+  const [adapterOverride, setAdapterOverride] = useState<{ prefix: string; adapterCode: string } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadCarrierConfig() {
+      setConfigError(null);
+      try {
+        const [carrierList, mappingList] = await Promise.all([
+          apiClient.get<Carrier[]>("/carriers"),
+          apiClient.get<CarrierPrefixMapping[]>("/carrier-prefix-mappings")
+        ]);
+        if (cancelled) return;
+        setCarriers(carrierList);
+        setMappings(mappingList);
+      } catch (err) {
+        if (cancelled) return;
+        const message = err instanceof ApiError ? err.message : err instanceof Error ? err.message : "配置加载失败";
+        setConfigError(message || "配置加载失败");
+      }
+    }
+
+    loadCarrierConfig();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const carrierByCode = useMemo(() => {
+    const items = new Map<string, Carrier>();
+    carriers.forEach((carrier) => items.set(carrier.carrier_code, carrier));
+    return items;
+  }, [carriers]);
+
+  const mappingByPrefix = useMemo(() => {
+    const items = new Map<string, CarrierPrefixMapping>();
+    mappings.forEach((mapping) => {
+      if (mapping.enabled) items.set(mapping.prefix, mapping);
+    });
+    return items;
+  }, [mappings]);
+
+  const detectedPrefix = useMemo(() => extractCarrierPrefix(input), [input]);
+  const detectedMapping = detectedPrefix ? mappingByPrefix.get(detectedPrefix) : undefined;
+  const detectedCarrier = detectedMapping ? carrierByCode.get(detectedMapping.carrier_code) : undefined;
+  const suggestedAdapterCode = detectedMapping?.adapter_code || DEFAULT_ADAPTER_CODE;
+  const activeAdapterCode =
+    adapterOverride?.prefix === detectedPrefix ? adapterOverride.adapterCode : suggestedAdapterCode;
+  const selectedAdapterLabel = carrierAdapterLabels[activeAdapterCode] || activeAdapterCode;
 
   async function submit() {
     const value = input.trim();
@@ -48,7 +109,10 @@ export default function WaybillLookupPage() {
     setError(null);
     setResult(null);
     try {
-      const res = await apiClient.post<WaybillLookupResponse>("/waybills/lookup", { waybill_no: value });
+      const res = await apiClient.post<WaybillLookupResponse>("/waybills/lookup", {
+        waybill_no: value,
+        adapter_code: activeAdapterCode
+      });
       setResult(res);
       if (res.status !== "success") {
         setError(res.error_message || res.error_code || "查询失败");
@@ -75,20 +139,64 @@ export default function WaybillLookupPage() {
         description="输入提单号直接查询承运人官网数据，结果仅供查看，不会创建提单，也不会写入数据库"
       />
       <Panel title="查询">
-        <div className="flex flex-col gap-2 sm:flex-row">
-          <Input
-            placeholder="例如 784-83707805 或 78483707805"
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            onKeyDown={onKeyDown}
-            disabled={loading}
-            className="sm:max-w-sm"
-          />
-          <Button onClick={submit} disabled={!input.trim() || loading}>
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(240px,320px)_auto]">
+          <div>
+            <label className="mb-1 block text-xs font-medium text-slate-600">提单号</label>
+            <Input
+              placeholder="例如 784-83707805 或 78483707805"
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              onKeyDown={onKeyDown}
+              disabled={loading}
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-slate-600">查询适配器</label>
+            <Select
+              value={activeAdapterCode}
+              onValueChange={(value) => setAdapterOverride({ prefix: detectedPrefix, adapterCode: value })}
+              disabled={loading}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="选择适配器" />
+              </SelectTrigger>
+              <SelectContent>
+                {carrierAdapterOptions.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <Button onClick={submit} disabled={!input.trim() || loading} className="self-end">
             <Search className="h-4 w-4" />
             {loading ? "查询中..." : "查询"}
           </Button>
         </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+          {detectedPrefix ? (
+            <Badge variant={detectedMapping ? "blue" : "amber"}>前缀 {detectedPrefix}</Badge>
+          ) : (
+            <Badge variant="gray">等待输入前三位前缀</Badge>
+          )}
+          <span>
+            {detectedMapping
+              ? `识别航司：${detectedMapping.carrier_code}${
+                  detectedCarrier ? ` · ${detectedCarrier.carrier_name}` : ""
+                }`
+              : detectedPrefix
+                ? "未配置前缀，默认通用适配器"
+                : "输入或粘贴提单号后自动识别"}
+          </span>
+          <span className="text-slate-400">/</span>
+          <span>当前适配器：{selectedAdapterLabel}</span>
+        </div>
+        {configError ? (
+          <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+            航司配置加载失败，适配器默认使用通用查询。{configError}
+          </div>
+        ) : null}
         {error ? (
           <div
             className={

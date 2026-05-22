@@ -12,7 +12,7 @@ import { Panel } from "@/components/ui/panel";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { apiClient } from "@/lib/client-api";
-import type { CarrierAgent, Waybill } from "@/lib/types";
+import type { CarrierAgent, Consignee, ConsigneeContact, Waybill } from "@/lib/types";
 
 type FormState = {
   waybill_no: string;
@@ -20,7 +20,7 @@ type FormState = {
   destination_port: string;
   carrier_agent_id: string;
   warehouse_no: string;
-  consignee: string;
+  consignee_contact_id: string;
   planned_flight_no: string;
   planned_flight_date: string;
   planned_destination: string;
@@ -30,6 +30,7 @@ type FormState = {
   density: string;
   quotation: string;
   air_freight_cost: string;
+  other_charge: string;
   payment_date: string;
   data_charge: string;
   delivery_time: string;
@@ -57,7 +58,6 @@ const fields: FieldMeta[] = [
   { key: "departure_port", label: "始发港", requiredOnCreate: true },
   { key: "destination_port", label: "目的港", requiredOnCreate: true },
   { key: "warehouse_no", label: "入仓号" },
-  { key: "consignee", label: "收货人" },
   { key: "planned_flight_no", label: "计划航班号", requiredOnCreate: true },
   { key: "planned_flight_date", label: "计划航班日期", type: "date", requiredOnCreate: true },
   { key: "planned_destination", label: "计划目的港" },
@@ -65,8 +65,9 @@ const fields: FieldMeta[] = [
   { key: "booked_weight", label: "订舱重量", type: "number", requiredOnCreate: true },
   { key: "booked_volume", label: "订舱方数", type: "number", requiredOnCreate: true },
   { key: "density", label: "密度", type: "number" },
-  { key: "quotation", label: "报价", type: "number", requiredOnCreate: true },
+  { key: "quotation", label: "报价", requiredOnCreate: true },
   { key: "air_freight_cost", label: "航空费", type: "number" },
+  { key: "other_charge", label: "其他费用", type: "number" },
   { key: "payment_date", label: "付款日期", type: "date" },
   { key: "data_charge", label: "做数据收费", type: "number" },
   { key: "delivery_time", label: "交货时间", type: "datetime-local" },
@@ -93,7 +94,7 @@ function initialState(waybill?: Waybill): FormState {
     destination_port: waybill?.destination_port || "",
     carrier_agent_id: waybill?.carrier_agent_id?.toString() || "",
     warehouse_no: waybill?.warehouse_no || "",
-    consignee: waybill?.consignee || "",
+    consignee_contact_id: waybill?.consignee_contact_id?.toString() || "",
     planned_flight_no: waybill?.plan?.planned_flight_no || "",
     planned_flight_date: waybill?.plan?.planned_flight_date || "",
     planned_destination: waybill?.plan?.planned_destination || "",
@@ -103,6 +104,7 @@ function initialState(waybill?: Waybill): FormState {
     density: waybill?.density?.toString() || "",
     quotation: waybill?.quotation?.toString() || "",
     air_freight_cost: waybill?.air_freight_cost?.toString() || "",
+    other_charge: waybill?.other_charge?.toString() || "",
     payment_date: waybill?.payment_date || "",
     data_charge: waybill?.data_charge?.toString() || "",
     delivery_time: dateTimeInput(waybill?.delivery_time),
@@ -120,7 +122,7 @@ function payloadFromState(state: FormState, editing: boolean) {
   const payload: Record<string, string | number | boolean | null> = {};
   Object.entries(state).forEach(([key, value]) => {
     if (editing && key === "waybill_no") return;
-    if (key === "carrier_agent_id") {
+    if (key === "carrier_agent_id" || key === "consignee_contact_id") {
       payload[key] = value === "" ? null : Number(value);
       return;
     }
@@ -137,7 +139,7 @@ function validateCreateRequired(state: FormState) {
       errors.push(`${label}为必填信息`);
     }
   });
-  ["booked_weight", "booked_volume", "quotation"].forEach((key) => {
+  ["booked_weight", "booked_volume"].forEach((key) => {
     const value = state[key as TextFieldKey].trim();
     if (value !== "" && Number.isNaN(Number(value))) {
       errors.push(`${requiredFieldLabels[key]}必须是有效数字`);
@@ -171,12 +173,18 @@ export function WaybillForm({ waybill }: { waybill?: Waybill }) {
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [agents, setAgents] = useState<CarrierAgent[]>([]);
+  const [consignees, setConsignees] = useState<Consignee[]>([]);
+  const [contacts, setContacts] = useState<ConsigneeContact[]>([]);
 
   useEffect(() => {
     apiClient.get<CarrierAgent[]>("/carrier-agents").then(setAgents).catch(() => setAgents([]));
+    apiClient.get<Consignee[]>("/consignees").then(setConsignees).catch(() => setConsignees([]));
+    apiClient.get<ConsigneeContact[]>("/consignee-contacts").then(setContacts).catch(() => setContacts([]));
   }, []);
 
   const visibleAgents = agents.filter((agent) => agent.enabled || state.carrier_agent_id === String(agent.id));
+  const consigneeNameById = new Map(consignees.map((c) => [c.id, c.name]));
+  const visibleContacts = contacts.filter((c) => c.enabled || state.consignee_contact_id === String(c.id));
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -259,6 +267,32 @@ export function WaybillForm({ waybill }: { waybill?: Waybill }) {
                       {!agent.enabled ? "（已停用）" : ""}
                     </SelectItem>
                   ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="consignee_contact_id">收货人</Label>
+              <Select
+                value={state.consignee_contact_id || "__none__"}
+                onValueChange={(value) =>
+                  setState((prev) => ({ ...prev, consignee_contact_id: value === "__none__" ? "" : value }))
+                }
+              >
+                <SelectTrigger id="consignee_contact_id">
+                  <SelectValue placeholder="选择收件人" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">不指定</SelectItem>
+                  {visibleContacts.map((contact) => {
+                    const company = consigneeNameById.get(contact.consignee_id) || "?";
+                    const addr = (contact.address || "").split("\n")[0].slice(0, 30);
+                    return (
+                      <SelectItem key={contact.id} value={String(contact.id)}>
+                        [{company}] {contact.name} {addr ? `- ${addr}` : ""}
+                        {!contact.enabled ? "（已停用）" : ""}
+                      </SelectItem>
+                    );
+                  })}
                 </SelectContent>
               </Select>
             </div>

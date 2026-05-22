@@ -40,7 +40,7 @@ class WaybillLookupService:
         self.db = db
         self.carriers = CarrierRepository(db)
 
-    async def lookup(self, raw_waybill_no: str) -> WaybillLookupResponse:
+    async def lookup(self, raw_waybill_no: str, adapter_code: str | None = None) -> WaybillLookupResponse:
         if not validate_waybill_no(raw_waybill_no):
             return WaybillLookupResponse(
                 waybill_no=raw_waybill_no,
@@ -52,10 +52,21 @@ class WaybillLookupService:
         waybill_no = normalize_waybill_no(raw_waybill_no)
         prefix = carrier_prefix_from_waybill(waybill_no)
 
+        requested_adapter_code = adapter_code.strip() if adapter_code is not None else None
         mapping = self.carriers.get_mapping_by_prefix(prefix)
-        adapter_code = mapping.adapter_code if mapping is not None else GENERAL_ADAPTER_CODE
+        adapter_code = requested_adapter_code or (mapping.adapter_code if mapping is not None else GENERAL_ADAPTER_CODE)
         carrier_code = mapping.carrier_code if mapping is not None else "UNKNOWN"
         adapter = registry.get(adapter_code)
+        if requested_adapter_code and adapter is None:
+            return WaybillLookupResponse(
+                waybill_no=waybill_no,
+                status=QueryStatus.FAILED,
+                carrier_code=carrier_code,
+                adapter_code=adapter_code,
+                error_code="adapter_not_found",
+                error_message=f"adapter_code={adapter_code!r} 未在 registry 中注册",
+            )
+
         if adapter is None and adapter_code != GENERAL_ADAPTER_CODE:
             logger.warning(
                 "adapter %s not found for prefix %s, falling back to %s",

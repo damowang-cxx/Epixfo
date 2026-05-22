@@ -15,6 +15,7 @@ from app.repositories.waybill_repository import WaybillRepository
 from app.schemas.waybill import ManualStatusRequest, WaybillCreate, WaybillStatusCount, WaybillUpdate
 from app.services.alert_service import AlertService
 from app.services.carrier_service import CarrierService
+from app.services.consignee_service import ConsigneeService
 from app.services.monitor_service import MonitorService
 from app.services.permission_service import PermissionService, VISIBLE_TO_CUSTOMER_SERVICE
 from app.utils.datetime_utils import compute_monitor_window, compute_next_query_at, local_now
@@ -30,6 +31,7 @@ class WaybillService:
         self.db = db
         self.repo = WaybillRepository(db)
         self.carriers = CarrierService(db)
+        self.consignees = ConsigneeService(db)
         self.alerts = AlertService(db)
 
     def create(self, payload: WaybillCreate, current_user: User) -> AirWaybill:
@@ -42,6 +44,7 @@ class WaybillService:
 
         prefix, carrier_code, _adapter_code = self.carriers.identify_waybill(waybill_no)
         agent_snapshot = self._resolve_agent_snapshot(payload.carrier_agent_id, carrier_code)
+        consignee_snapshot = self._resolve_consignee_snapshot(payload.consignee_contact_id)
         plan_data = {field: getattr(payload, field) for field in PLAN_FIELDS}
         first_monitor_at, next_query_at = compute_monitor_window(plan_data.get("planned_flight_date"))
         monitor_enabled = True
@@ -50,7 +53,7 @@ class WaybillService:
             lifecycle_status = WaybillLifecycleStatus.WAITING_MONITOR if local_now() < first_monitor_at else WaybillLifecycleStatus.MONITORING
 
         waybill_data = payload.model_dump(
-            exclude=set(PLAN_FIELDS) | {"waybill_no", "carrier_agent_id"},
+            exclude=set(PLAN_FIELDS) | {"waybill_no", "carrier_agent_id", "consignee_contact_id", "consignee"},
             exclude_none=True,
         )
         waybill = AirWaybill(
@@ -60,6 +63,8 @@ class WaybillService:
             carrier_code=carrier_code,
             carrier_agent_id=agent_snapshot[0] if agent_snapshot else None,
             agent=agent_snapshot[1] if agent_snapshot else None,
+            consignee_contact_id=consignee_snapshot[0] if consignee_snapshot else None,
+            consignee=consignee_snapshot[1] if consignee_snapshot else payload.consignee,
             lifecycle_status=lifecycle_status,
             monitor_enabled=monitor_enabled,
             first_monitor_at=first_monitor_at,
@@ -95,6 +100,15 @@ class WaybillService:
                 waybill.agent = None
             else:
                 waybill.carrier_agent_id, waybill.agent = agent_snapshot
+        if "consignee_contact_id" in data:
+            consignee_snapshot = self._resolve_consignee_snapshot(data.pop("consignee_contact_id"))
+            if consignee_snapshot is None:
+                waybill.consignee_contact_id = None
+                # 不强清 consignee 文本，可能是手填 / 历史快照
+                if "consignee" not in data:
+                    waybill.consignee = None
+            else:
+                waybill.consignee_contact_id, waybill.consignee = consignee_snapshot
         for key, value in data.items():
             if key in {"include_tc", "notify_pickup"} and value is None:
                 continue
@@ -223,3 +237,20 @@ class WaybillService:
         if carrier_code and agent.carrier_code != carrier_code:
             raise bad_request("carrier_agent_carrier_mismatch")
         return agent.id, agent.agent_name
+
+    def _resolve_consignee_snapshot(
+        self,
+        consignee_contact_id: int | None,
+    ) -> tuple[int, str] | None:
+        """根据 consignee_contact_id 查收件人记录，返回 (id, 厂商名作为快照) 元组。
+
+        None 表示未指定（不动 consignee 字段，保留前端可能手填的文本）。
+        """
+        if consignee_contact_id is None:
+            return None
+        contact = self.consignees.get_contact(consignee_contact_id)
+        if contact is None:
+            raise bad_request("consignee_contact_not_found")
+        snapshot_source = contact.name or (contact.consignee.name if contact.consignee else "")
+        snapshot = snapshot_source[:255]
+        return contact.id, snapshot
