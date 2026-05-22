@@ -19,7 +19,6 @@ VISIBLE_TO_CUSTOMER_SERVICE = {
     WaybillLifecycleStatus.ARRIVED,
     WaybillLifecycleStatus.PICKUP_NOTIFIED,
     WaybillLifecycleStatus.PICKED_UP,
-    WaybillLifecycleStatus.CLOSED,
 }
 
 SENSITIVE_WAYBILL_FIELDS = {

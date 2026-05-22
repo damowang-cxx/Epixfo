@@ -206,7 +206,7 @@ class WaybillService:
     def status_counts(self, current_user: User) -> list[WaybillStatusCount]:
         """按生命周期状态聚合当前角色可见的运单数量。
 
-        全集返回 11 个状态（缺失为 0），顺序与 `WaybillLifecycleStatus` 枚举一致。
+        全集返回所有生命周期状态（缺失为 0），顺序与 `WaybillLifecycleStatus` 枚举一致。
         """
         query = self.repo.base_query()
         query = PermissionService.filter_waybill_query(query, current_user)

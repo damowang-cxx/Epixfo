@@ -25,8 +25,8 @@ def _make_service(counts: dict[WaybillLifecycleStatus, int]) -> WaybillService:
     return service
 
 
-def test_status_counts_returns_all_11_statuses() -> None:
-    """部分状态有数据时，返回值应包含 11 个状态全集，缺失为 0。"""
+def test_status_counts_returns_all_statuses() -> None:
+    """部分状态有数据时，返回值应包含生命周期状态全集，缺失为 0。"""
     repo_counts = {
         WaybillLifecycleStatus.CREATED: 3,
         WaybillLifecycleStatus.MONITORING: 5,
@@ -41,7 +41,7 @@ def test_status_counts_returns_all_11_statuses() -> None:
         result = service.status_counts(current_user=SimpleNamespace())
 
     assert len(result) == len(list(WaybillLifecycleStatus))
-    assert len(result) == 11
+    assert len(result) == 10
 
     by_status = {item.status: item.count for item in result}
     assert by_status[WaybillLifecycleStatus.CREATED] == 3
@@ -50,7 +50,6 @@ def test_status_counts_returns_all_11_statuses() -> None:
     # 缺失状态全部为 0
     assert by_status[WaybillLifecycleStatus.WAITING_MONITOR] == 0
     assert by_status[WaybillLifecycleStatus.VOIDED] == 0
-    assert by_status[WaybillLifecycleStatus.CLOSED] == 0
 
 
 def test_status_counts_order_matches_enum() -> None:

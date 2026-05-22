@@ -112,7 +112,6 @@ class WaybillRepository:
                     AirWaybill.lifecycle_status.notin_(
                         [
                             WaybillLifecycleStatus.PICKED_UP,
-                            WaybillLifecycleStatus.CLOSED,
                             WaybillLifecycleStatus.VOIDED,
                         ]
                     ),

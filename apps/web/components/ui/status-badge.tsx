@@ -15,15 +15,7 @@ export type LifecycleBadgeVariant =
   | "teal"
   | "pink";
 
-/**
- * 11 个生命周期状态色相分布：每相邻状态色相跨度足够大，整体避免任何两个紧邻状态出现同色系。
- *
- *   created(红)       → waiting_monitor(青)  → monitoring(琥珀)     → warehouse_received(靛蓝紫)
- *   → loaded(绿)      → departed(紫)         → arrived(青绿)        → pickup_notified(粉)
- *   → picked_up(蓝)   → closed(灰，归档)     → voided(橙，作废)
- *
- * `closed` / `voided` 由用户指定（灰 / 橙），其他 9 个状态各占独立色系。
- */
+/** `picked_up` 视为提单终结态，使用灰色；`voided` 使用橙色表示作废。 */
 export const LIFECYCLE_VARIANT: Record<string, LifecycleBadgeVariant> = {
   created: "red",
   waiting_monitor: "cyan",
@@ -33,8 +25,7 @@ export const LIFECYCLE_VARIANT: Record<string, LifecycleBadgeVariant> = {
   departed: "purple",
   arrived: "teal",
   pickup_notified: "pink",
-  picked_up: "blue",
-  closed: "gray",
+  picked_up: "gray",
   voided: "orange"
 };
 

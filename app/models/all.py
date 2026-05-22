@@ -3,7 +3,7 @@
 from app.models.alert import WaybillAlert
 from app.models.audit import AuditLog
 from app.models.auth import UserRefreshToken
-from app.models.box import Box, BoxDocument
+from app.models.box import Box, BoxDocument, BoxItem, WarehouseReceipt
 from app.models.carrier import Carrier, CarrierAgent, CarrierPrefixMapping, CarrierQueryConfig
 from app.models.consignee import Consignee, ConsigneeContact, ConsigneeNotifyParty
 from app.models.presence import UserDailyOnlineStats, UserLoginLog, UserPresenceLog
@@ -24,6 +24,7 @@ __all__ = [
     "AuditLog",
     "Box",
     "BoxDocument",
+    "BoxItem",
     "Carrier",
     "CarrierAgent",
     "CarrierPrefixMapping",
@@ -39,6 +40,7 @@ __all__ = [
     "UserPresenceLog",
     "UserRefreshToken",
     "UserRole",
+    "WarehouseReceipt",
     "WaybillAlert",
     "WaybillAssemblyEvent",
     "WaybillOfficialFlightSegment",

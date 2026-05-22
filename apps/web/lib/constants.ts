@@ -8,7 +8,6 @@ export const lifecycleLabels: Record<string, string> = {
   arrived: "已到达",
   pickup_notified: "已通知提取",
   picked_up: "已提取",
-  closed: "已结束",
   voided: "已作废"
 };
 
@@ -23,7 +22,6 @@ export const LIFECYCLE_ORDER = [
   "arrived",
   "pickup_notified",
   "picked_up",
-  "closed",
   "voided"
 ] as const;
 

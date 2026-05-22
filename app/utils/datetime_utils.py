@@ -40,7 +40,6 @@ def compute_next_query_at(
         return None
     if lifecycle_status in {
         WaybillLifecycleStatus.PICKED_UP,
-        WaybillLifecycleStatus.CLOSED,
         WaybillLifecycleStatus.VOIDED,
     }:
         return None

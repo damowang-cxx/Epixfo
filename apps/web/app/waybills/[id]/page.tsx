@@ -20,6 +20,7 @@ import { useAuth } from "@/components/layout/auth-provider";
 import { apiClient } from "@/lib/client-api";
 import { compact, computeRatio, formatDateTime } from "@/lib/utils";
 import { lifecycleLabels } from "@/lib/constants";
+import { formatWarehouseUploadMessage } from "@/lib/warehouse-upload";
 import type {
   Alert,
   AssemblyEvent,
@@ -42,7 +43,6 @@ const statusOptions: LifecycleStatus[] = [
   "arrived",
   "pickup_notified",
   "picked_up",
-  "closed",
   "voided"
 ];
 
@@ -64,6 +64,7 @@ export default function WaybillDetailPage() {
   const id = Array.isArray(params.id) ? params.id[0] : params.id;
   const { hasRole } = useAuth();
   const isAdmin = hasRole("admin");
+  const canEditBoxes = isAdmin || hasRole("route_staff");
   const [waybill, setWaybill] = useState<Waybill | null>(null);
   const [officialInfo, setOfficialInfo] = useState<OfficialInfo | null>(null);
   const [segments, setSegments] = useState<OfficialFlightSegment[]>([]);
@@ -207,18 +208,34 @@ export default function WaybillDetailPage() {
             title="入仓货物明细"
             className="mt-4"
             action={
-              <WarehouseFileUploadButton
-                waybillId={waybill.id}
-                label={waybill.warehouse_no ? "上传新入仓文件" : "上传入仓文件"}
-                onUploaded={(result) => {
-                  setMessage(`入仓文件已上传：${result.warehouse_no}，绑定 ${result.success_count} 条货物明细${result.errors.length ? `，${result.errors.length} 行未导入` : ""}。`);
-                  load();
-                }}
-                onError={setMessage}
-              />
+              canEditBoxes ? (
+                <WarehouseFileUploadButton
+                  waybillId={waybill.id}
+                  label={waybill.warehouse_no ? "上传新入仓文件" : "上传入仓文件"}
+                  onUploaded={(result) => {
+                    setMessage(formatWarehouseUploadMessage(result));
+                    load();
+                  }}
+                  onError={setMessage}
+                />
+              ) : null
             }
           >
-            <CargoBoxesTable boxes={boxes} />
+            <CargoBoxesTable
+              boxes={boxes}
+              waybillId={waybill.id}
+              warehouseNo={waybill.warehouse_no}
+              readonly={!canEditBoxes}
+              onBoxUpdated={(updated) => {
+                setBoxes((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+                setMessage("外箱条码已更新。");
+              }}
+              onChanged={() => {
+                setMessage("箱号绑定已更新。");
+                load();
+              }}
+              onError={setMessage}
+            />
           </Panel>
         </TabsContent>
         <TabsContent value="official">

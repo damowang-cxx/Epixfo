@@ -18,7 +18,6 @@ class WaybillLifecycleStatus(StrEnum):
     ARRIVED = "arrived"
     PICKUP_NOTIFIED = "pickup_notified"
     PICKED_UP = "picked_up"
-    CLOSED = "closed"
     VOIDED = "voided"
 
 

@@ -25,6 +25,7 @@ export default function UsersPage() {
   const [displayName, setDisplayName] = useState("");
   const [role, setRole] = useState<RoleCode>("customer_service");
   const [error, setError] = useState("");
+  const [statusUpdatingId, setStatusUpdatingId] = useState<number | null>(null);
 
   const creatableRoles = useMemo(() => {
     if (hasRole("admin")) return roleOptions;
@@ -59,8 +60,16 @@ export default function UsersPage() {
   }
 
   async function setActive(id: number, active: boolean) {
-    await apiClient.post<User>(`/users/${id}/${active ? "enable" : "disable"}`);
-    load();
+    setError("");
+    setStatusUpdatingId(id);
+    try {
+      await apiClient.post<User>(`/users/${id}/${active ? "enable" : "disable"}`);
+      load();
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "更新用户状态失败");
+    } finally {
+      setStatusUpdatingId(null);
+    }
   }
 
   return (
@@ -71,7 +80,7 @@ export default function UsersPage() {
         <Panel title="用户列表">
           {users.length ? (
             <Table>
-              <THead><TR><TH>用户名</TH><TH>姓名</TH><TH>角色</TH><TH>状态</TH><TH>最后在线</TH><TH>操作</TH></TR></THead>
+              <THead><TR><TH>用户名</TH><TH>姓名</TH><TH>角色</TH><TH>状态</TH><TH>最后在线</TH></TR></THead>
               <TBody>
                 {users.map((user) => (
                   <TR key={user.id}>
@@ -82,13 +91,19 @@ export default function UsersPage() {
                         {user.roles.map((item) => <Badge key={item.code}>{roleLabels[item.code]}</Badge>)}
                       </div>
                     </TD>
-                    <TD>{user.is_active ? "启用" : "停用"}</TD>
-                    <TD>{formatDateTime(user.last_seen_at)}</TD>
                     <TD>
-                      <Button variant="secondary" size="sm" onClick={() => setActive(user.id, !user.is_active)}>
-                        {user.is_active ? "停用" : "启用"}
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        className={user.is_active ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100" : "border-slate-300 bg-slate-50 text-slate-500 hover:bg-slate-100"}
+                        disabled={statusUpdatingId === user.id}
+                        onClick={() => setActive(user.id, !user.is_active)}
+                        aria-label={`${user.is_active ? "停用" : "启用"}用户 ${user.username}`}
+                      >
+                        {user.is_active ? "启用" : "停用"}
                       </Button>
                     </TD>
+                    <TD>{formatDateTime(user.last_seen_at)}</TD>
                   </TR>
                 ))}
               </TBody>

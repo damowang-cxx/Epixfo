@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Response, UploadFile
 
 from app.core.platform_patch import patch_platform_wmi
 
@@ -13,7 +13,7 @@ from app.core.database import get_db
 from app.models.enums import AlertLevel, UserRoleCode, WaybillLifecycleStatus
 from app.repositories.waybill_repository import WaybillRepository
 from app.schemas.alert import AlertOut
-from app.schemas.box import BoxOut, WarehouseFileUploadResult
+from app.schemas.box import BoxCreate, BoxOut, BoxUpdate, WarehouseFileUploadResult
 from app.schemas.common import PageResponse
 from app.schemas.lookup import WaybillLookupRequest, WaybillLookupResponse
 from app.schemas.waybill import (
@@ -120,19 +120,68 @@ def waybill_boxes(waybill_id: int, current_user=Depends(get_current_user), db: S
     return WarehouseFileService(db).list_boxes(waybill_id)
 
 
+@router.post("/{waybill_id}/boxes", response_model=BoxOut)
+def create_waybill_box(
+    waybill_id: int,
+    payload: BoxCreate,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    PermissionService.assert_waybill_write(current_user)
+    WaybillService(db).get_visible(waybill_id, current_user)
+    return WarehouseFileService(db).create_box(waybill_id, payload, current_user)
+
+
+@router.patch("/{waybill_id}/boxes/{box_id}", response_model=BoxOut)
+def update_waybill_box(
+    waybill_id: int,
+    box_id: int,
+    payload: BoxUpdate,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    PermissionService.assert_waybill_write(current_user)
+    WaybillService(db).get_visible(waybill_id, current_user)
+    return WarehouseFileService(db).update_box(
+        waybill_id,
+        box_id,
+        current_user,
+        box_no=payload.box_no,
+        is_general_cargo=payload.is_general_cargo,
+    )
+
+
+@router.delete("/{waybill_id}/boxes/{box_id}", status_code=204)
+def delete_waybill_box(
+    waybill_id: int,
+    box_id: int,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    PermissionService.assert_waybill_write(current_user)
+    WaybillService(db).get_visible(waybill_id, current_user)
+    WarehouseFileService(db).delete_box(waybill_id, box_id, current_user)
+    return Response(status_code=204)
+
+
 @router.post("/{waybill_id}/warehouse-file", response_model=WarehouseFileUploadResult)
 async def upload_warehouse_file(
     waybill_id: int,
     file: UploadFile = File(...),
+    force_move_box_nos: list[str] | None = Form(default=None),
+    skip_conflict_box_nos: list[str] | None = Form(default=None),
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    PermissionService.assert_waybill_write(current_user)
     content = await file.read()
     return WarehouseFileService(db).upload_for_waybill(
         waybill_id=waybill_id,
         file_name=file.filename or "warehouse-file.xlsx",
         content=content,
         current_user=current_user,
+        force_move_box_nos=force_move_box_nos,
+        skip_conflict_box_nos=skip_conflict_box_nos,
     )
 
 

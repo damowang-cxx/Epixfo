@@ -33,6 +33,8 @@ def test_core_model_tables_are_registered() -> None:
         "audit_logs",
         "box_documents",
         "boxes",
+        "box_items",
+        "warehouse_receipts",
     }
 
     assert expected_tables.issubset(Base.metadata.tables.keys())
@@ -67,8 +69,21 @@ def test_boxes_table_has_warehouse_file_detail_columns() -> None:
         "volume",
         "weight_volume_ratio",
         "source_row_number",
+        "warehouse_receipt_id",
+        "is_general_cargo",
     ]:
         assert column in box_columns
+
+
+def test_atomic_box_tables_have_expected_binding_columns() -> None:
+    receipt_columns = Base.metadata.tables["warehouse_receipts"].columns
+    item_columns = Base.metadata.tables["box_items"].columns
+
+    assert "warehouse_no" in receipt_columns
+    assert "waybill_id" in receipt_columns
+    assert "total_volume" in receipt_columns
+    assert "box_id" in item_columns
+    assert "warehouse_waybill_no" in item_columns
 
 
 def test_import_side_effect_registers_models() -> None:

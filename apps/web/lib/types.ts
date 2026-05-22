@@ -10,7 +10,6 @@ export type LifecycleStatus =
   | "arrived"
   | "pickup_notified"
   | "picked_up"
-  | "closed"
   | "voided";
 
 export type AlertLevel = "info" | "warning" | "critical";
@@ -120,6 +119,7 @@ export interface CargoBox {
   id: number;
   box_no: string;
   document_id?: number | null;
+  warehouse_receipt_id?: number | null;
   current_waybill_id?: number | null;
   warehouse_waybill_no?: string | null;
   goods_name?: string | null;
@@ -129,8 +129,39 @@ export interface CargoBox {
   weight_volume_ratio?: string | number | null;
   source_row_number?: number | null;
   status: string;
+  is_general_cargo: boolean;
   raw_data: Record<string, unknown>;
   document?: BoxDocument | null;
+  warehouse_receipt?: WarehouseReceipt | null;
+  items: CargoBoxItem[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WarehouseReceipt {
+  id: number;
+  warehouse_no: string;
+  waybill_id?: number | null;
+  source_document_id?: number | null;
+  uploaded_by?: number | null;
+  total_quantity: number;
+  total_weight?: string | number | null;
+  total_volume?: string | number | null;
+  weight_volume_ratio?: string | number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CargoBoxItem {
+  id: number;
+  box_id: number;
+  document_id?: number | null;
+  warehouse_waybill_no?: string | null;
+  goods_name?: string | null;
+  quantity?: number | null;
+  weight?: string | number | null;
+  source_row_number?: number | null;
+  raw_data: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 }
@@ -140,6 +171,16 @@ export interface WarehouseFileImportError {
   message: string;
 }
 
+export interface WarehouseBoxConflict {
+  box_no: string;
+  current_waybill_id?: number | null;
+  current_waybill_no?: string | null;
+  current_warehouse_no?: string | null;
+  target_waybill_id: number;
+  target_waybill_no: string;
+  target_warehouse_no: string;
+}
+
 export interface WarehouseFileUploadResult {
   file_name: string;
   warehouse_no: string;
@@ -147,6 +188,12 @@ export interface WarehouseFileUploadResult {
   success_count: number;
   skipped_count: number;
   errors: WarehouseFileImportError[];
+  conflicts: WarehouseBoxConflict[];
+}
+
+export interface BoxBatchOperationResult {
+  updated_count: number;
+  boxes: CargoBox[];
 }
 
 export interface Alert {

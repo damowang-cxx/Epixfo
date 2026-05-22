@@ -4,6 +4,8 @@ _MODEL_EXPORTS = {
     "AuditLog": ("app.models.audit", "AuditLog"),
     "Box": ("app.models.box", "Box"),
     "BoxDocument": ("app.models.box", "BoxDocument"),
+    "BoxItem": ("app.models.box", "BoxItem"),
+    "WarehouseReceipt": ("app.models.box", "WarehouseReceipt"),
     "Carrier": ("app.models.carrier", "Carrier"),
     "CarrierAgent": ("app.models.carrier", "CarrierAgent"),
     "CarrierPrefixMapping": ("app.models.carrier", "CarrierPrefixMapping"),
