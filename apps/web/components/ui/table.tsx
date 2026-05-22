@@ -17,9 +17,10 @@ export function TBody({ className, ...props }: React.HTMLAttributes<HTMLTableSec
   return <tbody className={cn("divide-y divide-slate-100", className)} {...props} />;
 }
 
-export function TR({ className, ...props }: React.HTMLAttributes<HTMLTableRowElement>) {
-  return <tr className={cn("hover:bg-slate-50", className)} {...props} />;
-}
+export const TR = React.forwardRef<HTMLTableRowElement, React.HTMLAttributes<HTMLTableRowElement>>(
+  ({ className, ...props }, ref) => <tr ref={ref} className={cn("hover:bg-slate-50", className)} {...props} />
+);
+TR.displayName = "TR";
 
 export function TH({ className, ...props }: React.ThHTMLAttributes<HTMLTableCellElement>) {
   return <th className={cn("h-10 whitespace-nowrap px-3 text-xs font-semibold text-slate-600", className)} {...props} />;

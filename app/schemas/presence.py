@@ -2,6 +2,9 @@ from datetime import date, datetime
 
 from pydantic import BaseModel
 
+from app.models.enums import UserRoleCode
+from app.schemas.user import RoleOut
+
 
 class HeartbeatResponse(BaseModel):
     user_id: int
@@ -20,3 +23,29 @@ class DailyOnlineStatOut(BaseModel):
     user_id: int
     stat_date: date
     total_online_seconds: int
+
+
+class PresenceUserStatusOut(BaseModel):
+    id: int
+    username: str
+    display_name: str | None = None
+    is_active: bool
+    roles: list[RoleOut] = []
+    last_login_at: datetime | None = None
+    last_seen_at: datetime | None = None
+    last_seen_age_seconds: int | None = None
+    online: bool
+    status: str
+    primary_role: UserRoleCode | None = None
+    role_rank: int
+
+
+class PresenceUserSessionOut(BaseModel):
+    id: int
+    login_at: datetime
+    logout_at: datetime | None = None
+    effective_logout_at: datetime | None = None
+    duration_seconds: int
+    status: str
+    ip_address: str | None = None
+    user_agent: str | None = None

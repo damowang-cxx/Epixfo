@@ -342,6 +342,35 @@ export interface DailyOnlineStat {
   total_online_seconds: number;
 }
 
+export type PresenceUserStatusCode = "online" | "offline" | "disabled";
+export type PresenceSessionStatus = "online" | "logged_out" | "timeout";
+
+export interface PresenceUserStatus {
+  id: number;
+  username: string;
+  display_name?: string | null;
+  is_active: boolean;
+  roles: Role[];
+  last_login_at?: string | null;
+  last_seen_at?: string | null;
+  last_seen_age_seconds?: number | null;
+  online: boolean;
+  status: PresenceUserStatusCode;
+  primary_role?: RoleCode | null;
+  role_rank: number;
+}
+
+export interface PresenceUserSession {
+  id: number;
+  login_at: string;
+  logout_at?: string | null;
+  effective_logout_at?: string | null;
+  duration_seconds: number;
+  status: PresenceSessionStatus;
+  ip_address?: string | null;
+  user_agent?: string | null;
+}
+
 export interface AuditLog {
   id: number;
   user_id?: number | null;

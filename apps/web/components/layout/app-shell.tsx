@@ -22,8 +22,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AuthProvider, useAuth } from "@/components/layout/auth-provider";
 import { roleLabels } from "@/lib/constants";
+import { apiClient } from "@/lib/client-api";
 import { cn } from "@/lib/utils";
 import type { RoleCode } from "@/lib/types";
+
+const HEARTBEAT_INTERVAL_MS = 30_000;
 
 const navItems: Array<{
   href: string;
@@ -83,6 +86,36 @@ function ShellContent({ children }: { children: ReactNode }) {
       router.replace("/login");
     }
   }, [loading, pathname, router, user]);
+
+  useEffect(() => {
+    if (!user || pathname === "/login") return;
+
+    let stopped = false;
+    const sendHeartbeat = async () => {
+      if (stopped || document.hidden) return;
+      try {
+        await apiClient.post<{ user_id: number; last_seen_at: string }>("/presence/heartbeat");
+      } catch {
+        // Heartbeats are best-effort; normal API calls still handle auth redirects.
+      }
+    };
+
+    const handleVisibility = () => {
+      if (!document.hidden) void sendHeartbeat();
+    };
+
+    void sendHeartbeat();
+    const timer = window.setInterval(() => {
+      void sendHeartbeat();
+    }, HEARTBEAT_INTERVAL_MS);
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [pathname, user]);
 
   if (pathname === "/login") return <>{children}</>;
   if (loading) return <div className="grid min-h-screen place-items-center text-sm text-slate-500">正在加载系统...</div>;
