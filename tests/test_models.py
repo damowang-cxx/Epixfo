@@ -26,6 +26,7 @@ def test_core_model_tables_are_registered() -> None:
         "waybill_assembly_events",
         "waybill_query_snapshots",
         "waybill_alerts",
+        "waybill_boards",
         "user_refresh_tokens",
         "user_login_logs",
         "user_presence_logs",
@@ -56,6 +57,21 @@ def test_waybill_table_has_monitoring_columns() -> None:
     assert "first_monitor_at" in waybill_columns
     assert "next_query_at" in waybill_columns
     assert "consecutive_query_failures" in waybill_columns
+    assert "board_id" in waybill_columns
+
+
+def test_waybill_board_table_has_expected_columns() -> None:
+    board_columns = Base.metadata.tables["waybill_boards"].columns
+
+    for column in [
+        "board_no",
+        "actual_board_no",
+        "consignee_contact_id",
+        "consignee_text",
+        "created_by",
+        "updated_by",
+    ]:
+        assert column in board_columns
 
 
 def test_boxes_table_has_warehouse_file_detail_columns() -> None:

@@ -5,6 +5,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.enums import AlertLevel, CarrierQueryMethod, OfficialEventType, QueryStatus, WaybillLifecycleStatus
+from app.schemas.board import BoardSummaryOut
 from app.schemas.carrier import CarrierAgentOut
 from app.schemas.consignee import ConsigneeContactOut
 
@@ -86,6 +87,8 @@ class WaybillOut(BaseModel):
     consignee: str | None = None
     consignee_contact_id: int | None = None
     consignee_contact: ConsigneeContactOut | None = None
+    board_id: int | None = None
+    board: BoardSummaryOut | None = None
     document_operator_id: int | None = None
     route_staff_id: int | None = None
     data_charge: Decimal | None = None

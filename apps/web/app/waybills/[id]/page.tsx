@@ -225,6 +225,7 @@ export default function WaybillDetailPage() {
               boxes={boxes}
               waybillId={waybill.id}
               warehouseNo={waybill.warehouse_no}
+              bookedVolume={waybill.booked_volume}
               readonly={!canEditBoxes}
               onBoxUpdated={(updated) => {
                 setBoxes((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
@@ -235,6 +236,7 @@ export default function WaybillDetailPage() {
                 load();
               }}
               onError={setMessage}
+              onMessage={setMessage}
             />
           </Panel>
         </TabsContent>

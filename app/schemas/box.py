@@ -134,3 +134,12 @@ class BoxBatchUnbindRequest(BaseModel):
 class BoxBatchOperationResult(BaseModel):
     updated_count: int
     boxes: list[BoxOut]
+
+
+class BoxVolumeRecalculationResult(BaseModel):
+    booked_volume: Decimal
+    total_weight: Decimal
+    old_total_volume: Decimal
+    new_total_volume: Decimal
+    adjusted: bool
+    boxes: list[BoxOut]

@@ -3,8 +3,8 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass
-from datetime import date, datetime
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from datetime import UTC, date, datetime
+from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_HALF_UP
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -26,6 +26,7 @@ from app.repositories.waybill_repository import WaybillRepository
 from app.schemas.box import (
     BoxBatchOperationResult,
     BoxCreate,
+    BoxVolumeRecalculationResult,
     WarehouseBoxConflict,
     WarehouseFileImportError,
     WarehouseFileUploadResult,
@@ -207,6 +208,95 @@ class WarehouseFileService:
         self.db.flush()
         self._refresh_receipt_totals(receipt)
         self.db.commit()
+
+    def recalculate_box_volumes(self, waybill_id: int, current_user: User) -> BoxVolumeRecalculationResult:
+        PermissionService.assert_waybill_write(current_user)
+        waybill = self.waybills.get(waybill_id)
+        if waybill is None:
+            raise bad_request("waybill_not_found")
+        booked_volume = waybill.booked_volume
+        if booked_volume is None or booked_volume <= 0:
+            raise bad_request("booked_volume_required")
+
+        boxes = self.boxes.list_by_waybill(waybill_id)
+        if not boxes:
+            raise bad_request("warehouse_boxes_required")
+
+        booked_volume = booked_volume.quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
+        old_total_volume = sum((item.volume or Decimal("0.000") for item in boxes), Decimal("0.000")).quantize(
+            DECIMAL_001,
+            rounding=ROUND_HALF_UP,
+        )
+        total_weight = sum((item.weight or Decimal("0.000") for item in boxes), Decimal("0.000")).quantize(
+            DECIMAL_001,
+            rounding=ROUND_HALF_UP,
+        )
+        if old_total_volume <= 0:
+            raise bad_request("warehouse_volume_required")
+        if old_total_volume <= booked_volume:
+            return BoxVolumeRecalculationResult(
+                booked_volume=booked_volume,
+                total_weight=total_weight,
+                old_total_volume=old_total_volume,
+                new_total_volume=old_total_volume,
+                adjusted=False,
+                boxes=boxes,
+            )
+
+        excess_volume = (old_total_volume - booked_volume).quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
+        if excess_volume > Decimal("1.000"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error_code": "warehouse_volume_exceeds_booking",
+                    "message": "入仓箱数超出订舱方数，请移除部分箱。",
+                    "booked_volume": str(booked_volume),
+                    "total_volume": str(old_total_volume),
+                    "excess_volume": str(excess_volume),
+                },
+            )
+
+        scaled_volumes = _scale_box_volumes_to_target(boxes, booked_volume, old_total_volume)
+        ratio = booked_volume / old_total_volume
+        recalculated_at = datetime.now(UTC).isoformat()
+        touched_receipt_ids = {box.warehouse_receipt_id for box in boxes if box.warehouse_receipt_id is not None}
+        for box in boxes:
+            old_volume = box.volume or Decimal("0.000")
+            new_volume = scaled_volumes.get(box.id, Decimal("0.000"))
+            box.volume = new_volume
+            box.weight_volume_ratio = (
+                ((box.weight or Decimal("0.000")) / new_volume).quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
+                if new_volume > 0
+                else Decimal("0.000")
+            )
+            raw_data = dict(box.raw_data or {})
+            raw_data["volume_recalculation"] = {
+                "source": "booked_volume_fit",
+                "old_volume": str(old_volume.quantize(DECIMAL_001, rounding=ROUND_HALF_UP)),
+                "new_volume": str(new_volume),
+                "old_total_volume": str(old_total_volume),
+                "booked_volume": str(booked_volume),
+                "ratio": str(ratio.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)),
+                "recalculated_at": recalculated_at,
+            }
+            box.raw_data = raw_data
+
+        for receipt_id in touched_receipt_ids:
+            self._refresh_receipt_totals(self.boxes.get_receipt_by_id(receipt_id))
+        self.db.commit()
+        updated_boxes = self.boxes.list_by_waybill(waybill_id)
+        new_total_volume = sum((item.volume or Decimal("0.000") for item in updated_boxes), Decimal("0.000")).quantize(
+            DECIMAL_001,
+            rounding=ROUND_HALF_UP,
+        )
+        return BoxVolumeRecalculationResult(
+            booked_volume=booked_volume,
+            total_weight=total_weight,
+            old_total_volume=old_total_volume,
+            new_total_volume=new_total_volume,
+            adjusted=True,
+            boxes=updated_boxes,
+        )
 
     def upload_for_waybill(
         self,
@@ -582,6 +672,29 @@ def parse_warehouse_xlsx(file_name: str, content: bytes) -> WarehouseFileParseRe
         )
 
     return WarehouseFileParseResult(boxes=[boxes_by_no[box_no] for box_no in box_order], skipped_count=skipped_count, errors=errors)
+
+
+def _scale_box_volumes_to_target(boxes: list[Box], target_volume: Decimal, current_total_volume: Decimal) -> dict[int, Decimal]:
+    positive_boxes = [box for box in boxes if (box.volume or Decimal("0.000")) > 0]
+    if not positive_boxes:
+        return {box.id: Decimal("0.000") for box in boxes}
+
+    ratio = target_volume / current_total_volume
+    scaled_rows: list[tuple[Box, Decimal, Decimal]] = []
+    floor_sum = Decimal("0.000")
+    for box in positive_boxes:
+        raw = (box.volume or Decimal("0.000")) * ratio
+        floored = raw.quantize(DECIMAL_001, rounding=ROUND_DOWN)
+        scaled_rows.append((box, floored, raw - floored))
+        floor_sum += floored
+
+    remainder_units = int(((target_volume - floor_sum) / DECIMAL_001).to_integral_value(rounding=ROUND_DOWN))
+    scaled_rows.sort(key=lambda item: item[2], reverse=True)
+    result = {box.id: Decimal("0.000") for box in boxes}
+    for index, (box, floored, _fraction) in enumerate(scaled_rows):
+        increment = DECIMAL_001 if index < remainder_units else Decimal("0.000")
+        result[box.id] = (floored + increment).quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
+    return result
 
 
 def _format_no_valid_rows_error(errors: list[WarehouseFileImportError]) -> str:

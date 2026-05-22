@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
-import { Check, ChevronDown, ChevronRight, Pencil, Plus, Tag, Trash2, X } from "lucide-react";
+import { Calculator, Check, ChevronDown, ChevronRight, Pencil, Plus, Tag, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { apiClient } from "@/lib/client-api";
 import { cn, compact } from "@/lib/utils";
-import type { BoxBatchOperationResult, CargoBox, PageResponse, Waybill } from "@/lib/types";
+import type { BoxBatchOperationResult, BoxVolumeRecalculationResult, CargoBox, PageResponse, Waybill } from "@/lib/types";
 
 type NewBoxDraft = {
   box_no: string;
@@ -50,24 +50,34 @@ function optionalNumber(value: string) {
   return trimmed ? Number(trimmed) : undefined;
 }
 
+function toNumber(value?: string | number | null) {
+  if (value === null || value === undefined || value === "") return 0;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : 0;
+}
+
 interface CargoBoxesTableProps {
   boxes: CargoBox[];
   waybillId?: number;
   warehouseNo?: string | null;
+  bookedVolume?: string | number | null;
   readonly?: boolean;
   onBoxUpdated?: (box: CargoBox) => void;
   onChanged?: () => void;
   onError?: (message: string) => void;
+  onMessage?: (message: string) => void;
 }
 
 export function CargoBoxesTable({
   boxes,
   waybillId,
   warehouseNo,
+  bookedVolume,
   readonly = false,
   onBoxUpdated,
   onChanged,
-  onError
+  onError,
+  onMessage
 }: CargoBoxesTableProps) {
   const [editingBoxId, setEditingBoxId] = useState<number | null>(null);
   const [boxNoDraft, setBoxNoDraft] = useState("");
@@ -85,6 +95,17 @@ export function CargoBoxesTable({
   const selectableWaybills = useMemo(
     () => waybillOptions.filter((item) => item.id !== waybillId && Boolean(item.warehouse_no)),
     [waybillId, waybillOptions]
+  );
+  const warehouseTotals = useMemo(
+    () =>
+      boxes.reduce(
+        (total, item) => ({
+          weight: total.weight + toNumber(item.weight),
+          volume: total.volume + toNumber(item.volume)
+        }),
+        { weight: 0, volume: 0 }
+      ),
+    [boxes]
   );
 
   const loadWaybillOptions = useCallback(() => {
@@ -246,6 +267,24 @@ export function CargoBoxesTable({
     }
   }
 
+  async function recalculateVolumes() {
+    if (!waybillId) return;
+    try {
+      setSaving(true);
+      const result = await apiClient.post<BoxVolumeRecalculationResult>(`/waybills/${waybillId}/boxes/recalculate-volume`);
+      onChanged?.();
+      if (result.adjusted) {
+        onMessage?.(`方数已按订舱方数 ${formatDecimal(result.booked_volume)} 等比调整：${formatDecimal(result.old_total_volume)} → ${formatDecimal(result.new_total_volume)}。`);
+      } else {
+        onMessage?.(`当前总方数 ${formatDecimal(result.new_total_volume)} 未超过订舱方数 ${formatDecimal(result.booked_volume)}，无需调整。`);
+      }
+    } catch (error) {
+      onError?.(error instanceof Error ? error.message : "方数计算失败。");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   const totalColumns = readonly ? 9 : 11;
 
   return (
@@ -276,8 +315,23 @@ export function CargoBoxesTable({
           <Button type="button" variant="secondary" size="sm" disabled={!selectedCount || !targetWaybillId} onClick={() => void batchBind()}>
             批量转移
           </Button>
+          <div className="flex items-center gap-2 rounded border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700">
+            <span>总重量：<strong>{formatDecimal(warehouseTotals.weight)}</strong></span>
+            <span className="text-slate-300">|</span>
+            <span>总方数：<strong>{formatDecimal(warehouseTotals.volume)}</strong></span>
+          </div>
+          <Button type="button" variant="secondary" size="sm" disabled={saving || !boxes.length || !bookedVolume} onClick={() => void recalculateVolumes()}>
+            <Calculator className="h-4 w-4" />
+            方数计算
+          </Button>
         </div>
-      ) : null}
+      ) : (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-slate-200 bg-slate-50 p-2 text-sm">
+          <span className="text-slate-700">总重量：<strong>{formatDecimal(warehouseTotals.weight)}</strong></span>
+          <span className="text-slate-300">|</span>
+          <span className="text-slate-700">总方数：<strong>{formatDecimal(warehouseTotals.volume)}</strong></span>
+        </div>
+      )}
 
       {newBoxOpen ? (
         <div className="rounded-md border border-slate-200 bg-white p-3">

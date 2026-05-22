@@ -70,6 +70,7 @@ class FakeBoxRepository:
             created_at=datetime.now(UTC),
             updated_at=datetime.now(UTC),
         )
+        self.boxes_list = [self.box]
 
     def add_document(self, document: BoxDocument) -> BoxDocument:
         document.id = 99
@@ -84,12 +85,16 @@ class FakeBoxRepository:
         self.added_boxes.extend(boxes)
 
     def get_by_waybill(self, waybill_id: int, box_id: int):
-        if self.box.current_waybill_id == waybill_id and self.box.id == box_id:
-            return self.box
+        for box in self.boxes_list:
+            if box.current_waybill_id == waybill_id and box.id == box_id:
+                return box
         return None
 
     def get_by_box_no(self, box_no: str):
-        return self.box if self.box.box_no == box_no else None
+        return next((box for box in self.boxes_list if box.box_no == box_no), None)
+
+    def list_by_waybill(self, waybill_id: int):
+        return [box for box in self.boxes_list if box.current_waybill_id == waybill_id]
 
     def list_conflicting_boxes(self, box_nos, target_warehouse_no):
         return self.conflict_rows
@@ -103,7 +108,7 @@ class FakeBoxRepository:
         return receipt
 
     def list_by_receipt_id(self, receipt_id: int):
-        return []
+        return [box for box in self.boxes_list if box.warehouse_receipt_id == receipt_id]
 
     def get_receipt_by_id(self, receipt_id: int):
         for receipt in self.receipts_by_no.values():
@@ -112,10 +117,12 @@ class FakeBoxRepository:
         return None
 
     def list_by_box_nos(self, box_nos):
-        return [self.box] if self.box.box_no in set(box_nos) else []
+        box_no_set = set(box_nos)
+        return [box for box in self.boxes_list if box.box_no in box_no_set]
 
     def list_by_ids(self, box_ids):
-        return [self.box] if self.box.id in set(box_ids) else []
+        box_id_set = set(box_ids)
+        return [box for box in self.boxes_list if box.id in box_id_set]
 
     def delete_items_for_box(self, box_id: int):
         self.deleted_item_box_ids.append(box_id)
@@ -151,6 +158,31 @@ def _invalid_xlsx_bytes() -> bytes:
     stream = BytesIO()
     workbook.save(stream)
     return stream.getvalue()
+
+
+def _fake_box(box_id: int, box_no: str, weight: str, volume: str):
+    return SimpleNamespace(
+        id=box_id,
+        current_waybill_id=7,
+        warehouse_receipt_id=88,
+        box_no=box_no,
+        status="bound",
+        is_general_cargo=False,
+        raw_data={},
+        items=[],
+        document=None,
+        warehouse_receipt=None,
+        warehouse_waybill_no=None,
+        goods_name=None,
+        quantity=None,
+        weight=Decimal(weight),
+        volume=Decimal(volume),
+        weight_volume_ratio=None,
+        source_row_number=None,
+        document_id=None,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
 
 
 def test_upload_for_waybill_replaces_boxes_and_updates_warehouse_no(tmp_path) -> None:
@@ -275,6 +307,49 @@ def test_delete_box_removes_box_and_commits() -> None:
 
     assert service.db.deleted is service.boxes.box
     assert service.db.committed is True
+
+
+def test_recalculate_box_volumes_scales_to_booked_volume() -> None:
+    waybill = SimpleNamespace(id=7, waybill_no="784-00000001", booked_volume=Decimal("9.500"), warehouse_no="AMS-IN-001")
+    service = WarehouseFileService.__new__(WarehouseFileService)
+    service.db = FakeDb()
+    service.boxes = FakeBoxRepository()
+    service.waybills = FakeWaybillRepository(waybill)
+    service.boxes.boxes_list = [
+        _fake_box(4, "BOX-001", "10.000", "6.000"),
+        _fake_box(5, "BOX-002", "5.000", "4.000"),
+    ]
+    user = SimpleNamespace(id=5, is_superuser=True, roles=[])
+
+    result = service.recalculate_box_volumes(7, user)
+
+    assert result.adjusted is True
+    assert str(result.old_total_volume) == "10.000"
+    assert str(result.new_total_volume) == "9.500"
+    assert [str(box.volume) for box in service.boxes.boxes_list] == ["5.700", "3.800"]
+    assert str(service.boxes.boxes_list[0].weight_volume_ratio) == "1.754"
+    assert service.boxes.boxes_list[0].raw_data["volume_recalculation"]["booked_volume"] == "9.500"
+    assert service.db.committed is True
+
+
+def test_recalculate_box_volumes_rejects_excess_over_one_cubic_meter() -> None:
+    waybill = SimpleNamespace(id=7, waybill_no="784-00000001", booked_volume=Decimal("8.900"), warehouse_no="AMS-IN-001")
+    service = WarehouseFileService.__new__(WarehouseFileService)
+    service.db = FakeDb()
+    service.boxes = FakeBoxRepository()
+    service.waybills = FakeWaybillRepository(waybill)
+    service.boxes.boxes_list = [
+        _fake_box(4, "BOX-001", "10.000", "6.000"),
+        _fake_box(5, "BOX-002", "5.000", "4.000"),
+    ]
+    user = SimpleNamespace(id=5, is_superuser=True, roles=[])
+
+    with pytest.raises(HTTPException) as exc_info:
+        service.recalculate_box_volumes(7, user)
+
+    assert exc_info.value.detail["error_code"] == "warehouse_volume_exceeds_booking"
+    assert "请移除部分箱" in exc_info.value.detail["message"]
+    assert service.db.committed is False
 
 
 def test_upload_reports_failed_rows_when_no_valid_rows(tmp_path) -> None:

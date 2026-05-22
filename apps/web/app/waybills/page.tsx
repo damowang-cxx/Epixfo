@@ -138,6 +138,24 @@ export default function WaybillsPage() {
   }, [loadUnbound, loadWaybillOptions, unboundOpen]);
 
   const totalCount = useMemo(() => Object.values(counts).reduce((a, b) => a + b, 0), [counts]);
+  const boardRowSpans = useMemo(() => {
+    const spans = new Map<number, number>();
+    const items = data?.items || [];
+    let index = 0;
+    while (index < items.length) {
+      const boardId = items[index].board_id;
+      if (!boardId) {
+        spans.set(index, 1);
+        index += 1;
+        continue;
+      }
+      let next = index + 1;
+      while (next < items.length && items[next].board_id === boardId) next += 1;
+      spans.set(index, next - index);
+      index = next;
+    }
+    return spans;
+  }, [data?.items]);
 
   function applyFilters() {
     setPage(1);
@@ -247,6 +265,10 @@ export default function WaybillsPage() {
           <THead>
             <TR>
               <TH>提单号</TH>
+              <TH>系统板号</TH>
+              <TH>实际板号</TH>
+              <TH>收件人</TH>
+              <TH>订舱方数/板总方数</TH>
               <TH>航代</TH>
               <TH>入仓号/入仓文件</TH>
               <TH>始发港</TH>
@@ -261,7 +283,10 @@ export default function WaybillsPage() {
             </TR>
           </THead>
           <TBody>
-            {(data?.items || []).map((item) => (
+            {(data?.items || []).map((item, index) => {
+              const boardSpan = boardRowSpans.get(index) || 0;
+              const shouldRenderBoardCells = !item.board_id || boardSpan > 0;
+              return (
               <TR
                 key={item.id}
                 className={cn(
@@ -270,6 +295,22 @@ export default function WaybillsPage() {
                 )}
               >
                 <TD className="font-medium">{item.waybill_no}</TD>
+                {shouldRenderBoardCells ? (
+                  <>
+                    <TD rowSpan={boardSpan} className="align-middle font-medium">
+                      {item.board?.board_no || ""}
+                    </TD>
+                    <TD rowSpan={boardSpan} className="align-middle">
+                      {item.board?.actual_board_no || ""}
+                    </TD>
+                    <TD rowSpan={boardSpan} className="align-middle">
+                      {item.board ? compact(item.board.consignee_text) : compact(item.consignee)}
+                    </TD>
+                    <TD rowSpan={boardSpan} className="align-middle">
+                      {item.board ? compact(item.board.total_booked_volume) : compact(item.booked_volume)}
+                    </TD>
+                  </>
+                ) : null}
                 <TD>{compact(item.agent)}</TD>
                 <TD>
                   <div className="flex min-w-40 flex-col items-start gap-1">
@@ -303,7 +344,8 @@ export default function WaybillsPage() {
                   </div>
                 </TD>
               </TR>
-            ))}
+              );
+            })}
           </TBody>
         </Table>
         <div className="mt-4 flex items-center justify-between text-sm text-slate-500">

@@ -22,6 +22,7 @@ _MODEL_EXPORTS = {
     "UserLoginLog": ("app.models.presence", "UserLoginLog"),
     "UserPresenceLog": ("app.models.presence", "UserPresenceLog"),
     "AirWaybill": ("app.models.waybill", "AirWaybill"),
+    "WaybillBoard": ("app.models.waybill", "WaybillBoard"),
     "WaybillAlert": ("app.models.alert", "WaybillAlert"),
     "WaybillAssemblyEvent": ("app.models.waybill", "WaybillAssemblyEvent"),
     "WaybillOfficialFlightSegment": ("app.models.waybill", "WaybillOfficialFlightSegment"),

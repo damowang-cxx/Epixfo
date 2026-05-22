@@ -8,6 +8,7 @@ import {
   AlertTriangle,
   ClipboardList,
   Home,
+  Layers,
   LogOut,
   PackageCheck,
   Plane,
@@ -36,6 +37,7 @@ const navItems: Array<{
 }> = [
   { href: "/", label: "总览", icon: Home },
   { href: "/waybills", label: "提单管理", icon: ClipboardList },
+  { href: "/boards", label: "板号管理", icon: Layers, roles: ["admin", "route_staff"] },
   { href: "/waybills/lookup", label: "提单速查", icon: Search, roles: ["admin", "route_staff"] },
   { href: "/alerts", label: "异常中心", icon: AlertTriangle },
   { href: "/carriers", label: "航司配置", icon: Plane, roles: ["admin", "route_staff"] },

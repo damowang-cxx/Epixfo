@@ -30,6 +30,32 @@ from app.models.enums import AlertLevel, CarrierQueryMethod, OfficialEventType, 
 from app.models.mixins import CreatedAtMixin, TimestampMixin
 
 
+class WaybillBoard(Base, TimestampMixin):
+    __tablename__ = "waybill_boards"
+    __table_args__ = (
+        Index("idx_waybill_boards_board_no", "board_no"),
+        Index("idx_waybill_boards_consignee_contact_id", "consignee_contact_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    board_no: Mapped[str] = mapped_column(String(16), nullable=False, unique=True)
+    actual_board_no: Mapped[Optional[str]] = mapped_column(String(128))
+    consignee_contact_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("consignee_contacts.id"))
+    consignee_text: Mapped[Optional[str]] = mapped_column(String(255))
+    created_by: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"))
+    updated_by: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"))
+
+    waybills: Mapped[list[AirWaybill]] = relationship(back_populates="board")
+
+    @property
+    def member_count(self) -> int:
+        return len(self.waybills or [])
+
+    @property
+    def total_booked_volume(self) -> Decimal:
+        return sum((item.booked_volume or Decimal("0.000") for item in self.waybills or []), Decimal("0.000"))
+
+
 class AirWaybill(Base, TimestampMixin):
     __tablename__ = "air_waybills"
     __table_args__ = (
@@ -41,6 +67,7 @@ class AirWaybill(Base, TimestampMixin):
         Index("idx_air_waybills_route_staff_id", "route_staff_id"),
         Index("idx_air_waybills_carrier_agent_id", "carrier_agent_id"),
         Index("idx_air_waybills_consignee_contact_id", "consignee_contact_id"),
+        Index("idx_air_waybills_board_id", "board_id"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
@@ -56,6 +83,7 @@ class AirWaybill(Base, TimestampMixin):
     warehouse_no: Mapped[Optional[str]] = mapped_column(String(128))
     consignee: Mapped[Optional[str]] = mapped_column(String(255))
     consignee_contact_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("consignee_contacts.id"))
+    board_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("waybill_boards.id", ondelete="SET NULL"))
 
     document_operator_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"))
     route_staff_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"))
@@ -105,6 +133,7 @@ class AirWaybill(Base, TimestampMixin):
 
     carrier_agent = relationship("CarrierAgent", lazy="joined")
     consignee_contact = relationship("ConsigneeContact", lazy="joined")
+    board: Mapped[Optional[WaybillBoard]] = relationship(back_populates="waybills")
     plan: Mapped[Optional[WaybillPlan]] = relationship(back_populates="waybill", cascade="all, delete-orphan")
     official_info: Mapped[Optional[WaybillOfficialInfo]] = relationship(
         back_populates="waybill",

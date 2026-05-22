@@ -13,7 +13,7 @@ from app.core.database import get_db
 from app.models.enums import AlertLevel, UserRoleCode, WaybillLifecycleStatus
 from app.repositories.waybill_repository import WaybillRepository
 from app.schemas.alert import AlertOut
-from app.schemas.box import BoxCreate, BoxOut, BoxUpdate, WarehouseFileUploadResult
+from app.schemas.box import BoxCreate, BoxOut, BoxUpdate, BoxVolumeRecalculationResult, WarehouseFileUploadResult
 from app.schemas.common import PageResponse
 from app.schemas.lookup import WaybillLookupRequest, WaybillLookupResponse
 from app.schemas.waybill import (
@@ -162,6 +162,17 @@ def delete_waybill_box(
     WaybillService(db).get_visible(waybill_id, current_user)
     WarehouseFileService(db).delete_box(waybill_id, box_id, current_user)
     return Response(status_code=204)
+
+
+@router.post("/{waybill_id}/boxes/recalculate-volume", response_model=BoxVolumeRecalculationResult)
+def recalculate_waybill_box_volumes(
+    waybill_id: int,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    PermissionService.assert_waybill_write(current_user)
+    WaybillService(db).get_visible(waybill_id, current_user)
+    return WarehouseFileService(db).recalculate_box_volumes(waybill_id, current_user)
 
 
 @router.post("/{waybill_id}/warehouse-file", response_model=WarehouseFileUploadResult)

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models import (
     AirWaybill,
+    WaybillBoard,
     WaybillAlert,
     WaybillAssemblyEvent,
     WaybillOfficialFlightSegment,
@@ -32,8 +33,10 @@ class WaybillRepository:
             .options(
                 selectinload(AirWaybill.plan),
                 selectinload(AirWaybill.official_flight_segments),
+                selectinload(AirWaybill.board).selectinload(WaybillBoard.waybills),
             )
-            .order_by(AirWaybill.id.desc())
+            .outerjoin(WaybillBoard, WaybillBoard.id == AirWaybill.board_id)
+            .order_by(WaybillBoard.board_no.is_(None), WaybillBoard.board_no.asc(), AirWaybill.id.desc())
         )
 
     def get(self, waybill_id: int) -> AirWaybill | None:

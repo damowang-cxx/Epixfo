@@ -12,6 +12,7 @@ from app.models.user import Role, User, UserRole
 from app.models.waybill import (
     AirWaybill,
     WaybillAssemblyEvent,
+    WaybillBoard,
     WaybillOfficialFlightSegment,
     WaybillOfficialInfo,
     WaybillPlan,
@@ -43,6 +44,7 @@ __all__ = [
     "WarehouseReceipt",
     "WaybillAlert",
     "WaybillAssemblyEvent",
+    "WaybillBoard",
     "WaybillOfficialFlightSegment",
     "WaybillOfficialInfo",
     "WaybillPlan",

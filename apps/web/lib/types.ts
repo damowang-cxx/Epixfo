@@ -72,6 +72,8 @@ export interface Waybill {
   carrier_agent?: CarrierAgent | null;
   consignee_contact_id?: number | null;
   consignee_contact?: ConsigneeContact | null;
+  board_id?: number | null;
+  board?: BoardSummary | null;
   warehouse_no?: string | null;
   consignee?: string | null;
   document_operator_id?: number | null;
@@ -101,6 +103,31 @@ export interface Waybill {
   consecutive_query_failures: number;
   plan?: WaybillPlan | null;
   official_estimated_flight_date?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BoardSummary {
+  id: number;
+  board_no: string;
+  actual_board_no?: string | null;
+  consignee_contact_id?: number | null;
+  consignee_text?: string | null;
+  member_count: number;
+  total_booked_volume: string | number;
+}
+
+export interface BoardWaybill {
+  id: number;
+  waybill_no: string;
+  consignee_contact_id?: number | null;
+  consignee?: string | null;
+  booked_volume?: string | number | null;
+  lifecycle_status: LifecycleStatus;
+}
+
+export interface WaybillBoard extends BoardSummary {
+  waybills: BoardWaybill[];
   created_at: string;
   updated_at: string;
 }
@@ -193,6 +220,15 @@ export interface WarehouseFileUploadResult {
 
 export interface BoxBatchOperationResult {
   updated_count: number;
+  boxes: CargoBox[];
+}
+
+export interface BoxVolumeRecalculationResult {
+  booked_volume: string | number;
+  total_weight: string | number;
+  old_total_volume: string | number;
+  new_total_volume: string | number;
+  adjusted: boolean;
   boxes: CargoBox[];
 }
 
