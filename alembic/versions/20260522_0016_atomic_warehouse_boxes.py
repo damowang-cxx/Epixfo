@@ -5,6 +5,7 @@ Revises: 20260522_0015
 Create Date: 2026-05-22 16:00:00.000000
 
 """
+import json
 from decimal import Decimal
 from typing import Sequence, Union
 
@@ -33,6 +34,10 @@ def _ratio(weight: Decimal, volume: Decimal) -> Decimal:
     if volume <= 0:
         return Decimal("0.000")
     return (weight / volume).quantize(Decimal("0.001"))
+
+
+def _jsonb(value) -> str:
+    return json.dumps(value or {}, ensure_ascii=False, default=str)
 
 
 def upgrade() -> None:
@@ -176,7 +181,7 @@ def upgrade() -> None:
                     weight_volume_ratio = :ratio,
                     source_row_number = :source_row_number,
                     status = :status,
-                    raw_data = :raw_data,
+                    raw_data = CAST(:raw_data AS JSONB),
                     updated_at = now()
                 WHERE id = :id
                 """
@@ -192,7 +197,7 @@ def upgrade() -> None:
                 "ratio": _ratio(total_weight, first_volume),
                 "source_row_number": source_row_number,
                 "status": "bound" if receipt_id else "unbound",
-                "raw_data": raw_data,
+                "raw_data": _jsonb(raw_data),
                 "id": primary_id,
             },
         )
@@ -219,7 +224,7 @@ def upgrade() -> None:
                         :quantity,
                         :weight,
                         :source_row_number,
-                        :raw_data
+                        CAST(:raw_data AS JSONB)
                     )
                     """
                 ),
@@ -231,7 +236,7 @@ def upgrade() -> None:
                     "quantity": item["quantity"],
                     "weight": item["weight"],
                     "source_row_number": item["source_row_number"],
-                    "raw_data": item["raw_data"] or {},
+                    "raw_data": _jsonb(item["raw_data"]),
                 },
             )
 
