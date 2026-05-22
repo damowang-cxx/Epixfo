@@ -72,6 +72,11 @@ class ConsigneeService:
             return None
 
         data = payload.model_dump()
+        data["name"] = data["name"] or contact.name
+        data["address"] = data["address"] or getattr(contact, "address", None)
+        data["email"] = data["email"] or getattr(contact, "email", None)
+        data["phone"] = data["phone"] or getattr(contact, "phone", None)
+        data["tax_info"] = data["tax_info"] or getattr(contact, "tax_info", None)
         notify_party = self.repo.get_notify_party(contact_id)
         if notify_party is None:
             notify_party = ConsigneeNotifyParty(consignee_contact_id=contact_id, **data)

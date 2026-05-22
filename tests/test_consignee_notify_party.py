@@ -70,6 +70,29 @@ def test_upsert_notify_party_creates_first_record() -> None:
     assert service.db.added == [result]
 
 
+def test_upsert_notify_party_defaults_to_consignee_contact_when_blank() -> None:
+    contact = SimpleNamespace(
+        id=7,
+        name="Mission Freight AMS",
+        address="Radarweg 1",
+        email="ams@example.com",
+        phone="+31 20 123456",
+        tax_info="NL123",
+    )
+    service = _make_service(contact)
+    payload = ConsigneeNotifyPartyUpsert()
+
+    result = service.upsert_notify_party(7, payload)
+
+    assert isinstance(result, ConsigneeNotifyParty)
+    assert result.name == "Mission Freight AMS"
+    assert result.address == "Radarweg 1"
+    assert result.email == "ams@example.com"
+    assert result.phone == "+31 20 123456"
+    assert result.tax_info == "NL123"
+    assert service.db.committed is True
+
+
 def test_upsert_notify_party_updates_existing_record() -> None:
     existing = ConsigneeNotifyParty(consignee_contact_id=7, name="Old Notify", email="old@example.com")
     service = _make_service(SimpleNamespace(id=7), existing)

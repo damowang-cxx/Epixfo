@@ -280,15 +280,11 @@ export default function ConsigneesPage() {
 
   async function saveNotifyParty() {
     if (!notifyContact) return;
-    if (!notifyDraft.name.trim()) {
-      setNotifyError("通知人名称为必填");
-      return;
-    }
     setSavingNotify(true);
     setNotifyError("");
     try {
       await apiClient.put<ConsigneeNotifyParty>(`/consignee-contacts/${notifyContact.id}/notify-party`, {
-        name: notifyDraft.name.trim(),
+        name: notifyDraft.name.trim() || null,
         address: notifyDraft.address.trim() || null,
         email: notifyDraft.email.trim() || null,
         phone: notifyDraft.phone.trim() || null,

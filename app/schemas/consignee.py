@@ -73,7 +73,9 @@ class ConsigneeContactOut(BaseModel):
 
 
 class ConsigneeNotifyPartyUpsert(BaseModel):
-    name: str = Field(min_length=1, max_length=128)
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str | None = Field(default=None, max_length=128)
     address: str | None = None
     email: str | None = Field(default=None, max_length=255)
     phone: str | None = Field(default=None, max_length=64)
