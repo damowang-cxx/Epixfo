@@ -91,6 +91,7 @@ def test_parse_warehouse_xlsx_inherits_box_no_and_converts_dimensions() -> None:
             ["DHLAE57762", "CP148017895DE", "长袖衬衫", 5, 0.64, "60*50*50", 0.15],
             ["", "CP147897504DE", "衣服", 5, 2.9, "", 0],
             ["", "CP148008978DE", "女式睡衣套装", 2, 1.21, "", 0],
+            ["", "CP148027875DE", "鞋子，钱包", 2, 2.18, 0, 0],
         ]
     )
 
@@ -98,8 +99,52 @@ def test_parse_warehouse_xlsx_inherits_box_no_and_converts_dimensions() -> None:
 
     assert result.errors == []
     assert [item.box_no for item in result.boxes] == ["DHLAE57762"]
-    assert len(result.boxes[0].items) == 3
-    assert result.boxes[0].quantity == 12
-    assert str(result.boxes[0].weight) == "4.750"
+    assert len(result.boxes[0].items) == 4
+    assert [item.warehouse_waybill_no for item in result.boxes[0].items] == [
+        "CP148017895DE",
+        "CP147897504DE",
+        "CP148008978DE",
+        "CP148027875DE",
+    ]
+    assert result.boxes[0].quantity == 14
+    assert str(result.boxes[0].weight) == "6.930"
     assert str(result.boxes[0].volume) == "0.150"
-    assert str(result.boxes[0].weight_volume_ratio) == "31.667"
+    assert str(result.boxes[0].weight_volume_ratio) == "46.200"
+
+
+def test_parse_warehouse_xlsx_converts_semicolon_dimension_to_cbm() -> None:
+    content = _xlsx_bytes(
+        [
+            ["外箱条码", "提单号码", "品名", "数量", "重量", "收货体积信息", "收货重量/方"],
+            ["DPDD05445", "01505364502907", "长袖衬衫", 3, 18.67, "51*37*35;", 0.066],
+        ]
+    )
+
+    result = parse_warehouse_xlsx("warehouse.xlsx", content)
+
+    assert result.errors == []
+    assert str(result.boxes[0].volume) == "0.066"
+    assert str(result.boxes[0].weight_volume_ratio) == "282.879"
+
+
+def test_parse_warehouse_xlsx_only_inherits_from_successfully_parsed_box() -> None:
+    content = _xlsx_bytes(
+        [
+            ["外箱条码", "提单号码", "品名", "数量", "重量", "收货体积信息"],
+            ["BOX-BAD", "WH-AWB-BAD", "Shoes", "not-int", 10, "40*40*40"],
+            ["", "WH-AWB-SHOULD-FAIL", "Bags", 1, 2, ""],
+            ["BOX-OK", "WH-AWB-OK", "Hats", 1, 3, "50*40*30"],
+            ["", "WH-AWB-OK-2", "Socks", 2, 4, ""],
+        ]
+    )
+
+    result = parse_warehouse_xlsx("warehouse.xlsx", content)
+
+    assert [item.box_no for item in result.boxes] == ["BOX-OK"]
+    assert len(result.boxes[0].items) == 2
+    assert result.boxes[0].quantity == 3
+    assert str(result.boxes[0].weight) == "7.000"
+    assert str(result.boxes[0].volume) == "0.060"
+    assert [item.row_number for item in result.errors] == [2, 3]
+    assert "数量必须是有效数字" in result.errors[0].message
+    assert "外箱条码不能为空" in result.errors[1].message

@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
-import { Ban, Pencil, Play } from "lucide-react";
+import { useParams, useRouter } from "next/navigation";
+import { Ban, Pencil, Play, Trash2 } from "lucide-react";
 import { AlertLevelBadge, LifecycleBadge } from "@/components/ui/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -61,10 +61,12 @@ function FieldGrid({ items }: { items: Array<[string, unknown]> }) {
 
 export default function WaybillDetailPage() {
   const params = useParams<{ id: string }>();
+  const router = useRouter();
   const id = Array.isArray(params.id) ? params.id[0] : params.id;
   const { hasRole } = useAuth();
   const isAdmin = hasRole("admin");
   const canEditBoxes = isAdmin || hasRole("route_staff");
+  const canDeleteWaybill = canEditBoxes;
   const [waybill, setWaybill] = useState<Waybill | null>(null);
   const [officialInfo, setOfficialInfo] = useState<OfficialInfo | null>(null);
   const [segments, setSegments] = useState<OfficialFlightSegment[]>([]);
@@ -116,6 +118,17 @@ export default function WaybillDetailPage() {
     load();
   }
 
+  async function deleteWaybill() {
+    if (!id || !waybill) return;
+    if (!window.confirm(`确认删除提单 ${waybill.waybill_no} 吗？删除后不可恢复，关联的入仓箱号会转为未绑定。`)) return;
+    try {
+      await apiClient.delete<void>(`/waybills/${id}`);
+      router.push("/waybills");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "删除提单失败。");
+    }
+  }
+
   if (!waybill) return <div className="text-sm text-slate-500">正在加载提单...</div>;
 
   return (
@@ -145,6 +158,12 @@ export default function WaybillDetailPage() {
               <Button variant="danger" onClick={voidWaybill}>
                 <Ban className="h-4 w-4" />
                 作废
+              </Button>
+            ) : null}
+            {canDeleteWaybill ? (
+              <Button variant="danger" onClick={deleteWaybill}>
+                <Trash2 className="h-4 w-4" />
+                删除
               </Button>
             ) : null}
           </div>

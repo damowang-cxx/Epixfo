@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 
 from app.core.platform_patch import patch_platform_wmi
 
@@ -90,6 +90,19 @@ def update_consignee_contact(
     if contact is None:
         raise not_found("Consignee contact not found")
     return contact
+
+
+@router.delete("/consignee-contacts/{contact_id}", status_code=204)
+def delete_consignee_contact(
+    contact_id: int,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    PermissionService.require_any(current_user, {UserRoleCode.ADMIN, UserRoleCode.ROUTE_STAFF})
+    deleted = ConsigneeService(db).delete_contact(contact_id)
+    if not deleted:
+        raise not_found("Consignee contact not found")
+    return Response(status_code=204)
 
 
 @router.get("/consignee-contacts/{contact_id}/notify-party", response_model=ConsigneeNotifyPartyOut | None)

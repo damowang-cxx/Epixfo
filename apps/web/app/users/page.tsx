@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Pencil, UserPlus, X } from "lucide-react";
+import { Pencil, Trash2, UserPlus, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -33,7 +33,7 @@ function firstEditableRole(user: User, fallback: RoleCode) {
 }
 
 export default function UsersPage() {
-  const { hasRole } = useAuth();
+  const { hasRole, user: currentUser } = useAuth();
   const isAdmin = hasRole("admin");
   const [users, setUsers] = useState<User[]>([]);
   const [username, setUsername] = useState("");
@@ -46,6 +46,7 @@ export default function UsersPage() {
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [statusUpdatingId, setStatusUpdatingId] = useState<number | null>(null);
+  const [deletingUserId, setDeletingUserId] = useState<number | null>(null);
 
   const creatableRoles = useMemo(() => {
     if (isAdmin) return roleOptions;
@@ -83,6 +84,10 @@ export default function UsersPage() {
 
   function canManageUser(user: User) {
     return isAdmin || isRouteStaffManageable(user);
+  }
+
+  function canDeleteUser(user: User) {
+    return user.id !== currentUser?.id && canManageUser(user);
   }
 
   async function saveUser(event: React.FormEvent<HTMLFormElement>) {
@@ -125,6 +130,25 @@ export default function UsersPage() {
     }
   }
 
+  async function deleteUser(user: User) {
+    if (!window.confirm(`确认删除用户 ${user.username}？删除后不可恢复。`)) {
+      return;
+    }
+    setError("");
+    setDeletingUserId(user.id);
+    try {
+      await apiClient.delete<void>(`/users/${user.id}`);
+      if (editingUser?.id === user.id) {
+        resetForm();
+      }
+      load();
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "删除用户失败");
+    } finally {
+      setDeletingUserId(null);
+    }
+  }
+
   return (
     <>
       <PageHeader title="用户管理" description="维护系统用户和角色" />
@@ -133,7 +157,7 @@ export default function UsersPage() {
         <Panel title="用户列表">
           {users.length ? (
             <Table>
-              <THead><TR><TH>用户名</TH><TH>姓名</TH><TH>角色</TH><TH>状态</TH><TH>最后在线</TH><TH>编辑</TH></TR></THead>
+              <THead><TR><TH>用户名</TH><TH>姓名</TH><TH>角色</TH><TH>状态</TH><TH>最后在线</TH><TH>操作</TH></TR></THead>
               <TBody>
                 {users.map((user) => {
                   const manageable = canManageUser(user);
@@ -161,10 +185,24 @@ export default function UsersPage() {
                       <TD>{formatDateTime(user.last_seen_at)}</TD>
                       <TD>
                         {manageable ? (
-                          <Button type="button" variant="ghost" size="sm" onClick={() => startEdit(user)}>
-                            <Pencil className="h-4 w-4" />
-                            编辑
-                          </Button>
+                          <div className="flex flex-wrap gap-2">
+                            <Button type="button" variant="ghost" size="sm" onClick={() => startEdit(user)}>
+                              <Pencil className="h-4 w-4" />
+                              编辑
+                            </Button>
+                            {canDeleteUser(user) ? (
+                              <Button
+                                type="button"
+                                variant="danger"
+                                size="sm"
+                                onClick={() => deleteUser(user)}
+                                disabled={deletingUserId === user.id}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                                删除
+                              </Button>
+                            ) : null}
+                          </div>
                         ) : (
                           <span className="text-xs text-slate-400">只读</span>
                         )}

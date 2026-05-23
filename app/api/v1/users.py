@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 
 from app.core.platform_patch import patch_platform_wmi
 
@@ -51,3 +51,9 @@ def disable_user(user_id: int, current_user=Depends(get_current_user), db: Sessi
 @router.post("/{user_id}/enable", response_model=UserOut)
 def enable_user(user_id: int, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
     return UserService(db).set_active(user_id, True, current_user)
+
+
+@router.delete("/{user_id}", status_code=204)
+def delete_user(user_id: int, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    UserService(db).delete_user(user_id, current_user)
+    return Response(status_code=204)

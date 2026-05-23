@@ -4,9 +4,11 @@ from app.core.platform_patch import patch_platform_wmi
 
 patch_platform_wmi()
 
+from sqlalchemy import func, update
 from sqlalchemy.orm import Session
 
-from app.models import Consignee, ConsigneeContact, ConsigneeNotifyParty
+import app.models.all  # noqa: F401
+from app.models import AirWaybill, Consignee, ConsigneeContact, ConsigneeNotifyParty, WaybillBoard
 from app.repositories.consignee_repository import ConsigneeRepository
 from app.schemas.consignee import (
     ConsigneeContactCreate,
@@ -97,3 +99,22 @@ class ConsigneeService:
         self.db.commit()
         self.db.refresh(contact)
         return contact
+
+    def delete_contact(self, contact_id: int) -> bool:
+        contact = self.repo.get_contact(contact_id)
+        if contact is None:
+            return False
+
+        self.db.execute(
+            update(AirWaybill)
+            .where(AirWaybill.consignee_contact_id == contact_id)
+            .values(consignee_contact_id=None, updated_at=func.now())
+        )
+        self.db.execute(
+            update(WaybillBoard)
+            .where(WaybillBoard.consignee_contact_id == contact_id)
+            .values(consignee_contact_id=None, updated_at=func.now())
+        )
+        self.db.delete(contact)
+        self.db.commit()
+        return True

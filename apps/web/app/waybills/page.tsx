@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Pencil, Plus, Search } from "lucide-react";
+import { Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { AlertLevelBadge, LifecycleBadge, LIFECYCLE_VARIANT, type LifecycleBadgeVariant } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -11,6 +11,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
+import { useAuth } from "@/components/layout/auth-provider";
 import { WarehouseFileUploadButton } from "@/components/waybills/warehouse-file-upload-button";
 import { apiClient } from "@/lib/client-api";
 import { LIFECYCLE_ORDER, lifecycleLabels } from "@/lib/constants";
@@ -74,6 +75,8 @@ function StatusCard({
 }
 
 export default function WaybillsPage() {
+  const { hasRole } = useAuth();
+  const canDeleteWaybills = hasRole("admin") || hasRole("route_staff");
   const [data, setData] = useState<PageResponse<Waybill> | null>(null);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [waybillNo, setWaybillNo] = useState("");
@@ -89,6 +92,7 @@ export default function WaybillsPage() {
   const [selectedBoxIds, setSelectedBoxIds] = useState<Set<number>>(new Set());
   const [targetWaybillId, setTargetWaybillId] = useState("");
   const [waybillOptions, setWaybillOptions] = useState<Waybill[]>([]);
+  const [deletingWaybillId, setDeletingWaybillId] = useState<number | null>(null);
 
   const query = useMemo(() => {
     const params = new URLSearchParams({ page: String(page), page_size: "20" });
@@ -200,6 +204,22 @@ export default function WaybillsPage() {
     }
   }
 
+  async function deleteWaybill(item: Waybill) {
+    if (!window.confirm(`确认删除提单 ${item.waybill_no} 吗？删除后不可恢复，关联的入仓箱号会转为未绑定。`)) return;
+    setDeletingWaybillId(item.id);
+    setMessage("");
+    try {
+      await apiClient.delete<void>(`/waybills/${item.id}`);
+      setMessage(`提单 ${item.waybill_no} 已删除。`);
+      load();
+      loadCounts();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "删除提单失败。");
+    } finally {
+      setDeletingWaybillId(null);
+    }
+  }
+
   return (
     <>
       <PageHeader
@@ -294,7 +314,14 @@ export default function WaybillsPage() {
                     "[&_td]:text-slate-400 [&_td_*]:text-slate-400"
                 )}
               >
-                <TD className="font-medium">{item.waybill_no}</TD>
+                <TD className="font-medium">
+                  <Link
+                    href={`/waybills/${item.id}`}
+                    className="text-purple-700 underline-offset-2 hover:text-purple-900 hover:underline"
+                  >
+                    {item.waybill_no}
+                  </Link>
+                </TD>
                 {shouldRenderBoardCells ? (
                   <>
                     <TD rowSpan={boardSpan} className="align-middle font-medium">
@@ -334,13 +361,25 @@ export default function WaybillsPage() {
                 <TD>{formatDateTime(item.next_query_at)}</TD>
                 <TD>
                   <div className="flex flex-wrap gap-1">
-                    <Button asChild variant="ghost" size="sm"><Link href={`/waybills/${item.id}`}>详情</Link></Button>
                     <Button asChild variant="ghost" size="sm">
                       <Link href={`/waybills/${item.id}/edit`}>
                         <Pencil className="h-4 w-4" />
                         编辑
                       </Link>
                     </Button>
+                    {canDeleteWaybills ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        disabled={deletingWaybillId === item.id}
+                        onClick={() => void deleteWaybill(item)}
+                        aria-label={`删除提单 ${item.waybill_no}`}
+                      >
+                        <Trash2 className="h-4 w-4 text-red-600" />
+                        删除
+                      </Button>
+                    ) : null}
                   </div>
                 </TD>
               </TR>

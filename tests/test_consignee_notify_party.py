@@ -13,6 +13,8 @@ class FakeDb:
         self.added = []
         self.committed = False
         self.refreshed = []
+        self.executed = []
+        self.deleted = []
 
     def add(self, item):
         self.added.append(item)
@@ -22,6 +24,12 @@ class FakeDb:
 
     def refresh(self, item):
         self.refreshed.append(item)
+
+    def execute(self, statement):
+        self.executed.append(statement)
+
+    def delete(self, item):
+        self.deleted.append(item)
 
 
 class FakeRepo:
@@ -115,4 +123,27 @@ def test_upsert_notify_party_returns_none_when_contact_missing() -> None:
     result = service.upsert_notify_party(7, payload)
 
     assert result is None
+    assert service.db.committed is False
+
+
+def test_delete_contact_detaches_references_and_deletes_record() -> None:
+    contact = SimpleNamespace(id=7)
+    service = _make_service(contact)
+
+    result = service.delete_contact(7)
+
+    assert result is True
+    assert len(service.db.executed) == 2
+    assert service.db.deleted == [contact]
+    assert service.db.committed is True
+
+
+def test_delete_contact_returns_false_when_missing() -> None:
+    service = _make_service(None)
+
+    result = service.delete_contact(7)
+
+    assert result is False
+    assert service.db.executed == []
+    assert service.db.deleted == []
     assert service.db.committed is False

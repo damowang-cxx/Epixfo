@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Bell, Mail, Pencil, Phone, Plus, Save, X } from "lucide-react";
+import { Bell, Mail, Pencil, Phone, Plus, Power, Save, Trash2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -28,7 +28,6 @@ type ContactDraft = {
   phone: string;
   taxInfo: string;
   remark: string;
-  enabled: boolean;
 };
 
 type NotifyPartyDraft = {
@@ -46,7 +45,7 @@ function emptyConsigneeDraft(): ConsigneeDraft {
 }
 
 function emptyContactDraft(): ContactDraft {
-  return { name: "", address: "", email: "", phone: "", taxInfo: "", remark: "", enabled: true };
+  return { name: "", address: "", email: "", phone: "", taxInfo: "", remark: "" };
 }
 
 function emptyNotifyPartyDraft(defaultName = ""): NotifyPartyDraft {
@@ -60,8 +59,7 @@ function contactDraftFromItem(item: ConsigneeContact): ContactDraft {
     email: item.email || "",
     phone: item.phone || "",
     taxInfo: item.tax_info || "",
-    remark: item.remark || "",
-    enabled: item.enabled
+    remark: item.remark || ""
   };
 }
 
@@ -95,6 +93,8 @@ export default function ConsigneesPage() {
   const [contactDraft, setContactDraft] = useState<ContactDraft>(() => emptyContactDraft());
   const [contactError, setContactError] = useState("");
   const [savingContact, setSavingContact] = useState(false);
+  const [togglingContactId, setTogglingContactId] = useState<number | null>(null);
+  const [deletingContactId, setDeletingContactId] = useState<number | null>(null);
 
   const [notifyContact, setNotifyContact] = useState<ConsigneeContact | null>(null);
   const [notifyDraft, setNotifyDraft] = useState<NotifyPartyDraft>(() => emptyNotifyPartyDraft());
@@ -233,8 +233,7 @@ export default function ConsigneesPage() {
         email: contactDraft.email.trim() || null,
         phone: contactDraft.phone.trim() || null,
         tax_info: contactDraft.taxInfo.trim() || null,
-        remark: contactDraft.remark.trim() || null,
-        enabled: contactDraft.enabled
+        remark: contactDraft.remark.trim() || null
       };
       if (editingContactId === "new") {
         await apiClient.post<ConsigneeContact>("/consignee-contacts", {
@@ -250,6 +249,40 @@ export default function ConsigneesPage() {
       setContactError(errorMessage(err, "收件人保存失败"));
     } finally {
       setSavingContact(false);
+    }
+  }
+
+  async function toggleContactEnabled(item: ConsigneeContact) {
+    setTogglingContactId(item.id);
+    setContactError("");
+    try {
+      await apiClient.patch<ConsigneeContact>(`/consignee-contacts/${item.id}`, {
+        enabled: !item.enabled
+      });
+      await reload();
+    } catch (err) {
+      setContactError(errorMessage(err, item.enabled ? "收件人停用失败" : "收件人启用失败"));
+    } finally {
+      setTogglingContactId(null);
+    }
+  }
+
+  async function deleteContact(item: ConsigneeContact) {
+    if (!window.confirm(`确认删除收件人 ${item.name}？删除后不可恢复，历史提单会保留已写入的收件人文本。`)) {
+      return;
+    }
+    setDeletingContactId(item.id);
+    setContactError("");
+    try {
+      await apiClient.delete<void>(`/consignee-contacts/${item.id}`);
+      if (editingContactId === item.id) {
+        cancelContactEdit();
+      }
+      await reload();
+    } catch (err) {
+      setContactError(errorMessage(err, "收件人删除失败"));
+    } finally {
+      setDeletingContactId(null);
     }
   }
 
@@ -481,15 +514,6 @@ export default function ConsigneesPage() {
                         onChange={(event) => setContactDraft((prev) => ({ ...prev, remark: event.target.value }))}
                       />
                     </div>
-                    <label className="flex items-center gap-2 text-sm text-slate-700">
-                      <input
-                        type="checkbox"
-                        className="h-4 w-4 rounded border-slate-300"
-                        checked={contactDraft.enabled}
-                        onChange={(event) => setContactDraft((prev) => ({ ...prev, enabled: event.target.checked }))}
-                      />
-                      启用
-                    </label>
                   </div>
                   <div className="mt-3 flex gap-2">
                     <Button size="sm" onClick={saveContact} disabled={savingContact}>
@@ -551,6 +575,16 @@ export default function ConsigneesPage() {
                         </Button>
                         <Button
                           type="button"
+                          variant={item.enabled ? "ghost" : "secondary"}
+                          size="sm"
+                          onClick={() => toggleContactEnabled(item)}
+                          disabled={editingContactId !== null || togglingContactId === item.id || deletingContactId === item.id}
+                        >
+                          <Power className="h-4 w-4" />
+                          {item.enabled ? "停用" : "启用"}
+                        </Button>
+                        <Button
+                          type="button"
                           variant="ghost"
                           size="sm"
                           onClick={() => startEditContact(item)}
@@ -558,6 +592,16 @@ export default function ConsigneesPage() {
                         >
                           <Pencil className="h-4 w-4" />
                           编辑
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="danger"
+                          size="sm"
+                          onClick={() => deleteContact(item)}
+                          disabled={editingContactId !== null || deletingContactId === item.id}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                          删除
                         </Button>
                       </div>
                     </div>

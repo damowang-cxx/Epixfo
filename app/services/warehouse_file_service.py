@@ -600,7 +600,7 @@ def parse_warehouse_xlsx(file_name: str, content: bytes) -> WarehouseFileParseRe
     errors: list[WarehouseFileImportError] = []
     skipped_count = 0
     normalized_headers = [_clean_text(value) or f"column_{idx + 1}" for idx, value in enumerate(header_values)]
-    current_box_no: str | None = None
+    last_valid_box_no: str | None = None
 
     for row_number, row in enumerate(rows, start=header_row_number + 1):
         values = list(row)
@@ -614,11 +614,9 @@ def parse_warehouse_xlsx(file_name: str, content: bytes) -> WarehouseFileParseRe
         }
         try:
             raw_box_no = _optional_text(values, column_map["outer_barcode"])
-            if raw_box_no:
-                current_box_no = raw_box_no
-            if not current_box_no:
+            box_no = raw_box_no or last_valid_box_no
+            if not box_no:
                 raise ValueError("外箱条码不能为空")
-            box_no = current_box_no
             is_continuation_row = raw_box_no is None
             warehouse_waybill_no = _optional_text(values, column_map["warehouse_waybill_no"])
             goods_name = _optional_text(values, column_map["goods_name"])
@@ -631,6 +629,7 @@ def parse_warehouse_xlsx(file_name: str, content: bytes) -> WarehouseFileParseRe
             errors.append(WarehouseFileImportError(row_number=row_number, message=str(exc)))
             continue
 
+        last_valid_box_no = box_no
         item = ParsedWarehouseBoxItem(
             warehouse_waybill_no=warehouse_waybill_no,
             goods_name=goods_name,

@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 
 from app.core.platform_patch import patch_platform_wmi
 
 patch_platform_wmi()
 
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import bad_request, forbidden, not_found
-from app.models import AirWaybill, User, WaybillPlan
+from app.models import AirWaybill, Box, BoxDocument, User, WarehouseReceipt, WaybillPlan
 from app.models.enums import AlertLevel, UserRoleCode, WaybillLifecycleStatus
 from app.repositories.waybill_repository import WaybillRepository
 from app.schemas.waybill import ManualStatusRequest, WaybillCreate, WaybillStatusCount, WaybillUpdate
@@ -189,6 +191,15 @@ class WaybillService:
         self.db.commit()
         return self.repo.get(waybill.id) or waybill
 
+    def delete(self, waybill_id: int, current_user: User) -> None:
+        PermissionService.assert_waybill_write(current_user)
+        waybill = self.repo.get(waybill_id)
+        if waybill is None:
+            raise not_found("Waybill not found")
+        self._detach_warehouse_bindings(waybill.id)
+        self.db.delete(waybill)
+        self.db.commit()
+
     def manual_status(self, waybill_id: int, payload: ManualStatusRequest, current_user: User) -> AirWaybill:
         PermissionService.require_any(current_user, {UserRoleCode.ADMIN})
         waybill = self.repo.get(waybill_id)
@@ -222,6 +233,40 @@ class WaybillService:
         if waybill is None:
             raise not_found("Waybill not found")
         return await MonitorService(self.db).trigger_query(waybill)
+
+    def _detach_warehouse_bindings(self, waybill_id: int) -> None:
+        receipt_ids = list(
+            self.db.scalars(
+                select(WarehouseReceipt.id).where(WarehouseReceipt.waybill_id == waybill_id)
+            )
+        )
+        if receipt_ids:
+            self.db.execute(
+                update(Box)
+                .where(Box.warehouse_receipt_id.in_(receipt_ids))
+                .values(warehouse_receipt_id=None, current_waybill_id=None, status="unbound")
+            )
+            self.db.execute(
+                update(WarehouseReceipt)
+                .where(WarehouseReceipt.id.in_(receipt_ids))
+                .values(
+                    waybill_id=None,
+                    total_quantity=0,
+                    total_weight=Decimal("0.000"),
+                    total_volume=Decimal("0.000"),
+                    weight_volume_ratio=Decimal("0.000"),
+                )
+            )
+        self.db.execute(
+            update(Box)
+            .where(Box.current_waybill_id == waybill_id)
+            .values(current_waybill_id=None, status="unbound")
+        )
+        self.db.execute(
+            update(BoxDocument)
+            .where(BoxDocument.bound_waybill_id == waybill_id)
+            .values(bound_waybill_id=None)
+        )
 
     def _resolve_agent_snapshot(
         self,

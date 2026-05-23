@@ -11,9 +11,17 @@ from app.services.user_service import UserService
 class FakeDb:
     def __init__(self) -> None:
         self.committed = False
+        self.executed = []
+        self.deleted = None
 
     def commit(self):
         self.committed = True
+
+    def execute(self, statement):
+        self.executed.append(statement)
+
+    def delete(self, item):
+        self.deleted = item
 
 
 class FakeRepo:
@@ -119,3 +127,50 @@ def test_route_staff_can_disable_customs_user() -> None:
 
     assert result.is_active is False
     assert service.db.committed is True
+
+
+def test_admin_can_delete_user() -> None:
+    admin = _user(1, "admin", [UserRoleCode.ADMIN])
+    route = _user(2, "route", [UserRoleCode.ROUTE_STAFF])
+    service = _service([admin, route])
+
+    service.delete_user(2, admin)
+
+    assert service.db.deleted is route
+    assert service.db.committed is True
+    assert len(service.db.executed) > 0
+
+
+def test_route_staff_can_delete_customer_service_user() -> None:
+    route = _user(1, "route", [UserRoleCode.ROUTE_STAFF])
+    customer = _user(3, "customer", [UserRoleCode.CUSTOMER_SERVICE])
+    service = _service([route, customer])
+
+    service.delete_user(3, route)
+
+    assert service.db.deleted is customer
+    assert service.db.committed is True
+
+
+def test_route_staff_cannot_delete_route_staff_peer() -> None:
+    route = _user(1, "route", [UserRoleCode.ROUTE_STAFF])
+    peer = _user(2, "peer", [UserRoleCode.ROUTE_STAFF])
+    service = _service([route, peer])
+
+    with pytest.raises(HTTPException) as exc_info:
+        service.delete_user(2, route)
+
+    assert exc_info.value.status_code == 403
+    assert service.db.deleted is None
+    assert service.db.committed is False
+
+
+def test_user_cannot_delete_self() -> None:
+    admin = _user(1, "admin", [UserRoleCode.ADMIN])
+    service = _service([admin])
+
+    with pytest.raises(HTTPException) as exc_info:
+        service.delete_user(1, admin)
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "cannot_delete_self"

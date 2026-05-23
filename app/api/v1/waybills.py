@@ -114,6 +114,12 @@ def update_waybill(
     return _waybill_response(waybill, current_user)
 
 
+@router.delete("/{waybill_id}", status_code=204)
+def delete_waybill(waybill_id: int, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    WaybillService(db).delete(waybill_id, current_user)
+    return Response(status_code=204)
+
+
 @router.get("/{waybill_id}/boxes", response_model=list[BoxOut])
 def waybill_boxes(waybill_id: int, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
     WaybillService(db).get_visible(waybill_id, current_user)

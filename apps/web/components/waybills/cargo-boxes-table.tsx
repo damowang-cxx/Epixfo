@@ -3,11 +3,12 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { Calculator, Check, ChevronDown, ChevronRight, Pencil, Plus, Tag, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
-import { apiClient } from "@/lib/client-api";
+import { ApiError, apiClient } from "@/lib/client-api";
 import { cn, compact } from "@/lib/utils";
 import type { BoxBatchOperationResult, BoxVolumeRecalculationResult, CargoBox, PageResponse, Waybill } from "@/lib/types";
 
@@ -19,6 +20,11 @@ type NewBoxDraft = {
   weight: string;
   volume: string;
   is_general_cargo: boolean;
+};
+
+type VolumeErrorDialog = {
+  message: string;
+  details: { label: string; value: string }[];
 };
 
 function emptyNewBoxDraft(): NewBoxDraft {
@@ -56,6 +62,29 @@ function toNumber(value?: string | number | null) {
   return Number.isFinite(num) ? num : 0;
 }
 
+function volumeCalculationError(error: unknown): VolumeErrorDialog {
+  const fallback = error instanceof Error ? error.message : "方数计算失败。";
+  if (!(error instanceof ApiError) || !error.detail || typeof error.detail !== "object") {
+    return { message: fallback, details: [] };
+  }
+
+  const detail = error.detail as Record<string, unknown>;
+  const details = [
+    ["错误码", detail.error_code],
+    ["订舱方数(CBM)", detail.booked_volume],
+    ["入仓总方数(CBM)", detail.total_volume],
+    ["超出方数(CBM)", detail.excess_volume]
+  ]
+    .filter((item): item is [string, string | number] => item[1] !== undefined && item[1] !== null && item[1] !== "")
+    .map(([label, value]) => ({ label, value: String(value) }));
+
+  return {
+    message: typeof detail.message === "string" && detail.message ? detail.message : fallback,
+    details
+  };
+}
+
+
 interface CargoBoxesTableProps {
   boxes: CargoBox[];
   waybillId?: number;
@@ -85,9 +114,11 @@ export function CargoBoxesTable({
   const [newBoxDraft, setNewBoxDraft] = useState<NewBoxDraft>(() => emptyNewBoxDraft());
   const [saving, setSaving] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [selectionAnchorId, setSelectionAnchorId] = useState<number | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
   const [targetWaybillId, setTargetWaybillId] = useState("");
   const [waybillOptions, setWaybillOptions] = useState<Waybill[]>([]);
+  const [volumeError, setVolumeError] = useState<VolumeErrorDialog | null>(null);
 
   const selectedCount = selectedIds.size;
   const canManageBoxes = Boolean(waybillId && !readonly);
@@ -96,6 +127,7 @@ export function CargoBoxesTable({
     () => waybillOptions.filter((item) => item.id !== waybillId && Boolean(item.warehouse_no)),
     [waybillId, waybillOptions]
   );
+  const boxIds = useMemo(() => boxes.map((item) => item.id), [boxes]);
   const warehouseTotals = useMemo(
     () =>
       boxes.reduce(
@@ -138,13 +170,27 @@ export function CargoBoxesTable({
     setNewBoxDraft(emptyNewBoxDraft());
   }
 
-  function toggleSelected(id: number, checked: boolean) {
+  function toggleSelected(id: number, checked: boolean, shiftKey = false) {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (checked) next.add(id);
-      else next.delete(id);
+      const currentIndex = boxIds.indexOf(id);
+      const anchorIndex = selectionAnchorId === null ? -1 : boxIds.indexOf(selectionAnchorId);
+
+      if (shiftKey && currentIndex >= 0 && anchorIndex >= 0) {
+        const start = Math.min(currentIndex, anchorIndex);
+        const end = Math.max(currentIndex, anchorIndex);
+        for (const rangeId of boxIds.slice(start, end + 1)) {
+          if (checked) next.add(rangeId);
+          else next.delete(rangeId);
+        }
+      } else if (checked) {
+        next.add(id);
+      } else {
+        next.delete(id);
+      }
       return next;
     });
+    setSelectionAnchorId(id);
   }
 
   function toggleExpanded(id: number) {
@@ -279,7 +325,7 @@ export function CargoBoxesTable({
         onMessage?.(`当前总方数 ${formatDecimal(result.new_total_volume)} 未超过订舱方数 ${formatDecimal(result.booked_volume)}，无需调整。`);
       }
     } catch (error) {
-      onError?.(error instanceof Error ? error.message : "方数计算失败。");
+      setVolumeError(volumeCalculationError(error));
     } finally {
       setSaving(false);
     }
@@ -288,6 +334,7 @@ export function CargoBoxesTable({
   const totalColumns = readonly ? 9 : 11;
 
   return (
+    <>
     <div className="space-y-3">
       {canManageBoxes ? (
         <div className="flex flex-wrap items-center gap-2 rounded-md border border-slate-200 bg-slate-50 p-2 text-sm">
@@ -318,7 +365,7 @@ export function CargoBoxesTable({
           <div className="flex items-center gap-2 rounded border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700">
             <span>总重量：<strong>{formatDecimal(warehouseTotals.weight)}</strong></span>
             <span className="text-slate-300">|</span>
-            <span>总方数：<strong>{formatDecimal(warehouseTotals.volume)}</strong></span>
+            <span>总方数(CBM)：<strong>{formatDecimal(warehouseTotals.volume)}</strong></span>
           </div>
           <Button type="button" variant="secondary" size="sm" disabled={saving || !boxes.length || !bookedVolume} onClick={() => void recalculateVolumes()}>
             <Calculator className="h-4 w-4" />
@@ -329,7 +376,7 @@ export function CargoBoxesTable({
         <div className="flex flex-wrap items-center gap-2 rounded-md border border-slate-200 bg-slate-50 p-2 text-sm">
           <span className="text-slate-700">总重量：<strong>{formatDecimal(warehouseTotals.weight)}</strong></span>
           <span className="text-slate-300">|</span>
-          <span className="text-slate-700">总方数：<strong>{formatDecimal(warehouseTotals.volume)}</strong></span>
+          <span className="text-slate-700">总方数(CBM)：<strong>{formatDecimal(warehouseTotals.volume)}</strong></span>
         </div>
       )}
 
@@ -373,7 +420,7 @@ export function CargoBoxesTable({
               step="0.001"
               value={newBoxDraft.volume}
               onChange={(event) => updateNewBoxDraft("volume", event.target.value)}
-              placeholder="方数"
+              placeholder="方数(CBM)"
             />
           </div>
           <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -413,7 +460,7 @@ export function CargoBoxesTable({
               <TH>品名</TH>
               <TH>总数量</TH>
               <TH>总重量</TH>
-              <TH>箱级方数</TH>
+              <TH>箱级方数(CBM)</TH>
               <TH>重量/方</TH>
               <TH>源行</TH>
               {readonly ? null : <TH>操作</TH>}
@@ -430,7 +477,13 @@ export function CargoBoxesTable({
                         <input
                           type="checkbox"
                           checked={selectedIds.has(item.id)}
-                          onChange={(event) => toggleSelected(item.id, event.target.checked)}
+                          onChange={(event) =>
+                            toggleSelected(
+                              item.id,
+                              event.target.checked,
+                              event.nativeEvent instanceof MouseEvent ? event.nativeEvent.shiftKey : false
+                            )
+                          }
                         />
                       </TD>
                     )}
@@ -536,5 +589,31 @@ export function CargoBoxesTable({
         </Table>
       )}
     </div>
+      <Dialog open={Boolean(volumeError)} onOpenChange={(open) => !open && setVolumeError(null)}>
+        <DialogContent>
+          <DialogTitle className="pr-10 text-base font-semibold text-slate-900">方数计算失败</DialogTitle>
+          <div className="mt-3 space-y-3">
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              {volumeError?.message || "方数计算失败。"}
+            </div>
+            {volumeError?.details.length ? (
+              <div className="rounded-md border border-slate-200">
+                {volumeError.details.map((item) => (
+                  <div key={item.label} className="grid grid-cols-[140px_1fr] border-b border-slate-100 px-3 py-2 text-sm last:border-b-0">
+                    <span className="text-slate-500">{item.label}</span>
+                    <span className="font-medium text-slate-900">{item.value}</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+          <div className="mt-4 flex justify-end">
+            <Button type="button" onClick={() => setVolumeError(null)}>
+              知道了
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
