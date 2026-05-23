@@ -11,6 +11,8 @@ import {
   Layers,
   LogOut,
   PackageCheck,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plane,
   RadioTower,
   Search,
@@ -18,7 +20,7 @@ import {
   ShieldCheck,
   Users
 } from "lucide-react";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useSyncExternalStore, type ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AuthProvider, useAuth } from "@/components/layout/auth-provider";
@@ -28,6 +30,8 @@ import { cn } from "@/lib/utils";
 import type { RoleCode } from "@/lib/types";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
+const SIDEBAR_COLLAPSED_STORAGE_KEY = "epixfo.sidebarCollapsed";
+const SIDEBAR_COLLAPSED_EVENT = "epixfo:sidebar-collapsed-change";
 
 const navItems: Array<{
   href: string;
@@ -54,6 +58,34 @@ function canSee(userRoles: RoleCode[], allowed?: RoleCode[]) {
   return allowed.some((role) => userRoles.includes(role));
 }
 
+function readSidebarCollapsedPreference() {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function writeSidebarCollapsedPreference(value: boolean) {
+  try {
+    window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(value));
+    window.dispatchEvent(new Event(SIDEBAR_COLLAPSED_EVENT));
+  } catch {
+    // Layout preference is nice-to-have; the UI should still toggle even if storage is unavailable.
+  }
+}
+
+function subscribeSidebarCollapsedPreference(callback: () => void) {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener("storage", callback);
+  window.addEventListener(SIDEBAR_COLLAPSED_EVENT, callback);
+  return () => {
+    window.removeEventListener("storage", callback);
+    window.removeEventListener(SIDEBAR_COLLAPSED_EVENT, callback);
+  };
+}
+
 function pickActiveHref(items: typeof navItems, pathname: string): string | null {
   // Match by longest prefix so /waybills/lookup wins over /waybills.
   const matches = items.filter((item) =>
@@ -63,17 +95,26 @@ function pickActiveHref(items: typeof navItems, pathname: string): string | null
   return matches.reduce((longest, item) => (item.href.length > longest.href.length ? item : longest)).href;
 }
 
-function NavLink({ href, label, icon: Icon, active }: (typeof navItems)[number] & { active: boolean }) {
+function NavLink({
+  href,
+  label,
+  icon: Icon,
+  active,
+  collapsed = false
+}: (typeof navItems)[number] & { active: boolean; collapsed?: boolean }) {
   return (
     <Link
       href={href}
+      title={label}
+      aria-label={label}
       className={cn(
-        "flex h-9 shrink-0 items-center gap-2 rounded-md px-3 text-sm text-slate-700 hover:bg-slate-100",
+        "flex h-9 shrink-0 items-center rounded-md text-sm text-slate-700 transition-colors hover:bg-slate-100",
+        collapsed ? "w-9 justify-center px-0" : "gap-2 px-3",
         active && "bg-purple-50 font-medium text-purple-800"
       )}
     >
-      <Icon className="h-4 w-4" />
-      {label}
+      <Icon className="h-4 w-4 shrink-0" />
+      {collapsed ? null : <span className="truncate">{label}</span>}
     </Link>
   );
 }
@@ -82,6 +123,11 @@ function ShellContent({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { user, loading, logout } = useAuth();
+  const sidebarCollapsed = useSyncExternalStore(
+    subscribeSidebarCollapsedPreference,
+    readSidebarCollapsedPreference,
+    () => false
+  );
 
   useEffect(() => {
     if (!loading && !user && pathname !== "/login") {
@@ -126,28 +172,63 @@ function ShellContent({ children }: { children: ReactNode }) {
   const visibleNav = navItems.filter((item) => canSee(user.roles, item.roles));
   const activeHref = pickActiveHref(visibleNav, pathname);
 
+  function toggleSidebarCollapsed() {
+    writeSidebarCollapsedPreference(!sidebarCollapsed);
+  }
+
   return (
     <div className="min-h-screen bg-slate-100">
-      <aside className="fixed inset-y-0 left-0 z-20 hidden w-60 border-r border-slate-200 bg-white md:block">
-        <div className="flex h-16 items-center justify-center border-b border-slate-200 px-3">
-          <Link href="/" className="block">
-            <Image
-              src="/logo.png"
-              alt="元大物流 Yuanda Cargo Logistics"
-              width={800}
-              height={200}
-              priority
-              className="h-10 w-auto"
-            />
+      <aside
+        className={cn(
+          "fixed inset-y-0 left-0 z-20 hidden flex-col border-r border-slate-200 bg-white transition-all duration-200 md:flex",
+          sidebarCollapsed ? "w-16" : "w-60"
+        )}
+      >
+        <div className={cn("flex h-16 items-center justify-center border-b border-slate-200 px-3", sidebarCollapsed && "px-2")}>
+          <Link
+            href="/"
+            className={cn(
+              "flex min-w-0 items-center justify-center overflow-hidden rounded-md transition-all",
+              sidebarCollapsed ? "h-9 w-9 bg-purple-700 text-sm font-bold text-white" : "w-full"
+            )}
+            title="元大物流 Yuanda Cargo Logistics"
+            aria-label="返回总览"
+          >
+            {sidebarCollapsed ? (
+              <span>YD</span>
+            ) : (
+              <Image
+                src="/logo.png"
+                alt="元大物流 Yuanda Cargo Logistics"
+                width={800}
+                height={200}
+                priority
+                className="h-10 w-auto"
+              />
+            )}
           </Link>
         </div>
-        <nav className="space-y-1 p-3">
+        <nav className={cn("flex-1 space-y-1 overflow-y-auto", sidebarCollapsed ? "p-2" : "p-3")}>
           {visibleNav.map((item) => (
-            <NavLink key={item.href} {...item} active={item.href === activeHref} />
+            <NavLink key={item.href} {...item} active={item.href === activeHref} collapsed={sidebarCollapsed} />
           ))}
         </nav>
+        <div className={cn("border-t border-slate-200", sidebarCollapsed ? "p-2" : "p-3")}>
+          <Button
+            type="button"
+            variant="ghost"
+            size={sidebarCollapsed ? "icon" : "default"}
+            className={cn(sidebarCollapsed ? "h-9 w-9" : "w-full justify-start")}
+            onClick={toggleSidebarCollapsed}
+            title={sidebarCollapsed ? "展开导航" : "收起导航"}
+            aria-label={sidebarCollapsed ? "展开导航" : "收起导航"}
+          >
+            {sidebarCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+            {sidebarCollapsed ? null : <span>收起导航</span>}
+          </Button>
+        </div>
       </aside>
-      <div className="md:pl-60">
+      <div className={cn("transition-[padding] duration-200", sidebarCollapsed ? "md:pl-16" : "md:pl-60")}>
         <header className="sticky top-0 z-10 border-b border-slate-200 bg-white">
           <div className="flex h-14 items-center justify-between gap-3 px-4 md:px-5">
             <div className="min-w-0 text-sm font-medium text-slate-700">物流航空头程提单监控后台</div>

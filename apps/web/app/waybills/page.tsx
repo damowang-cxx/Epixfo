@@ -15,7 +15,7 @@ import { useAuth } from "@/components/layout/auth-provider";
 import { WarehouseFileUploadButton } from "@/components/waybills/warehouse-file-upload-button";
 import { apiClient } from "@/lib/client-api";
 import { LIFECYCLE_ORDER, lifecycleLabels } from "@/lib/constants";
-import { cn, compact, formatDateTime } from "@/lib/utils";
+import { cn, compact } from "@/lib/utils";
 import { formatWarehouseUploadMessage } from "@/lib/warehouse-upload";
 import type { BoxBatchOperationResult, CargoBox, LifecycleStatus, PageResponse, WarehouseFileUploadResult, Waybill } from "@/lib/types";
 
@@ -296,8 +296,6 @@ export default function WaybillsPage() {
           <THead>
             <TR>
               <TH>提单号</TH>
-              <TH>系统板号</TH>
-              <TH>实际板号</TH>
               <TH>收件人</TH>
               <TH>订舱方数/板总方数</TH>
               <TH>航代</TH>
@@ -309,7 +307,6 @@ export default function WaybillsPage() {
               <TH>官方预计航班日期</TH>
               <TH>生命周期</TH>
               <TH>异常</TH>
-              <TH>下次查询</TH>
               <TH>操作</TH>
             </TR>
           </THead>
@@ -335,12 +332,6 @@ export default function WaybillsPage() {
                 </TD>
                 {shouldRenderBoardCells ? (
                   <>
-                    <TD rowSpan={boardSpan} className="align-middle font-medium">
-                      {item.board?.board_no || ""}
-                    </TD>
-                    <TD rowSpan={boardSpan} className="align-middle">
-                      {item.board?.actual_board_no || ""}
-                    </TD>
                     <TD rowSpan={boardSpan} className="align-middle">
                       {item.board ? compact(item.board.consignee_text) : compact(item.consignee)}
                     </TD>
@@ -369,7 +360,6 @@ export default function WaybillsPage() {
                 <TD>{item.official_estimated_flight_date || ""}</TD>
                 <TD><LifecycleBadge value={item.lifecycle_status} /></TD>
                 <TD><AlertLevelBadge value={item.alert_level} /></TD>
-                <TD>{formatDateTime(item.next_query_at)}</TD>
                 <TD>
                   <div className="flex flex-wrap gap-1">
                     <Button asChild variant="ghost" size="sm">

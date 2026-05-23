@@ -170,11 +170,10 @@ export default function WaybillDetailPage() {
         }
       />
       {message ? <div className="mb-4 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">{message}</div> : null}
-      <div className="mb-4 grid gap-4 md:grid-cols-4">
+      <div className="mb-4 grid gap-4 md:grid-cols-3">
         <Panel><div className="text-xs text-slate-500">生命周期</div><div className="mt-2"><LifecycleBadge value={waybill.lifecycle_status} /></div></Panel>
         <Panel><div className="text-xs text-slate-500">异常等级</div><div className="mt-2"><AlertLevelBadge value={waybill.alert_level} /></div></Panel>
         <Panel><div className="text-xs text-slate-500">航司</div><div className="mt-2 text-sm font-semibold">{compact(waybill.carrier_code)}</div></Panel>
-        <Panel><div className="text-xs text-slate-500">下次查询</div><div className="mt-2 text-sm font-semibold">{formatDateTime(waybill.next_query_at)}</div></Panel>
       </div>
       <Tabs defaultValue="base">
         <TabsList>
@@ -335,6 +334,20 @@ export default function WaybillDetailPage() {
         </TabsContent>
         <TabsContent value="snapshots">
           <Panel title="查询快照">
+            <div className="mb-4 grid gap-3 text-sm md:grid-cols-3">
+              <div className="rounded-md border border-slate-100 p-3">
+                <div className="text-xs text-slate-500">首次监控</div>
+                <div className="mt-1 font-medium text-slate-800">{formatDateTime(waybill.first_monitor_at)}</div>
+              </div>
+              <div className="rounded-md border border-slate-100 p-3">
+                <div className="text-xs text-slate-500">最近查询</div>
+                <div className="mt-1 font-medium text-slate-800">{formatDateTime(waybill.last_query_at)}</div>
+              </div>
+              <div className="rounded-md border border-slate-100 p-3">
+                <div className="text-xs text-slate-500">下次查询</div>
+                <div className="mt-1 font-medium text-slate-800">{formatDateTime(waybill.next_query_at)}</div>
+              </div>
+            </div>
             {snapshots.length ? (
               <Table><THead><TR><TH>时间</TH><TH>状态</TH><TH>适配器</TH><TH>错误码</TH><TH>错误信息</TH></TR></THead>
                 <TBody>{snapshots.map((item) => <TR key={item.id}><TD>{formatDateTime(item.queried_at)}</TD><TD>{item.query_status}</TD><TD>{compact(item.adapter_code)}</TD><TD>{compact(item.error_code)}</TD><TD>{compact(item.error_message)}</TD></TR>)}</TBody>
