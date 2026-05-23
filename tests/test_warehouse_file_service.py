@@ -55,6 +55,8 @@ class FakeBoxRepository:
             box_no="BOX-OLD",
             status="bound",
             is_general_cargo=False,
+            unbound_reason=None,
+            unbound_remark=None,
             raw_data={},
             items=[],
             document=None,
@@ -63,6 +65,8 @@ class FakeBoxRepository:
             goods_name=None,
             quantity=None,
             weight=None,
+            original_volume_info=None,
+            original_weight_volume_ratio=None,
             volume=None,
             weight_volume_ratio=None,
             source_row_number=None,
@@ -143,8 +147,8 @@ class FakeWaybillRepository:
 def _xlsx_bytes() -> bytes:
     workbook = Workbook()
     sheet = workbook.active
-    sheet.append(["外箱条码", "提单号码", "品名", "数量", "重量", "收货体积信息"])
-    sheet.append(["BOX-001", "WH-AWB-001", "Shoes", 2, 10, 4])
+    sheet.append(["外箱条码", "提单号码", "品名", "数量", "重量", "收货体积信息", "收货重量/方"])
+    sheet.append(["BOX-001", "WH-AWB-001", "Shoes", 2, 10, "40*40*40", 0.156])
     stream = BytesIO()
     workbook.save(stream)
     return stream.getvalue()
@@ -168,6 +172,8 @@ def _fake_box(box_id: int, box_no: str, weight: str, volume: str):
         box_no=box_no,
         status="bound",
         is_general_cargo=False,
+        unbound_reason=None,
+        unbound_remark=None,
         raw_data={},
         items=[],
         document=None,
@@ -176,6 +182,8 @@ def _fake_box(box_id: int, box_no: str, weight: str, volume: str):
         goods_name=None,
         quantity=None,
         weight=Decimal(weight),
+        original_volume_info=None,
+        original_weight_volume_ratio=None,
         volume=Decimal(volume),
         weight_volume_ratio=None,
         source_row_number=None,
@@ -205,6 +213,9 @@ def test_upload_for_waybill_replaces_boxes_and_updates_warehouse_no(tmp_path) ->
     assert added_box.box_no == "BOX-001"
     assert added_box.current_waybill_id == 7
     assert added_box.warehouse_receipt_id == 88
+    assert added_box.original_volume_info == "40*40*40"
+    assert added_box.original_weight_volume_ratio == "0.156"
+    assert str(added_box.volume) == "0.064"
     assert len(service.boxes.added_items) == 1
     assert service.db.committed is True
 
@@ -417,4 +428,55 @@ def test_batch_bind_moves_boxes_to_target_receipt() -> None:
     assert service.boxes.box.current_waybill_id == 7
     assert service.boxes.box.warehouse_receipt_id == 88
     assert service.boxes.box.status == "bound"
+    assert service.boxes.box.unbound_reason is None
+    assert service.boxes.box.unbound_remark is None
+    assert service.db.committed is True
+
+
+def test_batch_transfer_to_unbound_records_reason_and_remark() -> None:
+    waybill = SimpleNamespace(id=7, waybill_no="784-00000001", warehouse_no="AMS-IN-001", updated_by=None)
+    service = WarehouseFileService.__new__(WarehouseFileService)
+    service.db = FakeDb()
+    service.boxes = FakeBoxRepository()
+    service.waybills = FakeWaybillRepository(waybill)
+    user = SimpleNamespace(id=5, is_superuser=True, roles=[])
+
+    result = service.batch_transfer_boxes(
+        [4],
+        "unbound",
+        user,
+        unbound_reason="customs_inspection",
+        unbound_remark=" 海关开箱查验 ",
+    )
+
+    assert result.updated_count == 1
+    assert service.boxes.box.current_waybill_id is None
+    assert service.boxes.box.warehouse_receipt_id is None
+    assert service.boxes.box.status == "unbound"
+    assert service.boxes.box.unbound_reason == "customs_inspection"
+    assert service.boxes.box.unbound_remark == "海关开箱查验"
+    assert service.db.committed is True
+
+
+def test_batch_transfer_to_waybill_clears_unbound_reason() -> None:
+    waybill = SimpleNamespace(id=7, waybill_no="784-00000001", warehouse_no="AMS-IN-001", updated_by=None)
+    service = WarehouseFileService.__new__(WarehouseFileService)
+    service.db = FakeDb()
+    service.boxes = FakeBoxRepository()
+    service.boxes.box.current_waybill_id = None
+    service.boxes.box.warehouse_receipt_id = None
+    service.boxes.box.status = "unbound"
+    service.boxes.box.unbound_reason = "other"
+    service.boxes.box.unbound_remark = "待确认"
+    service.waybills = FakeWaybillRepository(waybill)
+    user = SimpleNamespace(id=5, is_superuser=True, roles=[])
+
+    result = service.batch_transfer_boxes([4], "waybill", user, target_waybill_id=7)
+
+    assert result.updated_count == 1
+    assert service.boxes.box.current_waybill_id == 7
+    assert service.boxes.box.warehouse_receipt_id == 88
+    assert service.boxes.box.status == "bound"
+    assert service.boxes.box.unbound_reason is None
+    assert service.boxes.box.unbound_remark is None
     assert service.db.committed is True

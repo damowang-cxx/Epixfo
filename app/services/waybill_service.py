@@ -244,7 +244,13 @@ class WaybillService:
             self.db.execute(
                 update(Box)
                 .where(Box.warehouse_receipt_id.in_(receipt_ids))
-                .values(warehouse_receipt_id=None, current_waybill_id=None, status="unbound")
+                .values(
+                    warehouse_receipt_id=None,
+                    current_waybill_id=None,
+                    status="unbound",
+                    unbound_reason=None,
+                    unbound_remark=None,
+                )
             )
             self.db.execute(
                 update(WarehouseReceipt)
@@ -260,7 +266,7 @@ class WaybillService:
         self.db.execute(
             update(Box)
             .where(Box.current_waybill_id == waybill_id)
-            .values(current_waybill_id=None, status="unbound")
+            .values(current_waybill_id=None, status="unbound", unbound_reason=None, unbound_remark=None)
         )
         self.db.execute(
             update(BoxDocument)

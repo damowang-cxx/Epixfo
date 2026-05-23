@@ -82,11 +82,15 @@ def test_boxes_table_has_warehouse_file_detail_columns() -> None:
         "goods_name",
         "quantity",
         "weight",
+        "original_volume_info",
+        "original_weight_volume_ratio",
         "volume",
         "weight_volume_ratio",
         "source_row_number",
         "warehouse_receipt_id",
         "is_general_cargo",
+        "unbound_reason",
+        "unbound_remark",
     ]:
         assert column in box_columns
 

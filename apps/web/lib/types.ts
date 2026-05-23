@@ -152,11 +152,15 @@ export interface CargoBox {
   goods_name?: string | null;
   quantity?: number | null;
   weight?: string | number | null;
+  original_volume_info?: string | null;
+  original_weight_volume_ratio?: string | null;
   volume?: string | number | null;
   weight_volume_ratio?: string | number | null;
   source_row_number?: number | null;
   status: string;
   is_general_cargo: boolean;
+  unbound_reason?: string | null;
+  unbound_remark?: string | null;
   raw_data: Record<string, unknown>;
   document?: BoxDocument | null;
   warehouse_receipt?: WarehouseReceipt | null;

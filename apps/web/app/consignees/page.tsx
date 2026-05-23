@@ -145,7 +145,10 @@ export default function ConsigneesPage() {
     [consignees, selectedId]
   );
   const selectedContacts = useMemo(
-    () => contacts.filter((c) => c.consignee_id === selectedId),
+    () =>
+      contacts
+        .filter((c) => c.consignee_id === selectedId)
+        .sort((a, b) => Number(b.enabled) - Number(a.enabled) || a.id - b.id),
     [contacts, selectedId]
   );
 
@@ -535,19 +538,46 @@ export default function ConsigneesPage() {
                   {selectedContacts.map((item) => (
                     <div
                       key={item.id}
-                      className="grid gap-3 rounded-md border border-slate-200 p-3 md:grid-cols-[1fr_auto]"
+                      className={cn(
+                        "grid gap-3 rounded-md border p-3 transition-all duration-200 md:grid-cols-[1fr_auto]",
+                        item.enabled ? "border-slate-200 bg-white" : "border-slate-200 bg-slate-50"
+                      )}
                     >
-                      <div className="min-w-0 space-y-1 text-sm text-slate-800">
+                      <div
+                        className={cn(
+                          "min-w-0 space-y-1 text-sm transition-colors duration-200",
+                          item.enabled ? "text-slate-800" : "text-slate-500"
+                        )}
+                      >
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-medium text-slate-950">{item.name}</span>
+                          <span
+                            className={cn(
+                              "font-medium transition-colors duration-200",
+                              item.enabled ? "text-slate-950" : "text-slate-500"
+                            )}
+                          >
+                            {item.name}
+                          </span>
                           <Badge variant={item.enabled ? "green" : "gray"}>{item.enabled ? "启用" : "停用"}</Badge>
                         </div>
                         {item.address ? (
-                          <div className="whitespace-pre-wrap break-words text-slate-700">{item.address}</div>
+                          <div
+                            className={cn(
+                              "whitespace-pre-wrap break-words transition-colors duration-200",
+                              item.enabled ? "text-slate-700" : "text-slate-500"
+                            )}
+                          >
+                            {item.address}
+                          </div>
                         ) : (
                           <div className="text-slate-400">(无地址)</div>
                         )}
-                        <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-600">
+                        <div
+                          className={cn(
+                            "flex flex-wrap gap-x-3 gap-y-1 text-xs transition-colors duration-200",
+                            item.enabled ? "text-slate-600" : "text-slate-500"
+                          )}
+                        >
                           {item.email ? (
                             <span className="inline-flex items-center gap-1">
                               <Mail className="h-3.5 w-3.5" />
@@ -562,11 +592,20 @@ export default function ConsigneesPage() {
                           ) : null}
                         </div>
                         {item.tax_info ? (
-                          <div className="whitespace-pre-wrap rounded bg-slate-50 p-2 text-xs text-slate-600">
+                          <div
+                            className={cn(
+                              "whitespace-pre-wrap rounded p-2 text-xs transition-colors duration-200",
+                              item.enabled ? "bg-slate-50 text-slate-600" : "bg-slate-100 text-slate-500"
+                            )}
+                          >
                             {item.tax_info}
                           </div>
                         ) : null}
-                        {item.remark ? <div className="text-xs text-slate-500">备注: {item.remark}</div> : null}
+                        {item.remark ? (
+                          <div className={cn("text-xs", item.enabled ? "text-slate-500" : "text-slate-400")}>
+                            备注: {item.remark}
+                          </div>
+                        ) : null}
                       </div>
                       <div className="flex flex-wrap items-start gap-2 md:justify-end">
                         <Button type="button" variant="secondary" size="sm" onClick={() => openNotifyDialog(item)}>

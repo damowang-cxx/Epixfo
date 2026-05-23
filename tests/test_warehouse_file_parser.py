@@ -34,6 +34,8 @@ def test_parse_warehouse_xlsx_success_and_calculates_ratio() -> None:
     assert result.boxes[0].warehouse_waybill_no == "WH-AWB-001"
     assert result.boxes[0].quantity == 2
     assert str(result.boxes[0].weight) == "10.000"
+    assert result.boxes[0].original_volume_info == "4"
+    assert result.boxes[0].original_weight_volume_ratio == "ignored"
     assert str(result.boxes[0].volume) == "4.000"
     assert str(result.boxes[0].weight_volume_ratio) == "2.500"
     assert result.boxes[1].goods_name == "Bags"
@@ -108,6 +110,8 @@ def test_parse_warehouse_xlsx_inherits_box_no_and_converts_dimensions() -> None:
     ]
     assert result.boxes[0].quantity == 14
     assert str(result.boxes[0].weight) == "6.930"
+    assert result.boxes[0].original_volume_info == "60*50*50"
+    assert result.boxes[0].original_weight_volume_ratio == "0.15"
     assert str(result.boxes[0].volume) == "0.150"
     assert str(result.boxes[0].weight_volume_ratio) == "46.200"
 
@@ -123,6 +127,8 @@ def test_parse_warehouse_xlsx_converts_semicolon_dimension_to_cbm() -> None:
     result = parse_warehouse_xlsx("warehouse.xlsx", content)
 
     assert result.errors == []
+    assert result.boxes[0].original_volume_info == "51*37*35;"
+    assert result.boxes[0].original_weight_volume_ratio == "0.066"
     assert str(result.boxes[0].volume) == "0.066"
     assert str(result.boxes[0].weight_volume_ratio) == "282.879"
 
@@ -143,6 +149,7 @@ def test_parse_warehouse_xlsx_only_inherits_from_successfully_parsed_box() -> No
     assert [item.box_no for item in result.boxes] == ["BOX-OK"]
     assert len(result.boxes[0].items) == 2
     assert result.boxes[0].quantity == 3
+    assert result.boxes[0].original_weight_volume_ratio is None
     assert str(result.boxes[0].weight) == "7.000"
     assert str(result.boxes[0].volume) == "0.060"
     assert [item.row_number for item in result.errors] == [2, 3]

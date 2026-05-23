@@ -1,13 +1,14 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
-import { Calculator, Check, ChevronDown, ChevronRight, Pencil, Plus, Tag, Trash2, X } from "lucide-react";
+import { Calculator, Check, ChevronDown, ChevronRight, ListChecks, Pencil, Plus, Tag, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
+import { Textarea } from "@/components/ui/textarea";
 import { ApiError, apiClient } from "@/lib/client-api";
 import { cn, compact } from "@/lib/utils";
 import type { BoxBatchOperationResult, BoxVolumeRecalculationResult, CargoBox, PageResponse, Waybill } from "@/lib/types";
@@ -22,9 +23,19 @@ type NewBoxDraft = {
   is_general_cargo: boolean;
 };
 
+type TransferTargetType = "waybill" | "unbound";
+type UnboundReason = "customs_inspection" | "other";
+
 type VolumeErrorDialog = {
   message: string;
   details: { label: string; value: string }[];
+};
+
+type BatchSelectResult = {
+  inputCount: number;
+  matchedCount: number;
+  missing: string[];
+  duplicates: string[];
 };
 
 function emptyNewBoxDraft(): NewBoxDraft {
@@ -54,6 +65,29 @@ function optionalText(value: string) {
 function optionalNumber(value: string) {
   const trimmed = value.trim();
   return trimmed ? Number(trimmed) : undefined;
+}
+
+function parseBatchSelectText(value: string) {
+  const seen = new Set<string>();
+  const duplicateSeen = new Set<string>();
+  const boxNos: string[] = [];
+  const duplicates: string[] = [];
+
+  for (const line of value.split("\n")) {
+    const boxNo = line.trim();
+    if (!boxNo) continue;
+    if (seen.has(boxNo)) {
+      if (!duplicateSeen.has(boxNo)) {
+        duplicateSeen.add(boxNo);
+        duplicates.push(boxNo);
+      }
+      continue;
+    }
+    seen.add(boxNo);
+    boxNos.push(boxNo);
+  }
+
+  return { boxNos, duplicates };
 }
 
 function toNumber(value?: string | number | null) {
@@ -116,7 +150,14 @@ export function CargoBoxesTable({
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [selectionAnchorId, setSelectionAnchorId] = useState<number | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+  const [batchSelectOpen, setBatchSelectOpen] = useState(false);
+  const [batchSelectText, setBatchSelectText] = useState("");
+  const [batchSelectResult, setBatchSelectResult] = useState<BatchSelectResult | null>(null);
+  const [transferOpen, setTransferOpen] = useState(false);
+  const [transferTargetType, setTransferTargetType] = useState<TransferTargetType>("waybill");
   const [targetWaybillId, setTargetWaybillId] = useState("");
+  const [unboundReason, setUnboundReason] = useState<UnboundReason>("other");
+  const [unboundRemark, setUnboundRemark] = useState("");
   const [waybillOptions, setWaybillOptions] = useState<Waybill[]>([]);
   const [volumeError, setVolumeError] = useState<VolumeErrorDialog | null>(null);
 
@@ -128,6 +169,8 @@ export function CargoBoxesTable({
     [waybillId, waybillOptions]
   );
   const boxIds = useMemo(() => boxes.map((item) => item.id), [boxes]);
+  const boxByNo = useMemo(() => new Map(boxes.map((item) => [item.box_no, item])), [boxes]);
+  const batchSelectDraft = useMemo(() => parseBatchSelectText(batchSelectText), [batchSelectText]);
   const warehouseTotals = useMemo(
     () =>
       boxes.reduce(
@@ -199,6 +242,32 @@ export function CargoBoxesTable({
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
+    });
+  }
+
+  function closeBatchSelectDialog() {
+    setBatchSelectOpen(false);
+    setBatchSelectText("");
+  }
+
+  function confirmBatchSelect() {
+    const matchedIds = new Set<number>();
+    const missing: string[] = [];
+
+    for (const boxNo of batchSelectDraft.boxNos) {
+      const box = boxByNo.get(boxNo);
+      if (box) matchedIds.add(box.id);
+      else missing.push(boxNo);
+    }
+
+    setSelectedIds(matchedIds);
+    setSelectionAnchorId(null);
+    closeBatchSelectDialog();
+    setBatchSelectResult({
+      inputCount: batchSelectDraft.boxNos.length,
+      matchedCount: matchedIds.size,
+      missing,
+      duplicates: batchSelectDraft.duplicates
     });
   }
 
@@ -287,29 +356,44 @@ export function CargoBoxesTable({
     }
   }
 
-  async function batchUnbind() {
-    if (!selectedIds.size) return;
-    try {
-      await apiClient.post<BoxBatchOperationResult>("/boxes/batch-unbind", { box_ids: Array.from(selectedIds) });
-      setSelectedIds(new Set());
-      onChanged?.();
-    } catch (error) {
-      onError?.(error instanceof Error ? error.message : "批量解绑失败。");
-    }
+  function closeTransferDialog() {
+    setTransferOpen(false);
+    setTransferTargetType("waybill");
+    setTargetWaybillId("");
+    setUnboundReason("other");
+    setUnboundRemark("");
   }
 
-  async function batchBind() {
-    if (!selectedIds.size || !targetWaybillId) return;
+  async function submitTransfer() {
+    if (!selectedIds.size) return;
+    if (transferTargetType === "waybill" && !targetWaybillId) {
+      onError?.("请选择目标提单入仓号。");
+      return;
+    }
+
     try {
-      await apiClient.post<BoxBatchOperationResult>("/boxes/batch-bind", {
-        box_ids: Array.from(selectedIds),
-        target_waybill_id: Number(targetWaybillId)
-      });
+      setSaving(true);
+      const payload =
+        transferTargetType === "waybill"
+          ? {
+              box_ids: Array.from(selectedIds),
+              target_type: "waybill",
+              target_waybill_id: Number(targetWaybillId)
+            }
+          : {
+              box_ids: Array.from(selectedIds),
+              target_type: "unbound",
+              unbound_reason: unboundReason,
+              unbound_remark: optionalText(unboundRemark)
+            };
+      await apiClient.post<BoxBatchOperationResult>("/boxes/batch-transfer", payload);
+      closeTransferDialog();
       setSelectedIds(new Set());
-      setTargetWaybillId("");
       onChanged?.();
     } catch (error) {
       onError?.(error instanceof Error ? error.message : "批量转移失败。");
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -331,7 +415,7 @@ export function CargoBoxesTable({
     }
   }
 
-  const totalColumns = readonly ? 9 : 11;
+  const totalColumns = readonly ? 11 : 13;
 
   return (
     <>
@@ -344,23 +428,12 @@ export function CargoBoxesTable({
           </Button>
           {!canCreateBox ? <span className="text-slate-500">当前提单没有入仓号，请先上传入仓文件。</span> : null}
           <span className="text-slate-600">已选 {selectedCount} 个箱号</span>
-          <Button type="button" variant="secondary" size="sm" disabled={!selectedCount} onClick={() => void batchUnbind()}>
-            批量解绑
+          <Button type="button" variant="secondary" size="sm" disabled={!boxes.length} onClick={() => setBatchSelectOpen(true)}>
+            <ListChecks className="h-4 w-4" />
+            批量选中
           </Button>
-          <Select value={targetWaybillId} onValueChange={setTargetWaybillId}>
-            <SelectTrigger className="w-64">
-              <SelectValue placeholder="选择目标提单入仓号" />
-            </SelectTrigger>
-            <SelectContent>
-              {selectableWaybills.map((item) => (
-                <SelectItem key={item.id} value={String(item.id)}>
-                  {item.waybill_no} - {item.warehouse_no}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button type="button" variant="secondary" size="sm" disabled={!selectedCount || !targetWaybillId} onClick={() => void batchBind()}>
-            批量转移
+          <Button type="button" variant="secondary" size="sm" disabled={!selectedCount} onClick={() => setTransferOpen(true)}>
+            转移
           </Button>
           <div className="flex items-center gap-2 rounded border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700">
             <span>总重量：<strong>{formatDecimal(warehouseTotals.weight)}</strong></span>
@@ -460,8 +533,10 @@ export function CargoBoxesTable({
               <TH>品名</TH>
               <TH>总数量</TH>
               <TH>总重量</TH>
-              <TH>箱级方数(CBM)</TH>
-              <TH>重量/方</TH>
+              <TH>原始收货体积信息</TH>
+              <TH>原始收货重量/方</TH>
+              <TH>收货体积信息(CBM)</TH>
+              <TH>收货重量/方</TH>
               <TH>源行</TH>
               {readonly ? null : <TH>操作</TH>}
             </TR>
@@ -523,6 +598,8 @@ export function CargoBoxesTable({
                     <TD>{compact(item.goods_name)}</TD>
                     <TD>{compact(item.quantity)}</TD>
                     <TD>{formatDecimal(item.weight)}</TD>
+                    <TD>{compact(item.original_volume_info)}</TD>
+                    <TD>{compact(item.original_weight_volume_ratio)}</TD>
                     <TD>{formatDecimal(item.volume)}</TD>
                     <TD>{formatDecimal(item.weight_volume_ratio)}</TD>
                     <TD>{compact(item.source_row_number)}</TD>
@@ -589,6 +666,145 @@ export function CargoBoxesTable({
         </Table>
       )}
     </div>
+      <Dialog open={batchSelectOpen} onOpenChange={(open) => (open ? setBatchSelectOpen(true) : closeBatchSelectDialog())}>
+        <DialogContent className="w-[min(620px,calc(100vw-32px))]">
+          <DialogTitle className="pr-10 text-base font-semibold text-slate-900">批量选中箱号</DialogTitle>
+          <div className="mt-3 space-y-3">
+            <Textarea
+              value={batchSelectText}
+              onChange={(event) => setBatchSelectText(event.target.value)}
+              placeholder={"每行输入一个外箱条码\nBOX-001\nBOX-002"}
+              rows={10}
+            />
+            <div className="flex flex-wrap gap-3 text-sm text-slate-600">
+              <span>已填写 {batchSelectDraft.boxNos.length} 个外箱</span>
+              {batchSelectDraft.duplicates.length ? (
+                <span className="text-amber-700">重复 {batchSelectDraft.duplicates.length} 个，已按首次出现计数</span>
+              ) : null}
+            </div>
+          </div>
+          <div className="mt-5 flex justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={closeBatchSelectDialog}>
+              取消
+            </Button>
+            <Button type="button" disabled={!batchSelectDraft.boxNos.length} onClick={confirmBatchSelect}>
+              确定
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={Boolean(batchSelectResult)} onOpenChange={(open) => !open && setBatchSelectResult(null)}>
+        <DialogContent className="w-[min(620px,calc(100vw-32px))]">
+          <DialogTitle className="pr-10 text-base font-semibold text-slate-900">
+            {batchSelectResult?.missing.length ? "批量选中完成，部分未找到" : "批量选中成功"}
+          </DialogTitle>
+          <div className="mt-3 space-y-3 text-sm">
+            <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-slate-700">
+              已填写 {batchSelectResult?.inputCount ?? 0} 个外箱，已勾选 {batchSelectResult?.matchedCount ?? 0} 个，
+              未找到 {batchSelectResult?.missing.length ?? 0} 个。
+            </div>
+            {batchSelectResult?.duplicates.length ? (
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">
+                <div className="font-medium">重复输入</div>
+                <div className="mt-1 max-h-28 overflow-auto break-words">
+                  {batchSelectResult.duplicates.join("、")}
+                </div>
+              </div>
+            ) : null}
+            {batchSelectResult?.missing.length ? (
+              <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-red-800">
+                <div className="font-medium">未找到的外箱条码</div>
+                <div className="mt-1 max-h-40 overflow-auto break-words">
+                  {batchSelectResult.missing.join("、")}
+                </div>
+              </div>
+            ) : null}
+          </div>
+          <div className="mt-5 flex justify-end">
+            <Button type="button" onClick={() => setBatchSelectResult(null)}>
+              知道了
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={transferOpen} onOpenChange={(open) => (open ? setTransferOpen(true) : closeTransferDialog())}>
+        <DialogContent className="w-[min(620px,calc(100vw-32px))]">
+          <DialogTitle className="pr-10 text-base font-semibold text-slate-900">转移箱号</DialogTitle>
+          <div className="mt-3 space-y-4">
+            <div className="text-sm text-slate-600">已选 {selectedCount} 个箱号</div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Button
+                type="button"
+                variant={transferTargetType === "waybill" ? "default" : "secondary"}
+                onClick={() => setTransferTargetType("waybill")}
+              >
+                转移到目标提单入仓号
+              </Button>
+              <Button
+                type="button"
+                variant={transferTargetType === "unbound" ? "default" : "secondary"}
+                onClick={() => setTransferTargetType("unbound")}
+              >
+                转移到未绑定箱号池
+              </Button>
+            </div>
+
+            {transferTargetType === "waybill" ? (
+              <div className="space-y-2">
+                <div className="text-sm font-medium text-slate-700">目标提单入仓号</div>
+                <Select value={targetWaybillId} onValueChange={setTargetWaybillId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="选择目标提单入仓号" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {selectableWaybills.map((item) => (
+                      <SelectItem key={item.id} value={String(item.id)}>
+                        {item.waybill_no} - {item.warehouse_no}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="space-y-2">
+                  <div className="text-sm font-medium text-slate-700">转移原因</div>
+                  <Select value={unboundReason} onValueChange={(value) => setUnboundReason(value as UnboundReason)}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="other">其他</SelectItem>
+                      <SelectItem value="customs_inspection">海关查验</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <div className="text-sm font-medium text-slate-700">备注</div>
+                  <Textarea
+                    value={unboundRemark}
+                    onChange={(event) => setUnboundRemark(event.target.value)}
+                    placeholder="可填写补充说明"
+                    rows={3}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+          <div className="mt-5 flex justify-end gap-2">
+            <Button type="button" variant="secondary" disabled={saving} onClick={closeTransferDialog}>
+              取消
+            </Button>
+            <Button
+              type="button"
+              disabled={saving || !selectedCount || (transferTargetType === "waybill" && !targetWaybillId)}
+              onClick={() => void submitTransfer()}
+            >
+              确认转移
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       <Dialog open={Boolean(volumeError)} onOpenChange={(open) => !open && setVolumeError(null)}>
         <DialogContent>
           <DialogTitle className="pr-10 text-base font-semibold text-slate-900">方数计算失败</DialogTitle>

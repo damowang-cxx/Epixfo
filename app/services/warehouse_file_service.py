@@ -42,8 +42,12 @@ REQUIRED_COLUMNS = {
     "weight": {"重量", "收货重量", "weight", "weight kg"},
     "volume": {"收货体积信息", "体积", "方数", "volume", "volume cbm"},
 }
+OPTIONAL_COLUMNS = {
+    "original_weight_volume_ratio": {"收货重量/方", "重量/方", "weight/volume", "weight volume ratio"},
+}
 
 DECIMAL_001 = Decimal("0.001")
+UNBOUND_REASONS = {"customs_inspection", "other"}
 DIMENSION_VOLUME_PATTERN = re.compile(
     r"(\d+(?:\.\d+)?)\s*(?:\*|x|X|×)\s*(\d+(?:\.\d+)?)\s*(?:\*|x|X|×)\s*(\d+(?:\.\d+)?)"
 )
@@ -66,6 +70,8 @@ class ParsedWarehouseBox:
     goods_name: str | None
     quantity: int
     weight: Decimal
+    original_volume_info: str | None
+    original_weight_volume_ratio: str | None
     volume: Decimal
     weight_volume_ratio: Decimal
     source_row_number: int
@@ -372,19 +378,60 @@ class WarehouseFileService:
         )
 
     def batch_bind_boxes(self, box_ids: list[int], target_waybill_id: int, current_user: User) -> BoxBatchOperationResult:
+        return self.batch_transfer_boxes(
+            box_ids,
+            "waybill",
+            current_user,
+            target_waybill_id=target_waybill_id,
+        )
+
+    def batch_unbind_boxes(self, box_ids: list[int], current_user: User) -> BoxBatchOperationResult:
         PermissionService.assert_waybill_write(current_user)
+        boxes = self._load_boxes_for_batch(box_ids)
+        return self._move_boxes_to_unbound(boxes, unbound_reason=None, unbound_remark=None)
+
+    def batch_transfer_boxes(
+        self,
+        box_ids: list[int],
+        target_type: str,
+        current_user: User,
+        *,
+        target_waybill_id: int | None = None,
+        unbound_reason: str | None = None,
+        unbound_remark: str | None = None,
+    ) -> BoxBatchOperationResult:
+        PermissionService.assert_waybill_write(current_user)
+        boxes = self._load_boxes_for_batch(box_ids)
+        if target_type == "waybill":
+            if target_waybill_id is None:
+                raise bad_request("target_waybill_required")
+            return self._move_boxes_to_waybill(boxes, target_waybill_id, current_user)
+        if target_type == "unbound":
+            reason = unbound_reason or "other"
+            if reason not in UNBOUND_REASONS:
+                raise bad_request("invalid_unbound_reason")
+            return self._move_boxes_to_unbound(boxes, unbound_reason=reason, unbound_remark=unbound_remark)
+        raise bad_request("invalid_transfer_target_type")
+
+    def _move_boxes_to_waybill(
+        self,
+        boxes: list[Box],
+        target_waybill_id: int,
+        current_user: User,
+    ) -> BoxBatchOperationResult:
         waybill = self.waybills.get(target_waybill_id)
         if waybill is None:
             raise bad_request("target_waybill_not_found")
         if not waybill.warehouse_no:
             raise bad_request("target_warehouse_no_required")
-        boxes = self._load_boxes_for_batch(box_ids)
         receipt = self._ensure_receipt(waybill.warehouse_no, waybill, document=None, current_user=current_user)
         touched_receipt_ids = {box.warehouse_receipt_id for box in boxes if box.warehouse_receipt_id is not None}
         for box in boxes:
             box.warehouse_receipt_id = receipt.id
             box.current_waybill_id = waybill.id
             box.status = "bound"
+            box.unbound_reason = None
+            box.unbound_remark = None
         self._refresh_receipt_totals(receipt)
         for receipt_id in touched_receipt_ids:
             if receipt_id != receipt.id:
@@ -392,14 +439,21 @@ class WarehouseFileService:
         self.db.commit()
         return BoxBatchOperationResult(updated_count=len(boxes), boxes=self.boxes.list_by_ids([box.id for box in boxes]))
 
-    def batch_unbind_boxes(self, box_ids: list[int], current_user: User) -> BoxBatchOperationResult:
-        PermissionService.assert_waybill_write(current_user)
-        boxes = self._load_boxes_for_batch(box_ids)
+    def _move_boxes_to_unbound(
+        self,
+        boxes: list[Box],
+        *,
+        unbound_reason: str | None,
+        unbound_remark: str | None,
+    ) -> BoxBatchOperationResult:
         touched_receipt_ids = {box.warehouse_receipt_id for box in boxes if box.warehouse_receipt_id is not None}
+        remark = unbound_remark.strip() if unbound_remark else None
         for box in boxes:
             box.warehouse_receipt_id = None
             box.current_waybill_id = None
             box.status = "unbound"
+            box.unbound_reason = unbound_reason
+            box.unbound_remark = remark
         for receipt_id in touched_receipt_ids:
             self._refresh_receipt_totals(self.boxes.get_receipt_by_id(receipt_id))
         self.db.commit()
@@ -479,6 +533,8 @@ class WarehouseFileService:
             box.warehouse_receipt_id = None
             box.current_waybill_id = None
             box.status = "unbound"
+            box.unbound_reason = None
+            box.unbound_remark = None
         previous.waybill_id = None
         self._refresh_receipt_totals(previous)
 
@@ -499,6 +555,8 @@ class WarehouseFileService:
                 existing.warehouse_receipt_id = None
                 existing.current_waybill_id = None
                 existing.status = "unbound"
+                existing.unbound_reason = None
+                existing.unbound_remark = None
 
         existing_by_no = {box.box_no: box for box in self.boxes.list_by_box_nos(list(parsed_by_no))}
         for parsed in parsed_boxes:
@@ -516,10 +574,14 @@ class WarehouseFileService:
             box.goods_name = parsed.goods_name
             box.quantity = parsed.quantity
             box.weight = parsed.weight
+            box.original_volume_info = parsed.original_volume_info
+            box.original_weight_volume_ratio = parsed.original_weight_volume_ratio
             box.volume = parsed.volume
             box.weight_volume_ratio = parsed.weight_volume_ratio
             box.source_row_number = parsed.source_row_number
             box.status = "bound"
+            box.unbound_reason = None
+            box.unbound_remark = None
             box.raw_data = parsed.raw_data
             self.db.flush()
 
@@ -622,6 +684,8 @@ def parse_warehouse_xlsx(file_name: str, content: bytes) -> WarehouseFileParseRe
             goods_name = _optional_text(values, column_map["goods_name"])
             quantity = _parse_quantity(values, column_map["quantity"])
             weight = _parse_decimal_cell(values, column_map["weight"], "重量")
+            original_volume_info = _optional_text(values, column_map["volume"])
+            original_weight_volume_ratio = _optional_column_text(values, column_map, "original_weight_volume_ratio")
             volume = _parse_volume_cell(values, column_map["volume"], allow_empty=is_continuation_row)
             if not is_continuation_row and volume <= 0:
                 raise ValueError("收货体积信息必须大于 0")
@@ -646,6 +710,8 @@ def parse_warehouse_xlsx(file_name: str, content: bytes) -> WarehouseFileParseRe
                 goods_name=goods_name,
                 quantity=0,
                 weight=Decimal("0.000"),
+                original_volume_info=original_volume_info,
+                original_weight_volume_ratio=original_weight_volume_ratio,
                 volume=volume,
                 weight_volume_ratio=Decimal("0.000"),
                 source_row_number=row_number,
@@ -658,6 +724,10 @@ def parse_warehouse_xlsx(file_name: str, content: bytes) -> WarehouseFileParseRe
         parsed_box.items.append(item)
         parsed_box.quantity += quantity
         parsed_box.weight = (parsed_box.weight + weight).quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
+        if parsed_box.original_volume_info is None and original_volume_info:
+            parsed_box.original_volume_info = original_volume_info
+        if parsed_box.original_weight_volume_ratio is None and original_weight_volume_ratio:
+            parsed_box.original_weight_volume_ratio = original_weight_volume_ratio
         if parsed_box.volume <= 0 and volume > 0:
             parsed_box.volume = volume
         if parsed_box.warehouse_waybill_no is None and warehouse_waybill_no:
@@ -707,7 +777,7 @@ def _format_no_valid_rows_error(errors: list[WarehouseFileImportError]) -> str:
 def _build_column_map(header_values: list[Any]) -> dict[str, int]:
     normalized = [_normalize_header(value) for value in header_values]
     column_map: dict[str, int] = {}
-    for field, aliases in REQUIRED_COLUMNS.items():
+    for field, aliases in {**REQUIRED_COLUMNS, **OPTIONAL_COLUMNS}.items():
         normalized_aliases = {_normalize_header(alias) for alias in aliases}
         for index, header in enumerate(normalized):
             if header in normalized_aliases:
@@ -742,6 +812,11 @@ def _required_text(values: list[Any], index: int, label: str) -> str:
 def _optional_text(values: list[Any], index: int) -> str | None:
     value = _clean_text(_value_at(values, index))
     return value or None
+
+
+def _optional_column_text(values: list[Any], column_map: dict[str, int], field: str) -> str | None:
+    index = column_map.get(field)
+    return _optional_text(values, index) if index is not None else None
 
 
 def _parse_quantity(values: list[Any], index: int) -> int:

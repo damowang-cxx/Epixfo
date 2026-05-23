@@ -45,6 +45,16 @@ const CARD_BG: Record<LifecycleBadgeVariant, string> = {
   pink: "border-pink-300 bg-pink-100 hover:bg-pink-200"
 };
 
+const UNBOUND_REASON_LABELS: Record<string, string> = {
+  customs_inspection: "海关查验",
+  other: "其他"
+};
+
+function unboundReasonLabel(reason?: string | null) {
+  if (!reason) return "";
+  return UNBOUND_REASON_LABELS[reason] || reason;
+}
+
 function StatusCard({
   label,
   count,
@@ -189,8 +199,9 @@ export default function WaybillsPage() {
   async function bindSelectedUnboundBoxes() {
     if (!selectedBoxIds.size || !targetWaybillId) return;
     try {
-      const result = await apiClient.post<BoxBatchOperationResult>("/boxes/batch-bind", {
+      const result = await apiClient.post<BoxBatchOperationResult>("/boxes/batch-transfer", {
         box_ids: Array.from(selectedBoxIds),
+        target_type: "waybill",
         target_waybill_id: Number(targetWaybillId)
       });
       setMessage(`已绑定 ${result.updated_count} 个箱号。`);
@@ -429,6 +440,8 @@ export default function WaybillsPage() {
                   <TH>箱内提单数</TH>
                   <TH>首个仓库提单号码</TH>
                   <TH>品名</TH>
+                  <TH>原因</TH>
+                  <TH>备注</TH>
                   <TH>数量</TH>
                   <TH>重量</TH>
                   <TH>方数</TH>
@@ -449,6 +462,14 @@ export default function WaybillsPage() {
                     <TD>{item.items?.length || 0}</TD>
                     <TD>{compact(item.warehouse_waybill_no)}</TD>
                     <TD>{compact(item.goods_name)}</TD>
+                    <TD>
+                      {item.unbound_reason ? (
+                        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-700">
+                          {unboundReasonLabel(item.unbound_reason)}
+                        </span>
+                      ) : null}
+                    </TD>
+                    <TD>{compact(item.unbound_remark)}</TD>
                     <TD>{compact(item.quantity)}</TD>
                     <TD>{compact(item.weight)}</TD>
                     <TD>{compact(item.volume)}</TD>

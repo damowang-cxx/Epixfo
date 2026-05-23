@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -63,11 +63,15 @@ class BoxOut(BaseModel):
     goods_name: str | None = None
     quantity: int | None = None
     weight: Decimal | None = None
+    original_volume_info: str | None = None
+    original_weight_volume_ratio: str | None = None
     volume: Decimal | None = None
     weight_volume_ratio: Decimal | None = None
     source_row_number: int | None = None
     status: str
     is_general_cargo: bool = False
+    unbound_reason: str | None = None
+    unbound_remark: str | None = None
     raw_data: dict[str, Any]
     document: BoxDocumentOut | None = None
     warehouse_receipt: WarehouseReceiptOut | None = None
@@ -129,6 +133,16 @@ class BoxBatchBindRequest(BaseModel):
 
 class BoxBatchUnbindRequest(BaseModel):
     box_ids: list[int] = Field(min_length=1)
+
+
+class BoxBatchTransferRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    box_ids: list[int] = Field(min_length=1)
+    target_type: Literal["waybill", "unbound"]
+    target_waybill_id: int | None = None
+    unbound_reason: Literal["customs_inspection", "other"] | None = None
+    unbound_remark: str | None = None
 
 
 class BoxBatchOperationResult(BaseModel):

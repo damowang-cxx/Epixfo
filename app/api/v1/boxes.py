@@ -8,7 +8,13 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
-from app.schemas.box import BoxBatchBindRequest, BoxBatchOperationResult, BoxBatchUnbindRequest, BoxOut
+from app.schemas.box import (
+    BoxBatchBindRequest,
+    BoxBatchOperationResult,
+    BoxBatchTransferRequest,
+    BoxBatchUnbindRequest,
+    BoxOut,
+)
 from app.schemas.common import PageResponse
 from app.services.permission_service import PermissionService
 from app.services.warehouse_file_service import WarehouseFileService
@@ -36,6 +42,23 @@ def batch_bind_boxes(
 ):
     PermissionService.assert_waybill_write(current_user)
     return WarehouseFileService(db).batch_bind_boxes(payload.box_ids, payload.target_waybill_id, current_user)
+
+
+@router.post("/batch-transfer", response_model=BoxBatchOperationResult)
+def batch_transfer_boxes(
+    payload: BoxBatchTransferRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    PermissionService.assert_waybill_write(current_user)
+    return WarehouseFileService(db).batch_transfer_boxes(
+        payload.box_ids,
+        payload.target_type,
+        current_user,
+        target_waybill_id=payload.target_waybill_id,
+        unbound_reason=payload.unbound_reason,
+        unbound_remark=payload.unbound_remark,
+    )
 
 
 @router.post("/batch-unbind", response_model=BoxBatchOperationResult)
