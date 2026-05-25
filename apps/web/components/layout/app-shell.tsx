@@ -20,18 +20,21 @@ import {
   ShieldCheck,
   Users
 } from "lucide-react";
-import { useEffect, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { AuthProvider, useAuth } from "@/components/layout/auth-provider";
 import { roleLabels } from "@/lib/constants";
 import { apiClient } from "@/lib/client-api";
 import { cn } from "@/lib/utils";
-import type { RoleCode } from "@/lib/types";
+import type { Alert, RoleCode } from "@/lib/types";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
+const CUSTOMS_ALERT_POLL_INTERVAL_MS = 60_000;
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "epixfo.sidebarCollapsed";
 const SIDEBAR_COLLAPSED_EVENT = "epixfo:sidebar-collapsed-change";
+const DISMISSED_CUSTOMS_ALERTS_STORAGE_KEY = "epixfo.dismissedCustomsUploadAlerts";
 
 const navItems: Array<{
   href: string;
@@ -56,6 +59,29 @@ const navItems: Array<{
 function canSee(userRoles: RoleCode[], allowed?: RoleCode[]) {
   if (!allowed) return true;
   return allowed.some((role) => userRoles.includes(role));
+}
+
+function canSeeCustomsUploadAlerts(userRoles: RoleCode[]) {
+  return userRoles.some((role) => role === "admin" || role === "route_staff" || role === "customs_staff");
+}
+
+function readDismissedCustomsAlerts() {
+  if (typeof window === "undefined") return new Set<number>();
+  try {
+    const raw = window.localStorage.getItem(DISMISSED_CUSTOMS_ALERTS_STORAGE_KEY);
+    const ids = raw ? (JSON.parse(raw) as unknown) : [];
+    return new Set(Array.isArray(ids) ? ids.filter((id): id is number => typeof id === "number") : []);
+  } catch {
+    return new Set<number>();
+  }
+}
+
+function writeDismissedCustomsAlerts(ids: Set<number>) {
+  try {
+    window.localStorage.setItem(DISMISSED_CUSTOMS_ALERTS_STORAGE_KEY, JSON.stringify([...ids]));
+  } catch {
+    // Dismissal is local UI state only.
+  }
 }
 
 function readSidebarCollapsedPreference() {
@@ -128,6 +154,7 @@ function ShellContent({ children }: { children: ReactNode }) {
     readSidebarCollapsedPreference,
     () => false
   );
+  const [customsAlerts, setCustomsAlerts] = useState<Alert[]>([]);
 
   useEffect(() => {
     if (!loading && !user && pathname !== "/login") {
@@ -165,15 +192,58 @@ function ShellContent({ children }: { children: ReactNode }) {
     };
   }, [pathname, user]);
 
+  useEffect(() => {
+    if (!user || pathname === "/login" || !canSeeCustomsUploadAlerts(user.roles)) {
+      return;
+    }
+
+    let stopped = false;
+    const loadAlerts = async () => {
+      if (stopped || document.hidden) return;
+      try {
+        const items = await apiClient.get<Alert[]>(
+          "/alerts?status=active&alert_type=customs_data_not_uploaded_after_departure"
+        );
+        const dismissed = readDismissedCustomsAlerts();
+        setCustomsAlerts(items.filter((item) => !dismissed.has(item.id)));
+      } catch {
+        setCustomsAlerts([]);
+      }
+    };
+    const handleVisibility = () => {
+      if (!document.hidden) void loadAlerts();
+    };
+
+    void loadAlerts();
+    const timer = window.setInterval(() => {
+      void loadAlerts();
+    }, CUSTOMS_ALERT_POLL_INTERVAL_MS);
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [pathname, user]);
+
   if (pathname === "/login") return <>{children}</>;
   if (loading) return <div className="grid min-h-screen place-items-center text-sm text-slate-500">正在加载系统...</div>;
   if (!user) return null;
 
   const visibleNav = navItems.filter((item) => canSee(user.roles, item.roles));
   const activeHref = pickActiveHref(visibleNav, pathname);
+  const activeCustomsAlert = canSeeCustomsUploadAlerts(user.roles) ? customsAlerts[0] : undefined;
 
   function toggleSidebarCollapsed() {
     writeSidebarCollapsedPreference(!sidebarCollapsed);
+  }
+
+  function dismissCustomsAlert(alertId: number) {
+    const dismissed = readDismissedCustomsAlerts();
+    dismissed.add(alertId);
+    writeDismissedCustomsAlerts(dismissed);
+    setCustomsAlerts((items) => items.filter((item) => item.id !== alertId));
   }
 
   return (
@@ -254,6 +324,40 @@ function ShellContent({ children }: { children: ReactNode }) {
         </header>
         <main className="p-4 md:p-5">{children}</main>
       </div>
+      <Dialog
+        open={Boolean(activeCustomsAlert)}
+        onOpenChange={(open) => {
+          if (!open && activeCustomsAlert) dismissCustomsAlert(activeCustomsAlert.id);
+        }}
+      >
+        <DialogContent className="w-[min(520px,calc(100vw-32px))]">
+          <DialogTitle className="pr-10 text-base font-semibold text-slate-900">清关资料未上传</DialogTitle>
+          {activeCustomsAlert ? (
+            <div className="space-y-4 text-sm text-slate-700">
+              <p>{activeCustomsAlert.description || "提单已起飞，但系统尚未确认清关资料已上传到清关行。"}</p>
+              <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-red-700">
+                提单号：{activeCustomsAlert.waybill_no || activeCustomsAlert.waybill_id}
+              </div>
+              {customsAlerts.length > 1 ? (
+                <p className="text-xs text-slate-500">还有 {customsAlerts.length - 1} 条同类异常等待处理。</p>
+              ) : null}
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="secondary" onClick={() => dismissCustomsAlert(activeCustomsAlert.id)}>
+                  稍后处理
+                </Button>
+                <Button asChild>
+                  <Link
+                    href={`/waybills/${activeCustomsAlert.waybill_id}`}
+                    onClick={() => dismissCustomsAlert(activeCustomsAlert.id)}
+                  >
+                    查看提单
+                  </Link>
+                </Button>
+              </div>
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

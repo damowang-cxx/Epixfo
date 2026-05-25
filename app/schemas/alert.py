@@ -10,6 +10,7 @@ class AlertOut(BaseModel):
 
     id: int
     waybill_id: int
+    waybill_no: str | None = None
     alert_type: str
     alert_level: AlertLevel
     title: str

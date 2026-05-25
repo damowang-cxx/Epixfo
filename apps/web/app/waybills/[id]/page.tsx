@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { Ban, Pencil, Play, Trash2 } from "lucide-react";
+import { Ban, Download, Pencil, Play, Trash2 } from "lucide-react";
 import { AlertLevelBadge, LifecycleBadge } from "@/components/ui/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -46,6 +46,15 @@ const statusOptions: LifecycleStatus[] = [
   "voided"
 ];
 
+const customsUploadAvailableStatuses: LifecycleStatus[] = [
+  "warehouse_received",
+  "loaded",
+  "departed",
+  "arrived",
+  "pickup_notified",
+  "picked_up"
+];
+
 function FieldGrid({ items }: { items: Array<[string, unknown]> }) {
   return (
     <div className="grid gap-3 text-sm md:grid-cols-4">
@@ -70,8 +79,12 @@ export default function WaybillDetailPage() {
   const id = Array.isArray(params.id) ? params.id[0] : params.id;
   const { hasRole } = useAuth();
   const isAdmin = hasRole("admin");
-  const canEditBoxes = isAdmin || hasRole("route_staff");
+  const isRouteStaff = hasRole("route_staff");
+  const isCustomsStaff = hasRole("customs_staff");
+  const canEditBoxes = isAdmin || isRouteStaff;
   const canDeleteWaybill = canEditBoxes;
+  const canConfirmCustomsUpload = isAdmin || isRouteStaff || isCustomsStaff;
+  const canRevokeCustomsUpload = isAdmin || isRouteStaff;
   const [waybill, setWaybill] = useState<Waybill | null>(null);
   const [officialInfo, setOfficialInfo] = useState<OfficialInfo | null>(null);
   const [segments, setSegments] = useState<OfficialFlightSegment[]>([]);
@@ -137,6 +150,47 @@ export default function WaybillDetailPage() {
 
   if (!waybill) return <div className="text-sm text-slate-500">正在加载提单...</div>;
 
+  async function exportCustomsData() {
+    if (!id || !waybill) return;
+    try {
+      const { blob, filename } = await apiClient.download(`/waybills/${id}/customs-export`);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename || `清关数据_${waybill.waybill_no}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "导出清关数据失败。");
+    }
+  }
+
+  async function confirmCustomsUpload() {
+    if (!id) return;
+    try {
+      const updated = await apiClient.post<Waybill>(`/waybills/${id}/customs-upload-confirm`);
+      setWaybill(updated);
+      setMessage("已记录清关资料上传确认。");
+      load();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "确认清关资料上传失败。");
+    }
+  }
+
+  async function revokeCustomsUpload() {
+    if (!id || !window.confirm("确认撤销清关资料上传记录吗？")) return;
+    try {
+      const updated = await apiClient.delete<Waybill>(`/waybills/${id}/customs-upload-confirm`);
+      setWaybill(updated);
+      setMessage("已撤销清关资料上传确认。");
+      load();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "撤销清关资料上传确认失败。");
+    }
+  }
+
   return (
     <>
       <PageHeader
@@ -160,6 +214,22 @@ export default function WaybillDetailPage() {
               <Play className="h-4 w-4" />
               触发查询
             </Button>
+            <Button variant="secondary" onClick={exportCustomsData}>
+              <Download className="h-4 w-4" />
+              清关数据导出
+            </Button>
+            {canConfirmCustomsUpload &&
+            customsUploadAvailableStatuses.includes(waybill.lifecycle_status) &&
+            !waybill.customs_data_uploaded_at ? (
+              <Button variant="secondary" onClick={confirmCustomsUpload}>
+                已上传清关资料
+              </Button>
+            ) : null}
+            {canRevokeCustomsUpload && waybill.customs_data_uploaded_at ? (
+              <Button variant="ghost" onClick={revokeCustomsUpload}>
+                撤销清关确认
+              </Button>
+            ) : null}
             {isAdmin ? (
               <Button variant="danger" onClick={voidWaybill}>
                 <Ban className="h-4 w-4" />
@@ -200,6 +270,16 @@ export default function WaybillDetailPage() {
                 ["入仓号", waybill.warehouse_no],
                 ["收货人", waybill.consignee],
                 ["指定清关人员", userDisplayName(waybill.customs_staff)],
+                [
+                  "清关资料",
+                  waybill.customs_data_uploaded_at
+                    ? `已上传 ${formatDateTime(waybill.customs_data_uploaded_at)}${
+                        userDisplayName(waybill.customs_data_uploaded_by_user)
+                          ? `（${userDisplayName(waybill.customs_data_uploaded_by_user)}）`
+                          : ""
+                      }`
+                    : "待上传"
+                ],
                 ["计划航班", waybill.plan?.planned_flight_no],
                 ["计划日期", waybill.plan?.planned_flight_date],
                 ["计划航程", waybill.plan?.planned_route_text],

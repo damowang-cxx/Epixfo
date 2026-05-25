@@ -87,6 +87,9 @@ export interface Waybill {
   route_staff_id?: number | null;
   customs_staff_id?: number | null;
   customs_staff?: UserSummary | null;
+  customs_data_uploaded_at?: string | null;
+  customs_data_uploaded_by?: number | null;
+  customs_data_uploaded_by_user?: UserSummary | null;
   data_charge?: string | number | null;
   delivery_time?: string | null;
   document_cutoff_time?: string | null;
@@ -168,6 +171,7 @@ export interface CargoBox {
   source_row_number?: number | null;
   status: string;
   is_general_cargo: boolean;
+  never_bound_direct_upload: boolean;
   unbound_reason?: string | null;
   unbound_remark?: string | null;
   raw_data: Record<string, unknown>;
@@ -248,6 +252,7 @@ export interface BoxVolumeRecalculationResult {
 export interface Alert {
   id: number;
   waybill_id: number;
+  waybill_no?: string | null;
   alert_type: string;
   alert_level: AlertLevel;
   title: string;

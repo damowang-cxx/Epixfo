@@ -1,6 +1,9 @@
 from datetime import date, datetime
+from io import BytesIO
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
+from fastapi.responses import StreamingResponse
 
 from app.core.platform_patch import patch_platform_wmi
 
@@ -31,6 +34,7 @@ from app.schemas.waybill import (
 )
 from app.services.lookup_service import WaybillLookupService
 from app.services.permission_service import PermissionService
+from app.services.customs_export_service import CustomsExportService
 from app.services.warehouse_file_service import WarehouseFileService
 from app.services.waybill_service import WaybillService
 
@@ -142,6 +146,31 @@ def delete_waybill(waybill_id: int, current_user=Depends(get_current_user), db: 
 def waybill_boxes(waybill_id: int, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
     WaybillService(db).get_visible(waybill_id, current_user)
     return WarehouseFileService(db).list_boxes(waybill_id)
+
+
+@router.get("/{waybill_id}/customs-export")
+def customs_export(waybill_id: int, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    waybill = WaybillService(db).get_visible(waybill_id, current_user)
+    content = CustomsExportService(db).build_waybill_export(waybill)
+    filename = f"清关数据_{waybill.waybill_no}.xlsx"
+    encoded_filename = quote(filename)
+    return StreamingResponse(
+        BytesIO(content),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"},
+    )
+
+
+@router.post("/{waybill_id}/customs-upload-confirm", response_model=WaybillOut)
+def confirm_customs_upload(waybill_id: int, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    waybill = WaybillService(db).confirm_customs_data_uploaded(waybill_id, current_user)
+    return _waybill_response(waybill, current_user)
+
+
+@router.delete("/{waybill_id}/customs-upload-confirm", response_model=WaybillOut)
+def revoke_customs_upload(waybill_id: int, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    waybill = WaybillService(db).revoke_customs_data_uploaded(waybill_id, current_user)
+    return _waybill_response(waybill, current_user)
 
 
 @router.post("/{waybill_id}/boxes", response_model=BoxOut)

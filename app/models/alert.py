@@ -53,3 +53,7 @@ class WaybillAlert(Base, TimestampMixin):
     resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
     waybill = relationship("AirWaybill", backref="alerts")
+
+    @property
+    def waybill_no(self) -> str | None:
+        return self.waybill.waybill_no if self.waybill else None

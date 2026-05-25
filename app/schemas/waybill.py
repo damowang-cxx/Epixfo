@@ -99,6 +99,9 @@ class WaybillOut(BaseModel):
     route_staff_id: int | None = None
     customs_staff_id: int | None = None
     customs_staff: UserSummaryOut | None = None
+    customs_data_uploaded_at: datetime | None = None
+    customs_data_uploaded_by: int | None = None
+    customs_data_uploaded_by_user: UserSummaryOut | None = None
     data_charge: Decimal | None = None
     delivery_time: datetime | None = None
     document_cutoff_time: datetime | None = None

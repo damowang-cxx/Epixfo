@@ -35,6 +35,7 @@ class WaybillRepository:
                 selectinload(AirWaybill.official_flight_segments),
                 selectinload(AirWaybill.board).selectinload(WaybillBoard.waybills),
                 selectinload(AirWaybill.customs_staff),
+                selectinload(AirWaybill.customs_data_uploaded_by_user),
             )
             .outerjoin(WaybillBoard, WaybillBoard.id == AirWaybill.board_id)
             .order_by(WaybillBoard.board_no.is_(None), WaybillBoard.board_no.asc(), AirWaybill.id.desc())

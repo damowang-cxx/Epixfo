@@ -173,6 +173,7 @@ class WarehouseFileService:
             volume=volume,
             weight_volume_ratio=weight_volume_ratio,
             is_general_cargo=payload.is_general_cargo,
+            never_bound_direct_upload=False,
             status="bound",
             raw_data={"source": "manual"},
         )
@@ -377,6 +378,101 @@ class WarehouseFileService:
             errors=parse_result.errors,
         )
 
+    def upload_unbound_file(self, file_name: str, content: bytes, current_user: User) -> WarehouseFileUploadResult:
+        PermissionService.assert_waybill_write(current_user)
+        parse_result = parse_warehouse_xlsx(file_name, content)
+        if not parse_result.boxes:
+            raise bad_request(_format_no_valid_rows_error(parse_result.errors))
+
+        parsed_by_no = {item.box_no: item for item in parse_result.boxes}
+        existing_by_no = {box.box_no: box for box in self.boxes.list_by_box_nos(list(parsed_by_no))}
+        conflicts = []
+        for box in existing_by_no.values():
+            if box.warehouse_receipt_id is not None or box.current_waybill_id is not None:
+                conflicts.append(
+                    {
+                        "box_no": box.box_no,
+                        "current_waybill_id": box.current_waybill_id,
+                        "current_warehouse_no": box.warehouse_receipt.warehouse_no if box.warehouse_receipt else None,
+                    }
+                )
+        if conflicts:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error_code": "unbound_upload_box_conflicts",
+                    "message": "部分外箱条码已绑定到提单，请先从原提单转移到未绑定箱号池后再覆盖上传。",
+                    "conflicts": conflicts,
+                },
+            )
+
+        file_hash = hashlib.sha256(content).hexdigest()
+        stored_path = self._store_file(file_name, file_hash, content)
+        document = self.boxes.add_document(
+            BoxDocument(
+                file_name=file_name,
+                file_path=str(stored_path),
+                file_hash=file_hash,
+                bound_waybill_id=None,
+                uploaded_by=current_user.id,
+            )
+        )
+
+        for parsed in parse_result.boxes:
+            box = existing_by_no.get(parsed.box_no)
+            if box is None:
+                box = Box(box_no=parsed.box_no)
+                self.db.add(box)
+                self.db.flush()
+            box.document_id = document.id
+            box.warehouse_receipt_id = None
+            box.current_waybill_id = None
+            box.warehouse_waybill_no = parsed.warehouse_waybill_no
+            box.goods_name = parsed.goods_name
+            box.quantity = parsed.quantity
+            box.weight = parsed.weight
+            box.original_volume_info = parsed.original_volume_info
+            box.original_weight_volume_ratio = parsed.original_weight_volume_ratio
+            box.volume = parsed.volume
+            box.weight_volume_ratio = parsed.weight_volume_ratio
+            box.source_row_number = parsed.source_row_number
+            box.status = "unbound"
+            box.is_general_cargo = getattr(box, "is_general_cargo", False) or False
+            box.never_bound_direct_upload = True
+            box.unbound_reason = None
+            box.unbound_remark = None
+            raw_data = dict(parsed.raw_data or {})
+            raw_data["source"] = "unbound_upload"
+            box.raw_data = raw_data
+            self.db.flush()
+
+            self.boxes.delete_items_for_box(box.id)
+            self.boxes.add_items(
+                [
+                    BoxItem(
+                        box_id=box.id,
+                        document_id=document.id,
+                        warehouse_waybill_no=item.warehouse_waybill_no,
+                        goods_name=item.goods_name,
+                        quantity=item.quantity,
+                        weight=item.weight,
+                        source_row_number=item.source_row_number,
+                        raw_data=item.raw_data,
+                    )
+                    for item in parsed.items
+                ]
+            )
+
+        self.db.commit()
+        return WarehouseFileUploadResult(
+            file_name=file_name,
+            warehouse_no=Path(file_name).stem[:128],
+            document_id=document.id,
+            success_count=len(parse_result.boxes),
+            skipped_count=parse_result.skipped_count,
+            errors=parse_result.errors,
+        )
+
     def batch_bind_boxes(self, box_ids: list[int], target_waybill_id: int, current_user: User) -> BoxBatchOperationResult:
         return self.batch_transfer_boxes(
             box_ids,
@@ -430,6 +526,7 @@ class WarehouseFileService:
             box.warehouse_receipt_id = receipt.id
             box.current_waybill_id = waybill.id
             box.status = "bound"
+            box.never_bound_direct_upload = False
             box.unbound_reason = None
             box.unbound_remark = None
         self._refresh_receipt_totals(receipt)
@@ -452,6 +549,7 @@ class WarehouseFileService:
             box.warehouse_receipt_id = None
             box.current_waybill_id = None
             box.status = "unbound"
+            box.never_bound_direct_upload = False
             box.unbound_reason = unbound_reason
             box.unbound_remark = remark
         for receipt_id in touched_receipt_ids:
@@ -533,6 +631,7 @@ class WarehouseFileService:
             box.warehouse_receipt_id = None
             box.current_waybill_id = None
             box.status = "unbound"
+            box.never_bound_direct_upload = False
             box.unbound_reason = None
             box.unbound_remark = None
         previous.waybill_id = None
@@ -555,6 +654,7 @@ class WarehouseFileService:
                 existing.warehouse_receipt_id = None
                 existing.current_waybill_id = None
                 existing.status = "unbound"
+                existing.never_bound_direct_upload = False
                 existing.unbound_reason = None
                 existing.unbound_remark = None
 
@@ -580,6 +680,7 @@ class WarehouseFileService:
             box.weight_volume_ratio = parsed.weight_volume_ratio
             box.source_row_number = parsed.source_row_number
             box.status = "bound"
+            box.never_bound_direct_upload = False
             box.unbound_reason = None
             box.unbound_remark = None
             box.raw_data = parsed.raw_data

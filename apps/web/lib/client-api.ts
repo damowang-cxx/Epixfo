@@ -33,6 +33,34 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+async function download(path: string): Promise<{ blob: Blob; filename?: string }> {
+  const response = await fetch(`/api/backend${path}`, { cache: "no-store" });
+
+  if (response.status === 401) {
+    window.location.href = "/login";
+    throw new ApiError(401, "未登录或登录已过期");
+  }
+  if (!response.ok) {
+    const text = await response.text();
+    const parsed = parseErrorPayload(text);
+    throw new ApiError(response.status, parsed.message || "请求失败", parsed.detail);
+  }
+  return {
+    blob: await response.blob(),
+    filename: filenameFromContentDisposition(response.headers.get("content-disposition"))
+  };
+}
+
+function filenameFromContentDisposition(value: string | null) {
+  if (!value) return undefined;
+  const utf8Match = /filename\*=UTF-8''([^;]+)/i.exec(value);
+  if (utf8Match?.[1]) return decodeURIComponent(utf8Match[1]);
+  const quotedMatch = /filename="([^"]+)"/i.exec(value);
+  if (quotedMatch?.[1]) return quotedMatch[1];
+  const plainMatch = /filename=([^;]+)/i.exec(value);
+  return plainMatch?.[1]?.trim();
+}
+
 function parseErrorPayload(text: string): { message: string; detail?: unknown } {
   if (!text) return { message: "" };
   try {
@@ -79,5 +107,6 @@ export const apiClient = {
   delete: <T>(path: string) =>
     request<T>(path, {
       method: "DELETE"
-    })
+    }),
+  download
 };

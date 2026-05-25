@@ -111,12 +111,16 @@ export async function proxyToBackend(request: Request, path: string[]) {
     }
   }
 
-  const body = await response.text();
+  const body = response.status === 204 ? null : await response.arrayBuffer();
+  const responseHeaders = new Headers({
+    "cache-control": "no-store",
+    "content-type": response.headers.get("content-type") || "application/json"
+  });
+  const contentDisposition = response.headers.get("content-disposition");
+  if (contentDisposition) responseHeaders.set("content-disposition", contentDisposition);
+
   return new NextResponse(body, {
     status: response.status,
-    headers: {
-      "cache-control": "no-store",
-      "content-type": response.headers.get("content-type") || "application/json"
-    }
+    headers: responseHeaders
   });
 }

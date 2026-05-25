@@ -61,6 +61,8 @@ def test_waybill_table_has_monitoring_columns() -> None:
     assert "consecutive_query_failures" in waybill_columns
     assert "board_id" in waybill_columns
     assert "customs_staff_id" in waybill_columns
+    assert "customs_data_uploaded_at" in waybill_columns
+    assert "customs_data_uploaded_by" in waybill_columns
 
 
 def test_waybill_board_table_has_expected_columns() -> None:
@@ -92,6 +94,7 @@ def test_boxes_table_has_warehouse_file_detail_columns() -> None:
         "source_row_number",
         "warehouse_receipt_id",
         "is_general_cargo",
+        "never_bound_direct_upload",
         "unbound_reason",
         "unbound_remark",
     ]:

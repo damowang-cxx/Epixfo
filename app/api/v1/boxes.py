@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, UploadFile
 
 from app.core.platform_patch import patch_platform_wmi
 
@@ -14,6 +14,7 @@ from app.schemas.box import (
     BoxBatchTransferRequest,
     BoxBatchUnbindRequest,
     BoxOut,
+    WarehouseFileUploadResult,
 )
 from app.schemas.common import PageResponse
 from app.services.permission_service import PermissionService
@@ -32,6 +33,21 @@ def list_unbound_boxes(
     PermissionService.assert_waybill_write(current_user)
     items, total, page, page_size = WarehouseFileService(db).list_unbound_boxes(page=page, page_size=page_size)
     return PageResponse(items=items, total=total, page=page, page_size=page_size)
+
+
+@router.post("/unbound/warehouse-file", response_model=WarehouseFileUploadResult)
+async def upload_unbound_warehouse_file(
+    file: UploadFile = File(...),
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    PermissionService.assert_waybill_write(current_user)
+    content = await file.read()
+    return WarehouseFileService(db).upload_unbound_file(
+        file_name=file.filename or "warehouse-file.xlsx",
+        content=content,
+        current_user=current_user,
+    )
 
 
 @router.post("/batch-bind", response_model=BoxBatchOperationResult)

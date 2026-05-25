@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Plus, Save, Trash2, Unlink } from "lucide-react";
 import { LifecycleBadge } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
@@ -60,6 +61,8 @@ export default function BoardsPage() {
   const [data, setData] = useState<PageResponse<WaybillBoard> | null>(null);
   const [page, setPage] = useState(1);
   const [message, setMessage] = useState("");
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [createDialogMessage, setCreateDialogMessage] = useState("");
   const [newActualBoardNo, setNewActualBoardNo] = useState("");
   const [newWaybillInput, setNewWaybillInput] = useState("");
   const [candidateData, setCandidateData] = useState<PageResponse<BoardWaybill> | null>(null);
@@ -73,12 +76,6 @@ export default function BoardsPage() {
   const [appendInput, setAppendInput] = useState("");
   const [saving, setSaving] = useState(false);
 
-  const appendBoard = useMemo(
-    () => (appendBoardId ? (data?.items || []).find((item) => item.id === appendBoardId) || null : null),
-    [appendBoardId, data?.items]
-  );
-  const appendConsigneeContactId = appendBoard?.consignee_contact_id ?? null;
-
   const load = useCallback(() => {
     apiClient.get<PageResponse<WaybillBoard>>(`/boards?page=${page}&page_size=20`).then(setData);
   }, [page]);
@@ -89,27 +86,48 @@ export default function BoardsPage() {
       page_size: "20"
     });
     if (candidateSearch) params.set("waybill_no", candidateSearch);
-    if (appendConsigneeContactId) {
-      params.set("consignee_contact_id", String(appendConsigneeContactId));
-    }
     apiClient
       .get<PageResponse<BoardWaybill>>(`/boards/bind-candidates?${params.toString()}`)
       .then(setCandidateData)
-      .catch((error) => setMessage(formatApiError(error)));
-  }, [appendConsigneeContactId, candidatePage, candidateSearch]);
+      .catch((error) => setCreateDialogMessage(formatApiError(error)));
+  }, [candidatePage, candidateSearch]);
 
   useEffect(() => {
     load();
   }, [load]);
 
   useEffect(() => {
-    loadCandidates();
-  }, [loadCandidates]);
+    if (createDialogOpen) {
+      loadCandidates();
+    }
+  }, [createDialogOpen, loadCandidates]);
+
+  function resetCreateDialogState() {
+    setNewActualBoardNo("");
+    setNewWaybillInput("");
+    setCandidateSearchDraft("");
+    setCandidateSearch("");
+    setCandidatePage(1);
+    setCandidateData(null);
+    setSelectedCandidateNos([]);
+    setCreateDialogMessage("");
+  }
+
+  function openCreateDialog() {
+    resetCreateDialogState();
+    setCreateDialogOpen(true);
+  }
+
+  function closeCreateDialog() {
+    if (saving) return;
+    setCreateDialogOpen(false);
+    resetCreateDialogState();
+  }
 
   async function createBoard() {
     const waybill_nos = parseWaybillInput(newWaybillInput);
     if (!waybill_nos.length) {
-      setMessage("请录入至少一个提单号。");
+      setCreateDialogMessage("请录入至少一个提单号。");
       return;
     }
     try {
@@ -119,14 +137,12 @@ export default function BoardsPage() {
         waybill_nos
       });
       setMessage(`已创建板号 ${board.board_no}。`);
-      setNewActualBoardNo("");
-      setNewWaybillInput("");
-      setSelectedCandidateNos([]);
+      setCreateDialogOpen(false);
+      resetCreateDialogState();
       setPage(1);
       load();
-      loadCandidates();
     } catch (error) {
-      setMessage(formatApiError(error));
+      setCreateDialogMessage(formatApiError(error));
     } finally {
       setSaving(false);
     }
@@ -167,24 +183,11 @@ export default function BoardsPage() {
 
   function addSelectedToNewBoardInput() {
     if (!selectedCandidateNos.length) {
-      setMessage("请先选择至少一个可绑定提单。");
+      setCreateDialogMessage("请先选择至少一个可绑定提单。");
       return;
     }
     setNewWaybillInput((prev) => mergeWaybillInput(prev, selectedCandidateNos));
-    setMessage(`已将 ${selectedCandidateNos.length} 个提单号加入新建板号输入框。`);
-  }
-
-  function addSelectedToAppendInput() {
-    if (!selectedCandidateNos.length) {
-      setMessage("请先选择至少一个可绑定提单。");
-      return;
-    }
-    if (!appendBoardId) {
-      setMessage("请先在板号列表中点击“追加提单”。");
-      return;
-    }
-    setAppendInput((prev) => mergeWaybillInput(prev, selectedCandidateNos));
-    setMessage(`已将 ${selectedCandidateNos.length} 个提单号加入追加提单输入框。`);
+    setCreateDialogMessage(`已将 ${selectedCandidateNos.length} 个提单号加入新建板号输入框。`);
   }
 
   function startEdit(board: WaybillBoard) {
@@ -270,7 +273,9 @@ export default function BoardsPage() {
       );
       setMessage(`提单 ${waybillNo} 已解绑。`);
       load();
-      loadCandidates();
+      if (createDialogOpen) {
+        loadCandidates();
+      }
     } catch (error) {
       setMessage(formatApiError(error));
     } finally {
@@ -312,142 +317,154 @@ export default function BoardsPage() {
 
   return (
     <>
-      <PageHeader title="板号管理" description="将存活周期内且收件人一致的提单绑定到同一个板号" />
+      <PageHeader
+        title="板号管理"
+        description="将存活周期内且收件人一致的提单绑定到同一个板号"
+        action={
+          <Button type="button" onClick={openCreateDialog}>
+            <Plus className="h-4 w-4" />
+            新建板号
+          </Button>
+        }
+      />
       {message ? (
         <div className="mb-4 whitespace-pre-line rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">
           {message}
         </div>
       ) : null}
 
-      <Panel title="新建板号">
-        <div className="grid gap-3 lg:grid-cols-[260px_1fr_auto]">
-          <Input
-            value={newActualBoardNo}
-            onChange={(event) => setNewActualBoardNo(event.target.value)}
-            placeholder="实际板号 ID（可选）"
-          />
-          <Textarea
-            value={newWaybillInput}
-            onChange={(event) => setNewWaybillInput(event.target.value)}
-            placeholder="录入或粘贴多个提单号，可用换行、逗号或空格分隔"
-            className="min-h-20"
-          />
-          <Button type="button" disabled={saving} onClick={() => void createBoard()}>
-            <Plus className="h-4 w-4" />
-            生成板号
-          </Button>
-        </div>
-      </Panel>
+      <Dialog open={createDialogOpen} onOpenChange={(open) => (open ? setCreateDialogOpen(true) : closeCreateDialog())}>
+        <DialogContent className="max-h-[calc(100vh-48px)] w-[min(1040px,calc(100vw-32px))] overflow-y-auto">
+          <DialogTitle className="pr-10 text-base font-semibold text-slate-900">新建板号</DialogTitle>
+          {createDialogMessage ? (
+            <div className="mt-4 whitespace-pre-line rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">
+              {createDialogMessage}
+            </div>
+          ) : null}
 
-      <Panel title="可绑定提单" className="mt-4">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <Input
-              value={candidateSearchDraft}
-              onChange={(event) => setCandidateSearchDraft(event.target.value)}
-              placeholder="搜索提单号"
-              className="w-56"
-            />
-            <Button type="button" variant="secondary" size="sm" onClick={searchCandidates}>
-              搜索
-            </Button>
-            <Button type="button" variant="ghost" size="sm" onClick={clearCandidateSearch}>
-              清空
-            </Button>
-          </div>
-          <div className="flex flex-wrap items-center gap-2 text-sm text-slate-500">
-            <span>已选 {selectedCandidateNos.length} 个</span>
-            {appendBoard ? <span>当前追加：{appendBoard.board_no}</span> : null}
-          </div>
-        </div>
-        <div className="mb-3 flex flex-wrap gap-2">
-          <Button type="button" variant="secondary" size="sm" onClick={addSelectedToNewBoardInput}>
-            加入新建板号
-          </Button>
-          <Button type="button" variant="secondary" size="sm" disabled={!appendBoardId} onClick={addSelectedToAppendInput}>
-            加入正在追加的板号
-          </Button>
-          <Button type="button" variant="ghost" size="sm" onClick={() => setSelectedCandidateNos([])}>
-            清空选择
-          </Button>
-        </div>
-        <p className="mb-3 text-xs text-slate-500">
-          仅显示未绑定板号且处于存活周期的提单。追加提单时，候选列表会按该板号收件人自动筛选。
-        </p>
-        <Table>
-          <THead>
-            <TR>
-              <TH>
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 rounded border-slate-300 accent-purple-700"
-                  checked={allCurrentCandidatePageSelected}
-                  onChange={toggleCurrentCandidatePage}
-                  aria-label="选择当前页可绑定提单"
-                />
-              </TH>
-              <TH>提单号</TH>
-              <TH>收件人</TH>
-              <TH>订舱方数</TH>
-              <TH>生命周期</TH>
-            </TR>
-          </THead>
-          <TBody>
-            {candidateItems.length ? (
-              candidateItems.map((waybill) => (
-                <TR key={waybill.id}>
-                  <TD>
-                    <input
-                      type="checkbox"
-                      className="h-4 w-4 rounded border-slate-300 accent-purple-700"
-                      checked={selectedCandidateNos.includes(waybill.waybill_no)}
-                      onChange={() => toggleCandidate(waybill.waybill_no)}
-                      aria-label={`选择提单 ${waybill.waybill_no}`}
-                    />
-                  </TD>
-                  <TD className="font-medium">{waybill.waybill_no}</TD>
-                  <TD>{compact(waybill.consignee)}</TD>
-                  <TD>{formatDecimal(waybill.booked_volume)}</TD>
-                  <TD>
-                    <LifecycleBadge value={waybill.lifecycle_status} />
-                  </TD>
-                </TR>
-              ))
-            ) : (
-              <TR>
-                <TD colSpan={5} className="text-slate-500">
-                  暂无可绑定提单
-                </TD>
-              </TR>
-            )}
-          </TBody>
-        </Table>
-        <div className="mt-4 flex items-center justify-between text-sm text-slate-500">
-          <span>共 {candidateData?.total ?? 0} 个可绑定提单</span>
-          <div className="flex gap-2">
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              disabled={candidatePage <= 1}
-              onClick={() => setCandidatePage((prev) => prev - 1)}
-            >
-              上一页
-            </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              disabled={!candidateData || candidatePage * candidateData.page_size >= candidateData.total}
-              onClick={() => setCandidatePage((prev) => prev + 1)}
-            >
-              下一页
-            </Button>
-          </div>
-        </div>
-      </Panel>
+          <div className="mt-4 space-y-4">
+            <div className="grid gap-3 lg:grid-cols-[260px_1fr_auto]">
+              <Input
+                value={newActualBoardNo}
+                onChange={(event) => setNewActualBoardNo(event.target.value)}
+                placeholder="实际板号 ID（可选）"
+              />
+              <Textarea
+                value={newWaybillInput}
+                onChange={(event) => setNewWaybillInput(event.target.value)}
+                placeholder="录入或粘贴多个提单号，可用换行、逗号或空格分隔"
+                className="min-h-20"
+              />
+              <Button type="button" disabled={saving} onClick={() => void createBoard()}>
+                <Plus className="h-4 w-4" />
+                生成板号
+              </Button>
+            </div>
 
-      <Panel title="板号列表" className="mt-4">
+            <div className="border-t border-slate-100 pt-4">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Input
+                    value={candidateSearchDraft}
+                    onChange={(event) => setCandidateSearchDraft(event.target.value)}
+                    placeholder="搜索提单号"
+                    className="w-56"
+                  />
+                  <Button type="button" variant="secondary" size="sm" onClick={searchCandidates}>
+                    搜索
+                  </Button>
+                  <Button type="button" variant="ghost" size="sm" onClick={clearCandidateSearch}>
+                    清空
+                  </Button>
+                </div>
+                <span className="text-sm text-slate-500">已选 {selectedCandidateNos.length} 个</span>
+              </div>
+              <div className="mb-3 flex flex-wrap gap-2">
+                <Button type="button" variant="secondary" size="sm" onClick={addSelectedToNewBoardInput}>
+                  加入新建板号
+                </Button>
+                <Button type="button" variant="ghost" size="sm" onClick={() => setSelectedCandidateNos([])}>
+                  清空选择
+                </Button>
+              </div>
+              <p className="mb-3 text-xs text-slate-500">仅显示未绑定板号且处于存活周期的提单。</p>
+              <Table>
+                <THead>
+                  <TR>
+                    <TH>
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded border-slate-300 accent-purple-700"
+                        checked={allCurrentCandidatePageSelected}
+                        onChange={toggleCurrentCandidatePage}
+                        aria-label="选择当前页可绑定提单"
+                      />
+                    </TH>
+                    <TH>提单号</TH>
+                    <TH>收件人</TH>
+                    <TH>订舱方数</TH>
+                    <TH>生命周期</TH>
+                  </TR>
+                </THead>
+                <TBody>
+                  {candidateItems.length ? (
+                    candidateItems.map((waybill) => (
+                      <TR key={waybill.id}>
+                        <TD>
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 rounded border-slate-300 accent-purple-700"
+                            checked={selectedCandidateNos.includes(waybill.waybill_no)}
+                            onChange={() => toggleCandidate(waybill.waybill_no)}
+                            aria-label={`选择提单 ${waybill.waybill_no}`}
+                          />
+                        </TD>
+                        <TD className="font-medium">{waybill.waybill_no}</TD>
+                        <TD>{compact(waybill.consignee)}</TD>
+                        <TD>{formatDecimal(waybill.booked_volume)}</TD>
+                        <TD>
+                          <LifecycleBadge value={waybill.lifecycle_status} />
+                        </TD>
+                      </TR>
+                    ))
+                  ) : (
+                    <TR>
+                      <TD colSpan={5} className="text-slate-500">
+                        暂无可绑定提单
+                      </TD>
+                    </TR>
+                  )}
+                </TBody>
+              </Table>
+              <div className="mt-4 flex items-center justify-between text-sm text-slate-500">
+                <span>共 {candidateData?.total ?? 0} 个可绑定提单</span>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    disabled={candidatePage <= 1}
+                    onClick={() => setCandidatePage((prev) => prev - 1)}
+                  >
+                    上一页
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    disabled={!candidateData || candidatePage * candidateData.page_size >= candidateData.total}
+                    onClick={() => setCandidatePage((prev) => prev + 1)}
+                  >
+                    下一页
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Panel title="板号列表">
         <div className="space-y-4">
           {(data?.items || []).map((board) => (
             <div key={board.id} className="rounded-md border border-slate-200">

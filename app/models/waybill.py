@@ -66,6 +66,8 @@ class AirWaybill(Base, TimestampMixin):
         Index("idx_air_waybills_created_at", "created_at"),
         Index("idx_air_waybills_route_staff_id", "route_staff_id"),
         Index("idx_air_waybills_customs_staff_id", "customs_staff_id"),
+        Index("idx_air_waybills_customs_data_uploaded_by", "customs_data_uploaded_by"),
+        Index("idx_air_waybills_customs_data_uploaded_at", "customs_data_uploaded_at"),
         Index("idx_air_waybills_carrier_agent_id", "carrier_agent_id"),
         Index("idx_air_waybills_consignee_contact_id", "consignee_contact_id"),
         Index("idx_air_waybills_board_id", "board_id"),
@@ -89,6 +91,8 @@ class AirWaybill(Base, TimestampMixin):
     document_operator_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"))
     route_staff_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"))
     customs_staff_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"))
+    customs_data_uploaded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    customs_data_uploaded_by: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="SET NULL"))
 
     data_charge: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2))
     delivery_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
@@ -136,6 +140,7 @@ class AirWaybill(Base, TimestampMixin):
     carrier_agent = relationship("CarrierAgent", lazy="joined")
     consignee_contact = relationship("ConsigneeContact", lazy="joined")
     customs_staff = relationship("User", foreign_keys=[customs_staff_id], lazy="joined")
+    customs_data_uploaded_by_user = relationship("User", foreign_keys=[customs_data_uploaded_by], lazy="joined")
     board: Mapped[Optional[WaybillBoard]] = relationship(back_populates="waybills")
     plan: Mapped[Optional[WaybillPlan]] = relationship(back_populates="waybill", cascade="all, delete-orphan")
     official_info: Mapped[Optional[WaybillOfficialInfo]] = relationship(

@@ -10,7 +10,6 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.exceptions import not_found
 from app.models.enums import AlertStatus, UserRoleCode
-from app.repositories.alert_repository import AlertRepository
 from app.schemas.alert import AlertOut
 from app.services.alert_service import AlertService
 from app.services.permission_service import PermissionService
@@ -19,9 +18,13 @@ router = APIRouter(prefix="/alerts", tags=["alerts"])
 
 
 @router.get("", response_model=list[AlertOut])
-def list_alerts(status: AlertStatus | None = None, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
-    PermissionService.require_any(current_user, {UserRoleCode.ADMIN, UserRoleCode.ROUTE_STAFF})
-    return AlertRepository(db).list(status)
+def list_alerts(
+    status: AlertStatus | None = None,
+    alert_type: str | None = None,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return AlertService(db).list_visible(current_user, status=status, alert_type=alert_type)
 
 
 @router.post("/{alert_id}/acknowledge", response_model=AlertOut)

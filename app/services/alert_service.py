@@ -7,13 +7,15 @@ from app.core.platform_patch import patch_platform_wmi
 
 patch_platform_wmi()
 
-from sqlalchemy.orm import Session
+from sqlalchemy import exists, or_, select
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import settings
-from app.models import AirWaybill, User, WaybillAlert, WaybillOfficialInfo, WaybillStatusEvent
-from app.models.enums import AlertLevel, AlertStatus, OfficialEventType, WaybillLifecycleStatus
+from app.models import AirWaybill, User, WaybillAlert, WaybillCustomsAccessGrant, WaybillOfficialInfo, WaybillStatusEvent
+from app.models.enums import AlertLevel, AlertStatus, OfficialEventType, UserRoleCode, WaybillLifecycleStatus
 from app.repositories.alert_repository import AlertRepository
 from app.repositories.waybill_repository import WaybillRepository
+from app.services.permission_service import PermissionService, VISIBLE_TO_CUSTOMER_SERVICE
 from app.utils.datetime_utils import local_day_start, local_now, utc_now
 
 
@@ -21,6 +23,14 @@ ALERT_LEVEL_ORDER = {
     AlertLevel.INFO: 1,
     AlertLevel.WARNING: 2,
     AlertLevel.CRITICAL: 3,
+}
+
+CUSTOMS_DATA_NOT_UPLOADED_ALERT = "customs_data_not_uploaded_after_departure"
+DEPARTED_OR_AFTER = {
+    WaybillLifecycleStatus.DEPARTED,
+    WaybillLifecycleStatus.ARRIVED,
+    WaybillLifecycleStatus.PICKUP_NOTIFIED,
+    WaybillLifecycleStatus.PICKED_UP,
 }
 
 
@@ -88,6 +98,55 @@ class AlertService:
         waybill.consecutive_query_failures = 0
         self.resolve_active(waybill, "query_failed")
 
+    def list_visible(
+        self,
+        user: User,
+        status: AlertStatus | None = None,
+        alert_type: str | None = None,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> list[WaybillAlert]:
+        roles = PermissionService.role_codes(user)
+        if UserRoleCode.ADMIN.value in roles or UserRoleCode.ROUTE_STAFF.value in roles:
+            return self.repo.list(status=status, alert_type=alert_type, skip=skip, limit=limit)
+        if UserRoleCode.CUSTOMS_STAFF.value not in roles:
+            return []
+
+        granted = exists().where(
+            WaybillCustomsAccessGrant.waybill_id == AirWaybill.id,
+            WaybillCustomsAccessGrant.user_id == user.id,
+        )
+        query = (
+            select(WaybillAlert)
+            .options(selectinload(WaybillAlert.waybill))
+            .join(AirWaybill, AirWaybill.id == WaybillAlert.waybill_id)
+            .where(
+                AirWaybill.lifecycle_status.in_(VISIBLE_TO_CUSTOMER_SERVICE),
+                or_(AirWaybill.customs_staff_id == user.id, granted),
+            )
+            .order_by(WaybillAlert.id.desc())
+        )
+        if status:
+            query = query.where(WaybillAlert.status == status)
+        if alert_type:
+            query = query.where(WaybillAlert.alert_type == alert_type)
+        return list(self.db.scalars(query.offset(skip).limit(limit)))
+
+    def check_customs_data_upload(self, waybill: AirWaybill) -> None:
+        if waybill.lifecycle_status not in DEPARTED_OR_AFTER or waybill.lifecycle_status == WaybillLifecycleStatus.VOIDED:
+            self.resolve_active(waybill, CUSTOMS_DATA_NOT_UPLOADED_ALERT)
+            return
+        if waybill.customs_data_uploaded_at is not None:
+            self.resolve_active(waybill, CUSTOMS_DATA_NOT_UPLOADED_ALERT)
+            return
+        self.create_or_update_active(
+            waybill,
+            CUSTOMS_DATA_NOT_UPLOADED_ALERT,
+            AlertLevel.CRITICAL,
+            "清关资料未上传",
+            description="提单已起飞，但系统尚未确认清关资料已上传到清关行。",
+        )
+
     def check_after_parse(self, waybill: AirWaybill) -> None:
         if not waybill.plan:
             return
@@ -132,6 +191,7 @@ class AlertService:
         self._check_not_departed(waybill, events)
         self._check_not_received(waybill, events)
         self._check_weight_volume(waybill, official_info)
+        self.check_customs_data_upload(waybill)
         self.update_waybill_alert_level(waybill)
 
     def _check_not_departed(self, waybill: AirWaybill, events: list[WaybillStatusEvent]) -> None:

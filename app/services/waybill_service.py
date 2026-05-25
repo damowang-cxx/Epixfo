@@ -20,7 +20,7 @@ from app.services.carrier_service import CarrierService
 from app.services.consignee_service import ConsigneeService
 from app.services.monitor_service import MonitorService
 from app.services.permission_service import PermissionService, VISIBLE_TO_CUSTOMER_SERVICE
-from app.utils.datetime_utils import compute_monitor_window, compute_next_query_at, local_now
+from app.utils.datetime_utils import compute_monitor_window, compute_next_query_at, local_now, utc_now
 from app.utils.pagination import normalize_pagination
 from app.utils.waybill_utils import normalize_waybill_no, validate_waybill_no
 
@@ -161,6 +161,34 @@ class WaybillService:
             self.db.commit()
         return self.repo.get(waybill.id) or waybill
 
+    def confirm_customs_data_uploaded(self, waybill_id: int, current_user: User) -> AirWaybill:
+        roles = PermissionService.role_codes(current_user)
+        if UserRoleCode.ADMIN.value not in roles and UserRoleCode.ROUTE_STAFF.value not in roles:
+            PermissionService.require_any(current_user, {UserRoleCode.CUSTOMS_STAFF})
+        waybill = self.get_visible(waybill_id, current_user)
+        if waybill.lifecycle_status == WaybillLifecycleStatus.VOIDED:
+            raise bad_request("voided_waybill_not_available")
+        if waybill.lifecycle_status not in VISIBLE_TO_CUSTOMER_SERVICE:
+            raise bad_request("waybill_not_ready_for_customs_upload")
+        waybill.customs_data_uploaded_at = utc_now()
+        waybill.customs_data_uploaded_by = current_user.id
+        waybill.updated_by = current_user.id
+        self.alerts.resolve_active(waybill, "customs_data_not_uploaded_after_departure", current_user)
+        self.db.commit()
+        return self.repo.get(waybill.id) or waybill
+
+    def revoke_customs_data_uploaded(self, waybill_id: int, current_user: User) -> AirWaybill:
+        PermissionService.assert_waybill_write(current_user)
+        waybill = self.get_visible(waybill_id, current_user)
+        if waybill.lifecycle_status == WaybillLifecycleStatus.VOIDED:
+            raise bad_request("voided_waybill_not_available")
+        waybill.customs_data_uploaded_at = None
+        waybill.customs_data_uploaded_by = None
+        waybill.updated_by = current_user.id
+        self.alerts.check_customs_data_upload(waybill)
+        self.db.commit()
+        return self.repo.get(waybill.id) or waybill
+
     def record_view(self, waybill: AirWaybill, current_user: User, ip_address: str | None, user_agent: str | None) -> None:
         self.db.add(
             WaybillViewLog(
@@ -241,6 +269,7 @@ class WaybillService:
             payload.lifecycle_status,
         )
         waybill.updated_by = current_user.id
+        self.alerts.check_customs_data_upload(waybill)
         self.db.commit()
         return self.repo.get(waybill.id) or waybill
 
@@ -278,6 +307,7 @@ class WaybillService:
                     warehouse_receipt_id=None,
                     current_waybill_id=None,
                     status="unbound",
+                    never_bound_direct_upload=False,
                     unbound_reason=None,
                     unbound_remark=None,
                 )
@@ -296,7 +326,13 @@ class WaybillService:
         self.db.execute(
             update(Box)
             .where(Box.current_waybill_id == waybill_id)
-            .values(current_waybill_id=None, status="unbound", unbound_reason=None, unbound_remark=None)
+            .values(
+                current_waybill_id=None,
+                status="unbound",
+                never_bound_direct_upload=False,
+                unbound_reason=None,
+                unbound_remark=None,
+            )
         )
         self.db.execute(
             update(BoxDocument)

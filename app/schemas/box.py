@@ -70,6 +70,7 @@ class BoxOut(BaseModel):
     source_row_number: int | None = None
     status: str
     is_general_cargo: bool = False
+    never_bound_direct_upload: bool = False
     unbound_reason: str | None = None
     unbound_remark: str | None = None
     raw_data: dict[str, Any]

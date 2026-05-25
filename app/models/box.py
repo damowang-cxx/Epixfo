@@ -80,6 +80,7 @@ class Box(Base, TimestampMixin):
     source_row_number: Mapped[Optional[int]] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="reserved", server_default="reserved")
     is_general_cargo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    never_bound_direct_upload: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     unbound_reason: Mapped[Optional[str]] = mapped_column(String(32))
     unbound_remark: Mapped[Optional[str]] = mapped_column(Text)
     raw_data: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))

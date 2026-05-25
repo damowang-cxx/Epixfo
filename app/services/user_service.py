@@ -155,6 +155,11 @@ class UserService:
         )
         self.db.execute(update(AirWaybill).where(AirWaybill.route_staff_id == user_id).values(route_staff_id=None))
         self.db.execute(update(AirWaybill).where(AirWaybill.customs_staff_id == user_id).values(customs_staff_id=None))
+        self.db.execute(
+            update(AirWaybill)
+            .where(AirWaybill.customs_data_uploaded_by == user_id)
+            .values(customs_data_uploaded_by=None)
+        )
         self.db.execute(update(AirWaybill).where(AirWaybill.created_by == user_id).values(created_by=None))
         self.db.execute(update(AirWaybill).where(AirWaybill.updated_by == user_id).values(updated_by=None))
         self.db.execute(update(WaybillBoard).where(WaybillBoard.created_by == user_id).values(created_by=None))

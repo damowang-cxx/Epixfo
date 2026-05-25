@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Pencil, Plus, Search, Trash2 } from "lucide-react";
@@ -14,9 +14,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { useAuth } from "@/components/layout/auth-provider";
 import { WarehouseFileUploadButton } from "@/components/waybills/warehouse-file-upload-button";
-import { apiClient } from "@/lib/client-api";
+import { ApiError, apiClient } from "@/lib/client-api";
 import { LIFECYCLE_ORDER, lifecycleLabels } from "@/lib/constants";
-import { cn, compact } from "@/lib/utils";
+import { cn, compact, formatDateTime } from "@/lib/utils";
 import { formatWarehouseUploadMessage } from "@/lib/warehouse-upload";
 import type { BoxBatchOperationResult, CargoBox, LifecycleStatus, PageResponse, WarehouseFileUploadResult, Waybill } from "@/lib/types";
 
@@ -113,6 +113,8 @@ export default function WaybillsPage() {
   const [deletingWaybillId, setDeletingWaybillId] = useState<number | null>(null);
   const [accessWaybillNo, setAccessWaybillNo] = useState("");
   const [requestingAccess, setRequestingAccess] = useState(false);
+  const [uploadingUnboundFile, setUploadingUnboundFile] = useState(false);
+  const unboundFileInputRef = useRef<HTMLInputElement>(null);
 
   const query = useMemo(() => {
     const params = new URLSearchParams({ page: String(page), page_size: "20" });
@@ -195,6 +197,53 @@ export default function WaybillsPage() {
     setMessage(formatWarehouseUploadMessage(result));
     load();
     loadCounts();
+  }
+
+  function formatUnboundUploadError(error: unknown) {
+    if (error instanceof ApiError && error.detail && typeof error.detail === "object") {
+      const detail = error.detail as { message?: unknown; conflicts?: unknown };
+      if (Array.isArray(detail.conflicts) && detail.conflicts.length > 0) {
+        const boxNos = detail.conflicts
+          .map((item) => (item && typeof item === "object" ? (item as { box_no?: unknown }).box_no : null))
+          .filter(Boolean)
+          .join("、");
+        return `${typeof detail.message === "string" ? detail.message : error.message}${boxNos ? `：${boxNos}` : ""}`;
+      }
+    }
+    return error instanceof Error ? error.message : "上传未绑定箱号文件失败。";
+  }
+
+  function formatUnboundUploadMessage(result: WarehouseFileUploadResult) {
+    const skippedText = result.skipped_count ? `，跳过空行 ${result.skipped_count} 行` : "";
+    const errorText = result.errors?.length
+      ? `，失败 ${result.errors.length} 行：${result.errors
+          .slice(0, 5)
+          .map((item) => `第 ${item.row_number} 行（${item.message}）`)
+          .join("；")}${result.errors.length > 5 ? `；另 ${result.errors.length - 5} 行` : ""}`
+      : "";
+    return `未绑定箱号文件已上传：${result.warehouse_no}，导入 ${result.success_count} 个外箱条码${skippedText}${errorText}。`;
+  }
+
+  async function uploadUnboundWarehouseFile(file: File | null | undefined) {
+    if (!file) return;
+    setUploadingUnboundFile(true);
+    setMessage("");
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const result = await apiClient.postForm<WarehouseFileUploadResult>("/boxes/unbound/warehouse-file", formData);
+      setMessage(formatUnboundUploadMessage(result));
+      setSelectedBoxIds(new Set());
+      if (unboundPage === 1) {
+        loadUnbound();
+      } else {
+        setUnboundPage(1);
+      }
+    } catch (error) {
+      setMessage(formatUnboundUploadError(error));
+    } finally {
+      setUploadingUnboundFile(false);
+    }
   }
 
   function toggleUnboundBox(id: number, checked: boolean) {
@@ -368,6 +417,7 @@ export default function WaybillsPage() {
               <TH>收件人</TH>
               <TH>订舱方数/板总方数</TH>
               <TH>指定清关人员</TH>
+              <TH>清关资料</TH>
               <TH>航代</TH>
               <TH>入仓号/入仓文件</TH>
               <TH>始发港</TH>
@@ -411,6 +461,13 @@ export default function WaybillsPage() {
                   </>
                 ) : null}
                 <TD>{compact(userDisplayName(item.customs_staff))}</TD>
+                <TD>
+                  {item.customs_data_uploaded_at ? (
+                    <span className="text-emerald-700">已上传 {formatDateTime(item.customs_data_uploaded_at)}</span>
+                  ) : (
+                    <span className="text-amber-700">待上传</span>
+                  )}
+                </TD>
                 <TD>{compact(item.agent)}</TD>
                 <TD>
                   <div className="flex min-w-40 flex-col items-start gap-1">
@@ -471,8 +528,27 @@ export default function WaybillsPage() {
         <DialogContent className="w-[min(960px,calc(100vw-32px))]">
           <DialogTitle className="pr-10 text-base font-semibold text-slate-900">未绑定箱号</DialogTitle>
           <div className="space-y-3">
+            <Input
+              ref={unboundFileInputRef}
+              type="file"
+              accept=".xlsx"
+              className="hidden"
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0];
+                event.currentTarget.value = "";
+                void uploadUnboundWarehouseFile(file);
+              }}
+            />
             <div className="flex flex-wrap items-center gap-2 text-sm">
               <span className="text-slate-600">已选 {selectedBoxIds.size} 个箱号</span>
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={uploadingUnboundFile}
+                onClick={() => unboundFileInputRef.current?.click()}
+              >
+                {uploadingUnboundFile ? "上传中..." : "上传入仓文件到未绑定池"}
+              </Button>
               <Select value={targetWaybillId} onValueChange={setTargetWaybillId}>
                 <SelectTrigger className="w-72">
                   <SelectValue placeholder="选择目标提单入仓号" />
@@ -498,6 +574,7 @@ export default function WaybillsPage() {
                 <TR>
                   <TH>选择</TH>
                   <TH>外箱条码</TH>
+                  <TH>来源</TH>
                   <TH>箱内提单数</TH>
                   <TH>首个仓库提单号码</TH>
                   <TH>品名</TH>
@@ -520,6 +597,13 @@ export default function WaybillsPage() {
                       />
                     </TD>
                     <TD className="font-medium">{item.box_no}</TD>
+                    <TD>
+                      {item.never_bound_direct_upload ? (
+                        <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-800">
+                          从未绑定过任何提单
+                        </span>
+                      ) : null}
+                    </TD>
                     <TD>{item.items?.length || 0}</TD>
                     <TD>{compact(item.warehouse_waybill_no)}</TD>
                     <TD>{compact(item.goods_name)}</TD>
