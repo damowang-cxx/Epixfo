@@ -1,8 +1,8 @@
 from datetime import date, datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
-from app.models.enums import UserRoleCode
+from app.models.enums import UserRoleCode, WaybillLifecycleStatus
 from app.schemas.user import RoleOut
 
 
@@ -47,5 +47,18 @@ class PresenceUserSessionOut(BaseModel):
     effective_logout_at: datetime | None = None
     duration_seconds: int
     status: str
+    ip_address: str | None = None
+    user_agent: str | None = None
+
+
+class PresenceWaybillViewLogOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    user_id: int
+    waybill_id: int | None = None
+    waybill_no: str
+    lifecycle_status: WaybillLifecycleStatus | None = None
+    viewed_at: datetime
     ip_address: str | None = None
     user_agent: str | None = None

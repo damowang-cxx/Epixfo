@@ -52,6 +52,31 @@ class BoardService:
         items = list(self.db.scalars(query.offset(pagination.offset).limit(pagination.page_size)))
         return items, total, pagination.page, pagination.page_size
 
+    def list_bind_candidates(
+        self,
+        *,
+        page: int,
+        page_size: int,
+        current_user: User,
+        waybill_no: str | None = None,
+        consignee_contact_id: int | None = None,
+    ) -> tuple[list[AirWaybill], int, int, int]:
+        PermissionService.assert_waybill_write(current_user)
+        pagination = normalize_pagination(page, page_size)
+        query = select(AirWaybill).where(
+            AirWaybill.board_id.is_(None),
+            AirWaybill.lifecycle_status.in_(ALLOWED_BOARD_LIFECYCLE_STATUSES),
+        )
+        cleaned_waybill_no = (waybill_no or "").strip()
+        if cleaned_waybill_no:
+            query = query.where(AirWaybill.waybill_no.ilike(f"%{cleaned_waybill_no}%"))
+        if consignee_contact_id is not None:
+            query = query.where(AirWaybill.consignee_contact_id == consignee_contact_id)
+        query = query.order_by(AirWaybill.consignee_contact_id, AirWaybill.created_at.desc(), AirWaybill.id.desc())
+        total = int(self.db.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0)
+        items = list(self.db.scalars(query.offset(pagination.offset).limit(pagination.page_size)))
+        return items, total, pagination.page, pagination.page_size
+
     def get(self, board_id: int, current_user: User) -> WaybillBoard:
         PermissionService.assert_waybill_write(current_user)
         board = self._get(board_id)

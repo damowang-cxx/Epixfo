@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from decimal import Decimal
 
 from app.core.platform_patch import patch_platform_wmi
@@ -8,10 +8,10 @@ from app.core.platform_patch import patch_platform_wmi
 patch_platform_wmi()
 
 from sqlalchemy import select, update
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.exceptions import bad_request, forbidden, not_found
-from app.models import AirWaybill, Box, BoxDocument, User, WarehouseReceipt, WaybillPlan
+from app.models import AirWaybill, Box, BoxDocument, User, WarehouseReceipt, WaybillCustomsAccessGrant, WaybillPlan, WaybillViewLog
 from app.models.enums import AlertLevel, UserRoleCode, WaybillLifecycleStatus
 from app.repositories.waybill_repository import WaybillRepository
 from app.schemas.waybill import ManualStatusRequest, WaybillCreate, WaybillStatusCount, WaybillUpdate
@@ -47,6 +47,7 @@ class WaybillService:
         prefix, carrier_code, _adapter_code = self.carriers.identify_waybill(waybill_no)
         agent_snapshot = self._resolve_agent_snapshot(payload.carrier_agent_id, carrier_code)
         consignee_snapshot = self._resolve_consignee_snapshot(payload.consignee_contact_id)
+        self._validate_customs_staff_id(payload.customs_staff_id)
         plan_data = {field: getattr(payload, field) for field in PLAN_FIELDS}
         first_monitor_at, next_query_at = compute_monitor_window(plan_data.get("planned_flight_date"))
         monitor_enabled = True
@@ -111,6 +112,8 @@ class WaybillService:
                     waybill.consignee = None
             else:
                 waybill.consignee_contact_id, waybill.consignee = consignee_snapshot
+        if "customs_staff_id" in data:
+            self._validate_customs_staff_id(data["customs_staff_id"])
         for key, value in data.items():
             if key in {"include_tc", "notify_pickup"} and value is None:
                 continue
@@ -137,12 +140,39 @@ class WaybillService:
             return waybill
         if UserRoleCode.CUSTOMER_SERVICE.value in roles and waybill.lifecycle_status in VISIBLE_TO_CUSTOMER_SERVICE:
             return waybill
-        if UserRoleCode.CUSTOMS_STAFF.value in roles and waybill.plan and waybill.plan.planned_flight_date:
-            today = local_now().date()
-            if today <= waybill.plan.planned_flight_date <= today + timedelta(days=3):
+        if UserRoleCode.CUSTOMS_STAFF.value in roles and waybill.lifecycle_status in VISIBLE_TO_CUSTOMER_SERVICE:
+            if waybill.customs_staff_id == current_user.id or self._has_customs_access(waybill.id, current_user.id):
                 return waybill
         raise forbidden()
         return waybill
+
+    def request_customs_access(self, waybill_no: str, current_user: User) -> AirWaybill:
+        PermissionService.require_any(current_user, {UserRoleCode.CUSTOMS_STAFF})
+        normalized_no = normalize_waybill_no(waybill_no)
+        waybill = self.repo.get_by_no(normalized_no)
+        if waybill is None:
+            raise not_found("Waybill not found")
+        if waybill.lifecycle_status == WaybillLifecycleStatus.VOIDED:
+            raise bad_request("voided_waybill_not_available")
+        if waybill.lifecycle_status not in VISIBLE_TO_CUSTOMER_SERVICE:
+            raise bad_request("waybill_not_available_for_customs")
+        if waybill.customs_staff_id != current_user.id and not self._has_customs_access(waybill.id, current_user.id):
+            self.db.add(WaybillCustomsAccessGrant(waybill_id=waybill.id, user_id=current_user.id))
+            self.db.commit()
+        return self.repo.get(waybill.id) or waybill
+
+    def record_view(self, waybill: AirWaybill, current_user: User, ip_address: str | None, user_agent: str | None) -> None:
+        self.db.add(
+            WaybillViewLog(
+                user_id=current_user.id,
+                waybill_id=waybill.id,
+                waybill_no=waybill.waybill_no,
+                lifecycle_status=waybill.lifecycle_status,
+                ip_address=ip_address,
+                user_agent=user_agent,
+            )
+        )
+        self.db.commit()
 
     def list(
         self,
@@ -305,3 +335,22 @@ class WaybillService:
         snapshot_source = contact.name or (contact.consignee.name if contact.consignee else "")
         snapshot = snapshot_source[:255]
         return contact.id, snapshot
+
+    def _validate_customs_staff_id(self, customs_staff_id: int | None) -> None:
+        if customs_staff_id is None:
+            return
+        user = self.db.scalar(select(User).options(selectinload(User.roles)).where(User.id == customs_staff_id))
+        if user is None:
+            raise bad_request("customs_staff_not_found")
+        if not user.is_active or not PermissionService.has_role(user, UserRoleCode.CUSTOMS_STAFF):
+            raise bad_request("invalid_customs_staff")
+
+    def _has_customs_access(self, waybill_id: int, user_id: int) -> bool:
+        return bool(
+            self.db.scalar(
+                select(WaybillCustomsAccessGrant.id).where(
+                    WaybillCustomsAccessGrant.waybill_id == waybill_id,
+                    WaybillCustomsAccessGrant.user_id == user_id,
+                )
+            )
+        )

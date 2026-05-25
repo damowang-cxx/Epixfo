@@ -15,6 +15,7 @@ from app.schemas.presence import (
     OnlineUserOut,
     PresenceUserSessionOut,
     PresenceUserStatusOut,
+    PresenceWaybillViewLogOut,
 )
 from app.services.permission_service import PermissionService
 from app.services.presence_service import DEFAULT_SESSION_DAYS, PresenceService
@@ -49,6 +50,17 @@ def user_sessions(
 ):
     PermissionService.require_any(current_user, {UserRoleCode.ADMIN})
     return PresenceService(db).user_sessions(user_id, days)
+
+
+@router.get("/users/{user_id}/waybill-views", response_model=list[PresenceWaybillViewLogOut])
+def user_waybill_views(
+    user_id: int,
+    days: int = Query(DEFAULT_SESSION_DAYS, ge=1, le=365),
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    PermissionService.require_any(current_user, {UserRoleCode.ADMIN})
+    return PresenceService(db).waybill_views(user_id, days)
 
 
 @router.get("/users/{user_id}/daily-stats", response_model=list[DailyOnlineStatOut])

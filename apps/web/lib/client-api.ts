@@ -16,7 +16,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   const response = await fetch(`/api/backend${path}`, {
     ...init,
-    headers
+    headers,
+    cache: "no-store"
   });
 
   if (response.status === 401) {

@@ -13,11 +13,13 @@ from app.models.waybill import (
     AirWaybill,
     WaybillAssemblyEvent,
     WaybillBoard,
+    WaybillCustomsAccessGrant,
     WaybillOfficialFlightSegment,
     WaybillOfficialInfo,
     WaybillPlan,
     WaybillQuerySnapshot,
     WaybillStatusEvent,
+    WaybillViewLog,
 )
 
 __all__ = [
@@ -45,9 +47,11 @@ __all__ = [
     "WaybillAlert",
     "WaybillAssemblyEvent",
     "WaybillBoard",
+    "WaybillCustomsAccessGrant",
     "WaybillOfficialFlightSegment",
     "WaybillOfficialInfo",
     "WaybillPlan",
     "WaybillQuerySnapshot",
     "WaybillStatusEvent",
+    "WaybillViewLog",
 ]

@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.exceptions import not_found
-from app.models import User, UserDailyOnlineStats, UserLoginLog, UserPresenceLog
+from app.models import User, UserDailyOnlineStats, UserLoginLog, UserPresenceLog, WaybillViewLog
 from app.models.enums import UserRoleCode
 from app.services.permission_service import PermissionService
 from app.utils.datetime_utils import local_now, utc_now
@@ -127,6 +127,20 @@ class PresenceService:
                 select(UserDailyOnlineStats)
                 .where(UserDailyOnlineStats.user_id == user_id)
                 .order_by(UserDailyOnlineStats.stat_date.desc())
+            )
+        )
+
+    def waybill_views(self, user_id: int, days: int = DEFAULT_SESSION_DAYS) -> list[WaybillViewLog]:
+        days = max(1, min(days, MAX_SESSION_DAYS))
+        user = self.db.scalar(select(User.id).where(User.id == user_id))
+        if user is None:
+            raise not_found("User not found")
+        since = utc_now() - timedelta(days=days)
+        return list(
+            self.db.scalars(
+                select(WaybillViewLog)
+                .where(WaybillViewLog.user_id == user_id, WaybillViewLog.viewed_at >= since)
+                .order_by(WaybillViewLog.viewed_at.desc(), WaybillViewLog.id.desc())
             )
         )
 

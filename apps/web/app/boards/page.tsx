@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Plus, Save, Trash2, Unlink } from "lucide-react";
 import { LifecycleBadge } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,7 @@ import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError, apiClient } from "@/lib/client-api";
 import { compact } from "@/lib/utils";
-import type { PageResponse, WaybillBoard } from "@/lib/types";
+import type { BoardWaybill, PageResponse, WaybillBoard } from "@/lib/types";
 
 function parseWaybillInput(value: string) {
   return value
@@ -25,6 +25,24 @@ function formatDecimal(value?: string | number | null) {
   const num = Number(value);
   if (!Number.isFinite(num)) return compact(value);
   return num.toFixed(3).replace(/\.?0+$/, "");
+}
+
+function sumBookedVolume(waybills: WaybillBoard["waybills"]) {
+  return waybills.reduce((total, item) => {
+    const value = Number(item.booked_volume);
+    return Number.isFinite(value) ? total + value : total;
+  }, 0);
+}
+
+function mergeWaybillInput(current: string, waybillNos: string[]) {
+  const merged: string[] = [];
+  const seen = new Set<string>();
+  for (const waybillNo of [...parseWaybillInput(current), ...waybillNos]) {
+    if (seen.has(waybillNo)) continue;
+    seen.add(waybillNo);
+    merged.push(waybillNo);
+  }
+  return merged.join("\n");
 }
 
 function formatApiError(error: unknown) {
@@ -44,19 +62,49 @@ export default function BoardsPage() {
   const [message, setMessage] = useState("");
   const [newActualBoardNo, setNewActualBoardNo] = useState("");
   const [newWaybillInput, setNewWaybillInput] = useState("");
+  const [candidateData, setCandidateData] = useState<PageResponse<BoardWaybill> | null>(null);
+  const [candidatePage, setCandidatePage] = useState(1);
+  const [candidateSearchDraft, setCandidateSearchDraft] = useState("");
+  const [candidateSearch, setCandidateSearch] = useState("");
+  const [selectedCandidateNos, setSelectedCandidateNos] = useState<string[]>([]);
   const [editingBoardId, setEditingBoardId] = useState<number | null>(null);
   const [actualDraft, setActualDraft] = useState("");
   const [appendBoardId, setAppendBoardId] = useState<number | null>(null);
   const [appendInput, setAppendInput] = useState("");
   const [saving, setSaving] = useState(false);
 
+  const appendBoard = useMemo(
+    () => (appendBoardId ? (data?.items || []).find((item) => item.id === appendBoardId) || null : null),
+    [appendBoardId, data?.items]
+  );
+  const appendConsigneeContactId = appendBoard?.consignee_contact_id ?? null;
+
   const load = useCallback(() => {
     apiClient.get<PageResponse<WaybillBoard>>(`/boards?page=${page}&page_size=20`).then(setData);
   }, [page]);
 
+  const loadCandidates = useCallback(() => {
+    const params = new URLSearchParams({
+      page: String(candidatePage),
+      page_size: "20"
+    });
+    if (candidateSearch) params.set("waybill_no", candidateSearch);
+    if (appendConsigneeContactId) {
+      params.set("consignee_contact_id", String(appendConsigneeContactId));
+    }
+    apiClient
+      .get<PageResponse<BoardWaybill>>(`/boards/bind-candidates?${params.toString()}`)
+      .then(setCandidateData)
+      .catch((error) => setMessage(formatApiError(error)));
+  }, [appendConsigneeContactId, candidatePage, candidateSearch]);
+
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    loadCandidates();
+  }, [loadCandidates]);
 
   async function createBoard() {
     const waybill_nos = parseWaybillInput(newWaybillInput);
@@ -73,8 +121,10 @@ export default function BoardsPage() {
       setMessage(`已创建板号 ${board.board_no}。`);
       setNewActualBoardNo("");
       setNewWaybillInput("");
+      setSelectedCandidateNos([]);
       setPage(1);
       load();
+      loadCandidates();
     } catch (error) {
       setMessage(formatApiError(error));
     } finally {
@@ -82,9 +132,78 @@ export default function BoardsPage() {
     }
   }
 
+  function searchCandidates() {
+    setCandidatePage(1);
+    setCandidateSearch(candidateSearchDraft.trim());
+  }
+
+  function clearCandidateSearch() {
+    setCandidateSearchDraft("");
+    setCandidateSearch("");
+    setCandidatePage(1);
+  }
+
+  function toggleCandidate(waybillNo: string) {
+    setSelectedCandidateNos((prev) =>
+      prev.includes(waybillNo) ? prev.filter((item) => item !== waybillNo) : [...prev, waybillNo]
+    );
+  }
+
+  function toggleCurrentCandidatePage() {
+    const pageWaybillNos = (candidateData?.items || []).map((item) => item.waybill_no);
+    if (!pageWaybillNos.length) return;
+    const allSelected = pageWaybillNos.every((waybillNo) => selectedCandidateNos.includes(waybillNo));
+    setSelectedCandidateNos((prev) => {
+      if (allSelected) {
+        return prev.filter((waybillNo) => !pageWaybillNos.includes(waybillNo));
+      }
+      const next = [...prev];
+      for (const waybillNo of pageWaybillNos) {
+        if (!next.includes(waybillNo)) next.push(waybillNo);
+      }
+      return next;
+    });
+  }
+
+  function addSelectedToNewBoardInput() {
+    if (!selectedCandidateNos.length) {
+      setMessage("请先选择至少一个可绑定提单。");
+      return;
+    }
+    setNewWaybillInput((prev) => mergeWaybillInput(prev, selectedCandidateNos));
+    setMessage(`已将 ${selectedCandidateNos.length} 个提单号加入新建板号输入框。`);
+  }
+
+  function addSelectedToAppendInput() {
+    if (!selectedCandidateNos.length) {
+      setMessage("请先选择至少一个可绑定提单。");
+      return;
+    }
+    if (!appendBoardId) {
+      setMessage("请先在板号列表中点击“追加提单”。");
+      return;
+    }
+    setAppendInput((prev) => mergeWaybillInput(prev, selectedCandidateNos));
+    setMessage(`已将 ${selectedCandidateNos.length} 个提单号加入追加提单输入框。`);
+  }
+
   function startEdit(board: WaybillBoard) {
     setEditingBoardId(board.id);
     setActualDraft(board.actual_board_no || "");
+  }
+
+  function startAppend(board: WaybillBoard) {
+    setAppendBoardId(board.id);
+    setAppendInput("");
+    setSelectedCandidateNos([]);
+    setCandidatePage(1);
+  }
+
+  function cancelAppend() {
+    setAppendBoardId(null);
+    setAppendInput("");
+    setSelectedCandidateNos([]);
+    setCandidatePage(1);
   }
 
   async function saveActualBoardNo(board: WaybillBoard) {
@@ -119,8 +238,7 @@ export default function BoardsPage() {
         prev ? { ...prev, items: prev.items.map((item) => (item.id === updated.id ? updated : item)) } : prev
       );
       setMessage(`板号 ${updated.board_no} 已追加提单。`);
-      setAppendBoardId(null);
-      setAppendInput("");
+      cancelAppend();
     } catch (error) {
       setMessage(formatApiError(error));
     } finally {
@@ -133,8 +251,26 @@ export default function BoardsPage() {
     try {
       setSaving(true);
       await apiClient.delete<void>(`/boards/${board.id}/waybills/${waybillId}`);
+      setData((prev) =>
+        prev
+          ? {
+              ...prev,
+              items: prev.items.map((item) => {
+                if (item.id !== board.id) return item;
+                const waybills = item.waybills.filter((waybill) => waybill.id !== waybillId);
+                return {
+                  ...item,
+                  waybills,
+                  member_count: waybills.length,
+                  total_booked_volume: sumBookedVolume(waybills)
+                };
+              })
+            }
+          : prev
+      );
       setMessage(`提单 ${waybillNo} 已解绑。`);
       load();
+      loadCandidates();
     } catch (error) {
       setMessage(formatApiError(error));
     } finally {
@@ -147,14 +283,32 @@ export default function BoardsPage() {
     try {
       setSaving(true);
       await apiClient.delete<void>(`/boards/${board.id}`);
+      const shouldMoveToPreviousPage = (data?.items.length || 0) <= 1 && page > 1;
+      setData((prev) =>
+        prev
+          ? {
+              ...prev,
+              items: prev.items.filter((item) => item.id !== board.id),
+              total: Math.max(0, prev.total - 1)
+            }
+          : prev
+      );
       setMessage(`板号 ${board.board_no} 已删除。`);
-      load();
+      if (shouldMoveToPreviousPage) {
+        setPage((prev) => Math.max(1, prev - 1));
+      } else {
+        load();
+      }
     } catch (error) {
       setMessage(formatApiError(error));
     } finally {
       setSaving(false);
     }
   }
+
+  const candidateItems = candidateData?.items || [];
+  const allCurrentCandidatePageSelected =
+    candidateItems.length > 0 && candidateItems.every((item) => selectedCandidateNos.includes(item.waybill_no));
 
   return (
     <>
@@ -185,6 +339,114 @@ export default function BoardsPage() {
         </div>
       </Panel>
 
+      <Panel title="可绑定提单" className="mt-4">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              value={candidateSearchDraft}
+              onChange={(event) => setCandidateSearchDraft(event.target.value)}
+              placeholder="搜索提单号"
+              className="w-56"
+            />
+            <Button type="button" variant="secondary" size="sm" onClick={searchCandidates}>
+              搜索
+            </Button>
+            <Button type="button" variant="ghost" size="sm" onClick={clearCandidateSearch}>
+              清空
+            </Button>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-sm text-slate-500">
+            <span>已选 {selectedCandidateNos.length} 个</span>
+            {appendBoard ? <span>当前追加：{appendBoard.board_no}</span> : null}
+          </div>
+        </div>
+        <div className="mb-3 flex flex-wrap gap-2">
+          <Button type="button" variant="secondary" size="sm" onClick={addSelectedToNewBoardInput}>
+            加入新建板号
+          </Button>
+          <Button type="button" variant="secondary" size="sm" disabled={!appendBoardId} onClick={addSelectedToAppendInput}>
+            加入正在追加的板号
+          </Button>
+          <Button type="button" variant="ghost" size="sm" onClick={() => setSelectedCandidateNos([])}>
+            清空选择
+          </Button>
+        </div>
+        <p className="mb-3 text-xs text-slate-500">
+          仅显示未绑定板号且处于存活周期的提单。追加提单时，候选列表会按该板号收件人自动筛选。
+        </p>
+        <Table>
+          <THead>
+            <TR>
+              <TH>
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-slate-300 accent-purple-700"
+                  checked={allCurrentCandidatePageSelected}
+                  onChange={toggleCurrentCandidatePage}
+                  aria-label="选择当前页可绑定提单"
+                />
+              </TH>
+              <TH>提单号</TH>
+              <TH>收件人</TH>
+              <TH>订舱方数</TH>
+              <TH>生命周期</TH>
+            </TR>
+          </THead>
+          <TBody>
+            {candidateItems.length ? (
+              candidateItems.map((waybill) => (
+                <TR key={waybill.id}>
+                  <TD>
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 rounded border-slate-300 accent-purple-700"
+                      checked={selectedCandidateNos.includes(waybill.waybill_no)}
+                      onChange={() => toggleCandidate(waybill.waybill_no)}
+                      aria-label={`选择提单 ${waybill.waybill_no}`}
+                    />
+                  </TD>
+                  <TD className="font-medium">{waybill.waybill_no}</TD>
+                  <TD>{compact(waybill.consignee)}</TD>
+                  <TD>{formatDecimal(waybill.booked_volume)}</TD>
+                  <TD>
+                    <LifecycleBadge value={waybill.lifecycle_status} />
+                  </TD>
+                </TR>
+              ))
+            ) : (
+              <TR>
+                <TD colSpan={5} className="text-slate-500">
+                  暂无可绑定提单
+                </TD>
+              </TR>
+            )}
+          </TBody>
+        </Table>
+        <div className="mt-4 flex items-center justify-between text-sm text-slate-500">
+          <span>共 {candidateData?.total ?? 0} 个可绑定提单</span>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              disabled={candidatePage <= 1}
+              onClick={() => setCandidatePage((prev) => prev - 1)}
+            >
+              上一页
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              disabled={!candidateData || candidatePage * candidateData.page_size >= candidateData.total}
+              onClick={() => setCandidatePage((prev) => prev + 1)}
+            >
+              下一页
+            </Button>
+          </div>
+        </div>
+      </Panel>
+
       <Panel title="板号列表" className="mt-4">
         <div className="space-y-4">
           {(data?.items || []).map((board) => (
@@ -201,7 +463,7 @@ export default function BoardsPage() {
                   <Button type="button" variant="secondary" size="sm" onClick={() => startEdit(board)}>
                     编辑实际板号
                   </Button>
-                  <Button type="button" variant="secondary" size="sm" onClick={() => setAppendBoardId(board.id)}>
+                  <Button type="button" variant="secondary" size="sm" onClick={() => startAppend(board)}>
                     追加提单
                   </Button>
                   <Button type="button" variant="ghost" size="sm" disabled={saving || board.member_count > 0} onClick={() => void deleteBoard(board)}>
@@ -240,7 +502,7 @@ export default function BoardsPage() {
                   <Button type="button" size="sm" disabled={saving} onClick={() => void appendWaybills(board)}>
                     绑定
                   </Button>
-                  <Button type="button" variant="ghost" size="sm" onClick={() => setAppendBoardId(null)}>
+                  <Button type="button" variant="ghost" size="sm" onClick={cancelAppend}>
                     取消
                   </Button>
                 </div>

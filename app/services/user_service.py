@@ -19,6 +19,8 @@ from app.models import (
     UserRefreshToken,
     UserRole,
     WarehouseReceipt,
+    WaybillCustomsAccessGrant,
+    WaybillViewLog,
     WaybillAlert,
     WaybillBoard,
 )
@@ -152,6 +154,7 @@ class UserService:
             update(AirWaybill).where(AirWaybill.document_operator_id == user_id).values(document_operator_id=None)
         )
         self.db.execute(update(AirWaybill).where(AirWaybill.route_staff_id == user_id).values(route_staff_id=None))
+        self.db.execute(update(AirWaybill).where(AirWaybill.customs_staff_id == user_id).values(customs_staff_id=None))
         self.db.execute(update(AirWaybill).where(AirWaybill.created_by == user_id).values(created_by=None))
         self.db.execute(update(AirWaybill).where(AirWaybill.updated_by == user_id).values(updated_by=None))
         self.db.execute(update(WaybillBoard).where(WaybillBoard.created_by == user_id).values(created_by=None))
@@ -168,3 +171,5 @@ class UserService:
         self.db.execute(delete(UserLoginLog).where(UserLoginLog.user_id == user_id))
         self.db.execute(delete(UserPresenceLog).where(UserPresenceLog.user_id == user_id))
         self.db.execute(delete(UserDailyOnlineStats).where(UserDailyOnlineStats.user_id == user_id))
+        self.db.execute(delete(WaybillCustomsAccessGrant).where(WaybillCustomsAccessGrant.user_id == user_id))
+        self.db.execute(delete(WaybillViewLog).where(WaybillViewLog.user_id == user_id))

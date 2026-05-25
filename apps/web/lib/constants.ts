@@ -35,14 +35,14 @@ export const roleLabels: Record<string, string> = {
   admin: "管理员",
   route_staff: "航线排仓",
   customer_service: "客服",
-  customs_staff: "出口报关"
+  customs_staff: "清关"
 };
 
 export const roleOptions = [
   { value: "admin", label: "管理员" },
   { value: "route_staff", label: "航线排仓人员" },
   { value: "customer_service", label: "客服人员" },
-  { value: "customs_staff", label: "出口报关人员" }
+  { value: "customs_staff", label: "清关人员" }
 ] as const;
 
 export const carrierAdapterOptions = [

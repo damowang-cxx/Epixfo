@@ -27,9 +27,11 @@ _MODEL_EXPORTS = {
     "WaybillAssemblyEvent": ("app.models.waybill", "WaybillAssemblyEvent"),
     "WaybillOfficialFlightSegment": ("app.models.waybill", "WaybillOfficialFlightSegment"),
     "WaybillOfficialInfo": ("app.models.waybill", "WaybillOfficialInfo"),
+    "WaybillCustomsAccessGrant": ("app.models.waybill", "WaybillCustomsAccessGrant"),
     "WaybillPlan": ("app.models.waybill", "WaybillPlan"),
     "WaybillQuerySnapshot": ("app.models.waybill", "WaybillQuerySnapshot"),
     "WaybillStatusEvent": ("app.models.waybill", "WaybillStatusEvent"),
+    "WaybillViewLog": ("app.models.waybill", "WaybillViewLog"),
 }
 
 

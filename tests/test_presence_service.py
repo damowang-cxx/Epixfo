@@ -58,7 +58,7 @@ def _seed_roles(db: Session) -> dict[UserRoleCode, Role]:
         UserRoleCode.ADMIN: Role(id=1, code=UserRoleCode.ADMIN, name="管理员"),
         UserRoleCode.ROUTE_STAFF: Role(id=2, code=UserRoleCode.ROUTE_STAFF, name="航线"),
         UserRoleCode.CUSTOMER_SERVICE: Role(id=3, code=UserRoleCode.CUSTOMER_SERVICE, name="客服"),
-        UserRoleCode.CUSTOMS_STAFF: Role(id=4, code=UserRoleCode.CUSTOMS_STAFF, name="报关"),
+        UserRoleCode.CUSTOMS_STAFF: Role(id=4, code=UserRoleCode.CUSTOMS_STAFF, name="清关"),
     }
     db.add_all(roles.values())
     db.flush()

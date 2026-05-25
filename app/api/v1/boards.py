@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
-from app.schemas.board import BoardCreate, BoardOut, BoardUpdate, BoardWaybillBindRequest
+from app.schemas.board import BoardCreate, BoardOut, BoardUpdate, BoardWaybillBindRequest, BoardWaybillOut
 from app.schemas.common import PageResponse
 from app.services.board_service import BoardService
 
@@ -23,6 +23,25 @@ def list_boards(
     db: Session = Depends(get_db),
 ):
     items, total, page, page_size = BoardService(db).list(page=page, page_size=page_size, current_user=current_user)
+    return PageResponse(items=items, total=total, page=page, page_size=page_size)
+
+
+@router.get("/bind-candidates", response_model=PageResponse[BoardWaybillOut])
+def list_board_bind_candidates(
+    waybill_no: str | None = None,
+    consignee_contact_id: int | None = None,
+    page: int = 1,
+    page_size: int = 20,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    items, total, page, page_size = BoardService(db).list_bind_candidates(
+        page=page,
+        page_size=page_size,
+        current_user=current_user,
+        waybill_no=waybill_no,
+        consignee_contact_id=consignee_contact_id,
+    )
     return PageResponse(items=items, total=total, page=page, page_size=page_size)
 
 

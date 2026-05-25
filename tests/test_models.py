@@ -27,6 +27,8 @@ def test_core_model_tables_are_registered() -> None:
         "waybill_query_snapshots",
         "waybill_alerts",
         "waybill_boards",
+        "waybill_customs_access_grants",
+        "waybill_view_logs",
         "user_refresh_tokens",
         "user_login_logs",
         "user_presence_logs",
@@ -58,6 +60,7 @@ def test_waybill_table_has_monitoring_columns() -> None:
     assert "next_query_at" in waybill_columns
     assert "consecutive_query_failures" in waybill_columns
     assert "board_id" in waybill_columns
+    assert "customs_staff_id" in waybill_columns
 
 
 def test_waybill_board_table_has_expected_columns() -> None:

@@ -1,15 +1,12 @@
-from datetime import timedelta
-
 from app.core.platform_patch import patch_platform_wmi
 
 patch_platform_wmi()
 
-from sqlalchemy import Select
+from sqlalchemy import Select, exists, or_
 
 from app.core.exceptions import forbidden
-from app.models import AirWaybill, User, WaybillPlan
+from app.models import AirWaybill, User, WaybillCustomsAccessGrant
 from app.models.enums import UserRoleCode, WaybillLifecycleStatus
-from app.utils.datetime_utils import local_now
 
 
 VISIBLE_TO_CUSTOMER_SERVICE = {
@@ -72,10 +69,13 @@ class PermissionService:
         if UserRoleCode.CUSTOMER_SERVICE.value in roles:
             return query.where(AirWaybill.lifecycle_status.in_(VISIBLE_TO_CUSTOMER_SERVICE))
         if UserRoleCode.CUSTOMS_STAFF.value in roles:
-            today = local_now().date()
-            return query.join(WaybillPlan).where(
-                WaybillPlan.planned_flight_date >= today,
-                WaybillPlan.planned_flight_date <= today + timedelta(days=3),
+            granted = exists().where(
+                WaybillCustomsAccessGrant.waybill_id == AirWaybill.id,
+                WaybillCustomsAccessGrant.user_id == user.id,
+            )
+            return query.where(
+                AirWaybill.lifecycle_status.in_(VISIBLE_TO_CUSTOMER_SERVICE),
+                or_(AirWaybill.customs_staff_id == user.id, granted),
             )
         return query.where(False)
 

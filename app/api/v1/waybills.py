@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from fastapi import APIRouter, Depends, File, Form, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
 
 from app.core.platform_patch import patch_platform_wmi
 
@@ -8,7 +8,7 @@ patch_platform_wmi()
 
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user
+from app.api.deps import client_ip, get_current_user, user_agent
 from app.core.database import get_db
 from app.models.enums import AlertLevel, UserRoleCode, WaybillLifecycleStatus
 from app.repositories.waybill_repository import WaybillRepository
@@ -18,6 +18,7 @@ from app.schemas.common import PageResponse
 from app.schemas.lookup import WaybillLookupRequest, WaybillLookupResponse
 from app.schemas.waybill import (
     ManualStatusRequest,
+    WaybillAccessRequest,
     WaybillAssemblyEventOut,
     WaybillCreate,
     WaybillOfficialFlightSegmentOut,
@@ -97,9 +98,26 @@ async def lookup_waybill(
     return await WaybillLookupService(db).lookup(payload.waybill_no, adapter_code=payload.adapter_code)
 
 
+@router.post("/access-requests", response_model=WaybillOut)
+def request_waybill_access(
+    payload: WaybillAccessRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    waybill = WaybillService(db).request_customs_access(payload.waybill_no, current_user)
+    return _waybill_response(waybill, current_user)
+
+
 @router.get("/{waybill_id}", response_model=WaybillOut)
-def get_waybill(waybill_id: int, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
-    waybill = WaybillService(db).get_visible(waybill_id, current_user)
+def get_waybill(
+    waybill_id: int,
+    request: Request,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    service = WaybillService(db)
+    waybill = service.get_visible(waybill_id, current_user)
+    service.record_view(waybill, current_user, client_ip(request), user_agent(request))
     return _waybill_response(waybill, current_user)
 
 

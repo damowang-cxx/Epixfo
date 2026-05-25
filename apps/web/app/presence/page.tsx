@@ -9,10 +9,10 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
-import { roleLabels } from "@/lib/constants";
+import { lifecycleLabels, roleLabels } from "@/lib/constants";
 import { apiClient } from "@/lib/client-api";
 import { cn, formatDateTime } from "@/lib/utils";
-import type { PresenceSessionStatus, PresenceUserSession, PresenceUserStatus } from "@/lib/types";
+import type { PresenceSessionStatus, PresenceUserSession, PresenceUserStatus, PresenceWaybillViewLog } from "@/lib/types";
 
 const REFRESH_INTERVAL_MS = 30_000;
 
@@ -63,8 +63,10 @@ export default function PresencePage() {
   const [error, setError] = useState("");
   const [sessionUser, setSessionUser] = useState<PresenceUserStatus | null>(null);
   const [sessions, setSessions] = useState<PresenceUserSession[]>([]);
+  const [waybillViews, setWaybillViews] = useState<PresenceWaybillViewLog[]>([]);
   const [sessionLoading, setSessionLoading] = useState(false);
   const [sessionError, setSessionError] = useState("");
+  const [waybillViewError, setWaybillViewError] = useState("");
   const rowRefs = useRef(new Map<number, HTMLTableRowElement>());
   const rowPositions = useRef(new Map<number, number>());
 
@@ -116,13 +118,20 @@ export default function PresencePage() {
   async function openSessions(user: PresenceUserStatus) {
     setSessionUser(user);
     setSessions([]);
+    setWaybillViews([]);
     setSessionError("");
+    setWaybillViewError("");
     setSessionLoading(true);
     try {
-      const data = await apiClient.get<PresenceUserSession[]>(`/presence/users/${user.id}/sessions?days=30`);
-      setSessions(data);
+      const [sessionRows, viewRows] = await Promise.all([
+        apiClient.get<PresenceUserSession[]>(`/presence/users/${user.id}/sessions?days=30`),
+        apiClient.get<PresenceWaybillViewLog[]>(`/presence/users/${user.id}/waybill-views?days=30`)
+      ]);
+      setSessions(sessionRows);
+      setWaybillViews(viewRows);
     } catch (exc) {
       setSessionError(exc instanceof Error ? exc.message : "读取上线时段失败");
+      setWaybillViewError(exc instanceof Error ? exc.message : "读取提单查看记录失败");
     } finally {
       setSessionLoading(false);
     }
@@ -245,7 +254,9 @@ export default function PresencePage() {
           if (!open) {
             setSessionUser(null);
             setSessions([]);
+            setWaybillViews([]);
             setSessionError("");
+            setWaybillViewError("");
           }
         }}
       >
@@ -259,6 +270,7 @@ export default function PresencePage() {
           </div>
           {sessionError ? <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{sessionError}</div> : null}
           <div className="mt-4">
+            <div className="mb-2 text-sm font-semibold text-slate-900">上线时段</div>
             {sessions.length ? (
               <Table>
                 <THead>
@@ -288,6 +300,40 @@ export default function PresencePage() {
               <div className="py-10 text-center text-sm text-slate-500">正在加载上线时段...</div>
             ) : (
               <EmptyState title="暂无上线时段" description="该用户最近 30 天暂无登录记录。" />
+            )}
+          </div>
+          <div className="mt-6">
+            <div className="mb-2 text-sm font-semibold text-slate-900">提单查看记录</div>
+            {waybillViewError ? (
+              <div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{waybillViewError}</div>
+            ) : null}
+            {waybillViews.length ? (
+              <Table>
+                <THead>
+                  <TR>
+                    <TH>查看时间</TH>
+                    <TH>提单号</TH>
+                    <TH>生命周期</TH>
+                    <TH>IP</TH>
+                    <TH>客户端</TH>
+                  </TR>
+                </THead>
+                <TBody>
+                  {waybillViews.map((item) => (
+                    <TR key={item.id}>
+                      <TD>{formatDateTime(item.viewed_at)}</TD>
+                      <TD className="font-medium">{item.waybill_no}</TD>
+                      <TD>{item.lifecycle_status ? lifecycleLabels[item.lifecycle_status] || item.lifecycle_status : "-"}</TD>
+                      <TD>{item.ip_address || "-"}</TD>
+                      <TD className="max-w-[260px] truncate" title={item.user_agent || undefined}>{item.user_agent || "-"}</TD>
+                    </TR>
+                  ))}
+                </TBody>
+              </Table>
+            ) : sessionLoading ? (
+              <div className="py-8 text-center text-sm text-slate-500">正在加载提单查看记录...</div>
+            ) : (
+              <EmptyState title="暂无提单查看记录" description="该用户最近 30 天暂无提单详情访问记录。" />
             )}
           </div>
         </DialogContent>

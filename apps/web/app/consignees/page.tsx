@@ -278,8 +278,12 @@ export default function ConsigneesPage() {
     setContactError("");
     try {
       await apiClient.delete<void>(`/consignee-contacts/${item.id}`);
+      setContacts((prev) => prev.filter((contact) => contact.id !== item.id));
       if (editingContactId === item.id) {
         cancelContactEdit();
+      }
+      if (notifyContact?.id === item.id) {
+        closeNotifyDialog();
       }
       await reload();
     } catch (err) {

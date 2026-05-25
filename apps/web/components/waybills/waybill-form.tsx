@@ -12,7 +12,7 @@ import { Panel } from "@/components/ui/panel";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { apiClient } from "@/lib/client-api";
-import type { CarrierAgent, Consignee, ConsigneeContact, Waybill } from "@/lib/types";
+import type { CarrierAgent, Consignee, ConsigneeContact, User, Waybill } from "@/lib/types";
 
 type FormState = {
   waybill_no: string;
@@ -21,6 +21,7 @@ type FormState = {
   carrier_agent_id: string;
   warehouse_no: string;
   consignee_contact_id: string;
+  customs_staff_id: string;
   planned_flight_no: string;
   planned_flight_date: string;
   planned_destination: string;
@@ -95,6 +96,7 @@ function initialState(waybill?: Waybill): FormState {
     carrier_agent_id: waybill?.carrier_agent_id?.toString() || "",
     warehouse_no: waybill?.warehouse_no || "",
     consignee_contact_id: waybill?.consignee_contact_id?.toString() || "",
+    customs_staff_id: waybill?.customs_staff_id?.toString() || "",
     planned_flight_no: waybill?.plan?.planned_flight_no || "",
     planned_flight_date: waybill?.plan?.planned_flight_date || "",
     planned_destination: waybill?.plan?.planned_destination || "",
@@ -122,7 +124,7 @@ function payloadFromState(state: FormState, editing: boolean) {
   const payload: Record<string, string | number | boolean | null> = {};
   Object.entries(state).forEach(([key, value]) => {
     if (editing && key === "waybill_no") return;
-    if (key === "carrier_agent_id" || key === "consignee_contact_id") {
+    if (key === "carrier_agent_id" || key === "consignee_contact_id" || key === "customs_staff_id") {
       payload[key] = value === "" ? null : Number(value);
       return;
     }
@@ -175,16 +177,23 @@ export function WaybillForm({ waybill }: { waybill?: Waybill }) {
   const [agents, setAgents] = useState<CarrierAgent[]>([]);
   const [consignees, setConsignees] = useState<Consignee[]>([]);
   const [contacts, setContacts] = useState<ConsigneeContact[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
 
   useEffect(() => {
     apiClient.get<CarrierAgent[]>("/carrier-agents").then(setAgents).catch(() => setAgents([]));
     apiClient.get<Consignee[]>("/consignees").then(setConsignees).catch(() => setConsignees([]));
     apiClient.get<ConsigneeContact[]>("/consignee-contacts").then(setContacts).catch(() => setContacts([]));
+    apiClient.get<User[]>("/users").then(setUsers).catch(() => setUsers([]));
   }, []);
 
   const visibleAgents = agents.filter((agent) => agent.enabled || state.carrier_agent_id === String(agent.id));
   const consigneeNameById = new Map(consignees.map((c) => [c.id, c.name]));
   const visibleContacts = contacts.filter((c) => c.enabled || state.consignee_contact_id === String(c.id));
+  const visibleCustomsUsers = users.filter(
+    (user) =>
+      user.roles.some((role) => role.code === "customs_staff") &&
+      (user.is_active || state.customs_staff_id === String(user.id))
+  );
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -293,6 +302,28 @@ export function WaybillForm({ waybill }: { waybill?: Waybill }) {
                       </SelectItem>
                     );
                   })}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="customs_staff_id">指定清关人员</Label>
+              <Select
+                value={state.customs_staff_id || "__none__"}
+                onValueChange={(value) =>
+                  setState((prev) => ({ ...prev, customs_staff_id: value === "__none__" ? "" : value }))
+                }
+              >
+                <SelectTrigger id="customs_staff_id">
+                  <SelectValue placeholder="选择清关人员" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">不指定</SelectItem>
+                  {visibleCustomsUsers.map((user) => (
+                    <SelectItem key={user.id} value={String(user.id)}>
+                      {user.display_name || user.username}
+                      {!user.is_active ? "（已停用）" : ""}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>

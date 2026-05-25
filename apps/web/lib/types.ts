@@ -52,6 +52,13 @@ export interface User {
   updated_at: string;
 }
 
+export interface UserSummary {
+  id: number;
+  username: string;
+  display_name?: string | null;
+  is_active: boolean;
+}
+
 export interface WaybillPlan {
   id: number;
   planned_flight_no?: string | null;
@@ -78,6 +85,8 @@ export interface Waybill {
   consignee?: string | null;
   document_operator_id?: number | null;
   route_staff_id?: number | null;
+  customs_staff_id?: number | null;
+  customs_staff?: UserSummary | null;
   data_charge?: string | number | null;
   delivery_time?: string | null;
   document_cutoff_time?: string | null;
@@ -454,6 +463,17 @@ export interface PresenceUserSession {
   effective_logout_at?: string | null;
   duration_seconds: number;
   status: PresenceSessionStatus;
+  ip_address?: string | null;
+  user_agent?: string | null;
+}
+
+export interface PresenceWaybillViewLog {
+  id: number;
+  user_id: number;
+  waybill_id?: number | null;
+  waybill_no: string;
+  lifecycle_status?: LifecycleStatus | null;
+  viewed_at: string;
   ip_address?: string | null;
   user_agent?: string | null;
 }

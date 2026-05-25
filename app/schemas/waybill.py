@@ -8,6 +8,7 @@ from app.models.enums import AlertLevel, CarrierQueryMethod, OfficialEventType, 
 from app.schemas.board import BoardSummaryOut
 from app.schemas.carrier import CarrierAgentOut
 from app.schemas.consignee import ConsigneeContactOut
+from app.schemas.user import UserSummaryOut
 
 
 class WaybillPlanIn(BaseModel):
@@ -26,6 +27,7 @@ class WaybillBaseIn(BaseModel):
     consignee_contact_id: int | None = None
     document_operator_id: int | None = None
     route_staff_id: int | None = None
+    customs_staff_id: int | None = None
     data_charge: Decimal | None = None
     delivery_time: datetime | None = None
     document_cutoff_time: datetime | None = None
@@ -54,6 +56,10 @@ class WaybillUpdate(WaybillBaseIn, WaybillPlanIn):
 
 class ManualStatusRequest(BaseModel):
     lifecycle_status: WaybillLifecycleStatus
+
+
+class WaybillAccessRequest(BaseModel):
+    waybill_no: str = Field(max_length=64)
 
 
 class WaybillStatusCount(BaseModel):
@@ -91,6 +97,8 @@ class WaybillOut(BaseModel):
     board: BoardSummaryOut | None = None
     document_operator_id: int | None = None
     route_staff_id: int | None = None
+    customs_staff_id: int | None = None
+    customs_staff: UserSummaryOut | None = None
     data_charge: Decimal | None = None
     delivery_time: datetime | None = None
     document_cutoff_time: datetime | None = None

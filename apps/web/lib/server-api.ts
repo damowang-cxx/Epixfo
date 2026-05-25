@@ -115,6 +115,7 @@ export async function proxyToBackend(request: Request, path: string[]) {
   return new NextResponse(body, {
     status: response.status,
     headers: {
+      "cache-control": "no-store",
       "content-type": response.headers.get("content-type") || "application/json"
     }
   });

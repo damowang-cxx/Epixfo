@@ -59,6 +59,11 @@ function FieldGrid({ items }: { items: Array<[string, unknown]> }) {
   );
 }
 
+function userDisplayName(user?: Waybill["customs_staff"]) {
+  if (!user) return "";
+  return user.display_name || user.username;
+}
+
 export default function WaybillDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
@@ -124,6 +129,7 @@ export default function WaybillDetailPage() {
     try {
       await apiClient.delete<void>(`/waybills/${id}`);
       router.push("/waybills");
+      router.refresh();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "删除提单失败。");
     }
@@ -193,6 +199,7 @@ export default function WaybillDetailPage() {
                 ["航代", waybill.agent],
                 ["入仓号", waybill.warehouse_no],
                 ["收货人", waybill.consignee],
+                ["指定清关人员", userDisplayName(waybill.customs_staff)],
                 ["计划航班", waybill.plan?.planned_flight_no],
                 ["计划日期", waybill.plan?.planned_flight_date],
                 ["计划航程", waybill.plan?.planned_route_text],
@@ -248,6 +255,9 @@ export default function WaybillDetailPage() {
               onBoxUpdated={(updated) => {
                 setBoxes((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
                 setMessage("外箱条码已更新。");
+              }}
+              onBoxDeleted={(boxId) => {
+                setBoxes((prev) => prev.filter((item) => item.id !== boxId));
               }}
               onChanged={() => {
                 setMessage("箱号绑定已更新。");

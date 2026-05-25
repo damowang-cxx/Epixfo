@@ -126,6 +126,7 @@ interface CargoBoxesTableProps {
   bookedVolume?: string | number | null;
   readonly?: boolean;
   onBoxUpdated?: (box: CargoBox) => void;
+  onBoxDeleted?: (boxId: number) => void;
   onChanged?: () => void;
   onError?: (message: string) => void;
   onMessage?: (message: string) => void;
@@ -138,6 +139,7 @@ export function CargoBoxesTable({
   bookedVolume,
   readonly = false,
   onBoxUpdated,
+  onBoxDeleted,
   onChanged,
   onError,
   onMessage
@@ -348,6 +350,7 @@ export function CargoBoxesTable({
         next.delete(item.id);
         return next;
       });
+      onBoxDeleted?.(item.id);
       onChanged?.();
     } catch (error) {
       onError?.(error instanceof Error ? error.message : "删除箱号失败。");

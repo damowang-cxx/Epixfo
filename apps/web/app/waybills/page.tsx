@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { AlertLevelBadge, LifecycleBadge, LIFECYCLE_VARIANT, type LifecycleBadgeVariant } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
@@ -55,6 +56,11 @@ function unboundReasonLabel(reason?: string | null) {
   return UNBOUND_REASON_LABELS[reason] || reason;
 }
 
+function userDisplayName(user?: Waybill["customs_staff"]) {
+  if (!user) return "";
+  return user.display_name || user.username;
+}
+
 function StatusCard({
   label,
   count,
@@ -86,7 +92,9 @@ function StatusCard({
 
 export default function WaybillsPage() {
   const { hasRole } = useAuth();
+  const router = useRouter();
   const canDeleteWaybills = hasRole("admin") || hasRole("route_staff");
+  const canRequestCustomsAccess = hasRole("customs_staff") && !hasRole("admin") && !hasRole("route_staff");
   const [data, setData] = useState<PageResponse<Waybill> | null>(null);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [waybillNo, setWaybillNo] = useState("");
@@ -103,6 +111,8 @@ export default function WaybillsPage() {
   const [targetWaybillId, setTargetWaybillId] = useState("");
   const [waybillOptions, setWaybillOptions] = useState<Waybill[]>([]);
   const [deletingWaybillId, setDeletingWaybillId] = useState<number | null>(null);
+  const [accessWaybillNo, setAccessWaybillNo] = useState("");
+  const [requestingAccess, setRequestingAccess] = useState(false);
 
   const query = useMemo(() => {
     const params = new URLSearchParams({ page: String(page), page_size: "20" });
@@ -221,13 +231,51 @@ export default function WaybillsPage() {
     setMessage("");
     try {
       await apiClient.delete<void>(`/waybills/${item.id}`);
+      const shouldMoveToPreviousPage = (data?.items.length || 0) <= 1 && page > 1;
+      setData((prev) =>
+        prev
+          ? {
+              ...prev,
+              items: prev.items.filter((row) => row.id !== item.id),
+              total: Math.max(0, prev.total - 1)
+            }
+          : prev
+      );
       setMessage(`提单 ${item.waybill_no} 已删除。`);
-      load();
+      if (shouldMoveToPreviousPage) {
+        setPage((prev) => Math.max(1, prev - 1));
+      } else {
+        load();
+      }
       loadCounts();
+      if (unboundOpen) {
+        loadUnbound();
+        loadWaybillOptions();
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "删除提单失败。");
     } finally {
       setDeletingWaybillId(null);
+    }
+  }
+
+  async function requestCustomsAccess() {
+    const waybillNo = accessWaybillNo.trim();
+    if (!waybillNo) {
+      setMessage("请输入需要申请查看的提单号。");
+      return;
+    }
+    setRequestingAccess(true);
+    setMessage("");
+    try {
+      const result = await apiClient.post<Waybill>("/waybills/access-requests", { waybill_no: waybillNo });
+      setMessage(`已获得提单 ${result.waybill_no} 的查看权限。`);
+      setAccessWaybillNo("");
+      router.push(`/waybills/${result.id}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "申请查看提单失败。");
+    } finally {
+      setRequestingAccess(false);
     }
   }
 
@@ -252,6 +300,27 @@ export default function WaybillsPage() {
       />
       {message ? (
         <div className="mb-4 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">{message}</div>
+      ) : null}
+      {canRequestCustomsAccess ? (
+        <Panel title="申请查看提单" className="mb-4">
+          <div className="flex flex-wrap gap-2">
+            <Input
+              className="max-w-sm"
+              placeholder="输入提单号"
+              value={accessWaybillNo}
+              onChange={(event) => setAccessWaybillNo(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void requestCustomsAccess();
+                }
+              }}
+            />
+            <Button type="button" disabled={requestingAccess} onClick={() => void requestCustomsAccess()}>
+              申请查看提单
+            </Button>
+          </div>
+        </Panel>
       ) : null}
       <Panel title="状态总览">
         <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-6 xl:grid-cols-12">
@@ -298,6 +367,7 @@ export default function WaybillsPage() {
               <TH>提单号</TH>
               <TH>收件人</TH>
               <TH>订舱方数/板总方数</TH>
+              <TH>指定清关人员</TH>
               <TH>航代</TH>
               <TH>入仓号/入仓文件</TH>
               <TH>始发港</TH>
@@ -340,6 +410,7 @@ export default function WaybillsPage() {
                     </TD>
                   </>
                 ) : null}
+                <TD>{compact(userDisplayName(item.customs_staff))}</TD>
                 <TD>{compact(item.agent)}</TD>
                 <TD>
                   <div className="flex min-w-40 flex-col items-start gap-1">

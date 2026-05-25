@@ -435,7 +435,7 @@ def upgrade() -> None:
             {"code": "admin", "name": "管理员", "description": "系统管理员"},
             {"code": "route_staff", "name": "航线排仓人员", "description": "运单录入与航班监控"},
             {"code": "customer_service", "name": "客服人员", "description": "查看已入仓及之后运单"},
-            {"code": "customs_staff", "name": "出口报关人员", "description": "查看起飞前三天内运单"},
+            {"code": "customs_staff", "name": "清关人员", "description": "查看起飞前三天内运单"},
         ],
     )
 
