@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { Ban, Download, Pencil, Play, Trash2 } from "lucide-react";
+import { Ban, Download, Pencil, Play, Trash2, UserCheck } from "lucide-react";
 import { AlertLevelBadge, LifecycleBadge } from "@/components/ui/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -31,6 +31,7 @@ import type {
   OfficialInfo,
   QuerySnapshot,
   StatusEvent,
+  User,
   Waybill
 } from "@/lib/types";
 
@@ -94,8 +95,10 @@ export default function WaybillDetailPage() {
   const [boxes, setBoxes] = useState<CargoBox[]>([]);
   const [snapshots, setSnapshots] = useState<QuerySnapshot[]>([]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
   const [manualStatus, setManualStatus] = useState<LifecycleStatus>("created");
   const [message, setMessage] = useState("");
+  const [customsStaffSaving, setCustomsStaffSaving] = useState(false);
 
   const load = useCallback(() => {
     if (!id) return;
@@ -115,6 +118,11 @@ export default function WaybillDetailPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (!canEditBoxes) return;
+    apiClient.get<User[]>("/users").then(setUsers).catch(() => setUsers([]));
+  }, [canEditBoxes]);
 
   async function triggerQuery() {
     if (!id) return;
@@ -150,6 +158,12 @@ export default function WaybillDetailPage() {
   }
 
   if (!waybill) return <div className="text-sm text-slate-500">正在加载提单...</div>;
+
+  const visibleCustomsUsers = users.filter(
+    (user) =>
+      user.roles.some((role) => role.code === "customs_staff") &&
+      (user.is_active || waybill.customs_staff_id === user.id)
+  );
 
   async function exportCustomsData() {
     if (!id || !waybill) return;
@@ -189,6 +203,22 @@ export default function WaybillDetailPage() {
       load();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "撤销清关资料上传确认失败。");
+    }
+  }
+
+  async function updateCustomsStaff(value: string) {
+    if (!id) return;
+    setCustomsStaffSaving(true);
+    setMessage("");
+    try {
+      const customsStaffId = value === "__none__" ? null : Number(value);
+      const updated = await apiClient.patch<Waybill>(`/waybills/${id}`, { customs_staff_id: customsStaffId });
+      setWaybill(updated);
+      setMessage(customsStaffId ? "指定清关人员已更新。" : "已清空指定清关人员。");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "更新指定清关人员失败。");
+    } finally {
+      setCustomsStaffSaving(false);
     }
   }
 
@@ -315,15 +345,36 @@ export default function WaybillDetailPage() {
             className="mt-4"
             action={
               canEditBoxes ? (
-                <WarehouseFileUploadButton
-                  waybillId={waybill.id}
-                  label={waybill.warehouse_no ? "上传新入仓文件" : "上传入仓文件"}
-                  onUploaded={(result) => {
-                    setMessage(formatWarehouseUploadMessage(result));
-                    load();
-                  }}
-                  onError={setMessage}
-                />
+                <div className="flex flex-wrap items-center justify-end gap-2 py-1">
+                  <Select
+                    value={waybill.customs_staff_id ? String(waybill.customs_staff_id) : undefined}
+                    onValueChange={(value) => void updateCustomsStaff(value)}
+                    disabled={customsStaffSaving}
+                  >
+                    <SelectTrigger className="w-52 border-purple-200 bg-purple-50 text-purple-800">
+                      <UserCheck className="mr-2 h-4 w-4 shrink-0" />
+                      <SelectValue placeholder="指定清关人员" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">不指定清关人员</SelectItem>
+                      {visibleCustomsUsers.map((user) => (
+                        <SelectItem key={user.id} value={String(user.id)}>
+                          {user.display_name || user.username}
+                          {!user.is_active ? "（已停用）" : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <WarehouseFileUploadButton
+                    waybillId={waybill.id}
+                    label={waybill.warehouse_no ? "上传新入仓文件" : "上传入仓文件"}
+                    onUploaded={(result) => {
+                      setMessage(formatWarehouseUploadMessage(result));
+                      load();
+                    }}
+                    onError={setMessage}
+                  />
+                </div>
               ) : null
             }
           >
