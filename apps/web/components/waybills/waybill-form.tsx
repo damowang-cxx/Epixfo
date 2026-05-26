@@ -12,6 +12,7 @@ import { Panel } from "@/components/ui/panel";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { apiClient } from "@/lib/client-api";
+import { formatPlannedFlightInfo } from "@/lib/planned-flight";
 import type { CarrierAgent, Consignee, ConsigneeContact, User, Waybill } from "@/lib/types";
 
 type FormState = {
@@ -22,8 +23,7 @@ type FormState = {
   warehouse_no: string;
   consignee_contact_id: string;
   customs_staff_id: string;
-  planned_flight_no: string;
-  planned_flight_date: string;
+  planned_flight_info: string;
   planned_destination: string;
   planned_route_text: string;
   booked_weight: string;
@@ -59,8 +59,7 @@ const fields: FieldMeta[] = [
   { key: "departure_port", label: "始发港", requiredOnCreate: true },
   { key: "destination_port", label: "目的港", requiredOnCreate: true },
   { key: "warehouse_no", label: "入仓号" },
-  { key: "planned_flight_no", label: "计划航班号", requiredOnCreate: true },
-  { key: "planned_flight_date", label: "计划航班日期", type: "date", requiredOnCreate: true },
+  { key: "planned_flight_info", label: "计划航班信息", requiredOnCreate: true },
   { key: "planned_destination", label: "计划目的港" },
   { key: "planned_route_text", label: "人工计划航程", requiredOnCreate: true },
   { key: "booked_weight", label: "订舱重量", type: "number", requiredOnCreate: true },
@@ -97,8 +96,7 @@ function initialState(waybill?: Waybill): FormState {
     warehouse_no: waybill?.warehouse_no || "",
     consignee_contact_id: waybill?.consignee_contact_id?.toString() || "",
     customs_staff_id: waybill?.customs_staff_id?.toString() || "",
-    planned_flight_no: waybill?.plan?.planned_flight_no || "",
-    planned_flight_date: waybill?.plan?.planned_flight_date || "",
+    planned_flight_info: formatPlannedFlightInfo(waybill?.plan),
     planned_destination: waybill?.plan?.planned_destination || "",
     planned_route_text: waybill?.plan?.planned_route_text || "",
     booked_weight: waybill?.booked_weight?.toString() || "",
@@ -235,6 +233,7 @@ export function WaybillForm({ waybill }: { waybill?: Waybill }) {
                     <Input
                       id={field.key}
                       type={field.type || "text"}
+                      placeholder={field.key === "planned_flight_info" ? "QR8943/01" : undefined}
                       value={state[field.key]}
                       readOnly={editing && field.readonlyOnEdit}
                       onChange={(event) => setState((prev) => ({ ...prev, [field.key]: event.target.value }))}

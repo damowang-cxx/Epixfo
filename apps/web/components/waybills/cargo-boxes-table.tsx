@@ -105,9 +105,11 @@ function volumeCalculationError(error: unknown): VolumeErrorDialog {
   const detail = error.detail as Record<string, unknown>;
   const details = [
     ["错误码", detail.error_code],
-    ["订舱方数(CBM)", detail.booked_volume],
-    ["入仓总方数(CBM)", detail.total_volume],
-    ["超出方数(CBM)", detail.excess_volume]
+    ["目标方数(CBM)", detail.target_volume],
+    ["原始总方数(CBM)", detail.original_total_volume],
+    ["一箱多件固定方数(CBM)", detail.fixed_total_volume],
+    ["可调整方数(CBM)", detail.adjustable_total_volume],
+    ["当前总方数(CBM)", detail.total_volume]
   ]
     .filter((item): item is [string, string | number] => item[1] !== undefined && item[1] !== null && item[1] !== "")
     .map(([label, value]) => ({ label, value: String(value) }));
@@ -123,7 +125,6 @@ interface CargoBoxesTableProps {
   boxes: CargoBox[];
   waybillId?: number;
   warehouseNo?: string | null;
-  bookedVolume?: string | number | null;
   readonly?: boolean;
   onBoxUpdated?: (box: CargoBox) => void;
   onBoxDeleted?: (boxId: number) => void;
@@ -136,7 +137,6 @@ export function CargoBoxesTable({
   boxes,
   waybillId,
   warehouseNo,
-  bookedVolume,
   readonly = false,
   onBoxUpdated,
   onBoxDeleted,
@@ -162,6 +162,9 @@ export function CargoBoxesTable({
   const [unboundRemark, setUnboundRemark] = useState("");
   const [waybillOptions, setWaybillOptions] = useState<Waybill[]>([]);
   const [volumeError, setVolumeError] = useState<VolumeErrorDialog | null>(null);
+  const [volumeCalcOpen, setVolumeCalcOpen] = useState(false);
+  const [targetVolumeDraft, setTargetVolumeDraft] = useState("");
+  const [targetVolumeError, setTargetVolumeError] = useState("");
 
   const selectedCount = selectedIds.size;
   const canManageBoxes = Boolean(waybillId && !readonly);
@@ -400,18 +403,35 @@ export function CargoBoxesTable({
     }
   }
 
+  function openVolumeCalculationDialog() {
+    setTargetVolumeDraft(warehouseTotals.volume > 0 ? warehouseTotals.volume.toFixed(3).replace(/\.?0+$/, "") : "");
+    setTargetVolumeError("");
+    setVolumeCalcOpen(true);
+  }
+
   async function recalculateVolumes() {
     if (!waybillId) return;
+    const targetVolume = Number(targetVolumeDraft);
+    if (!Number.isFinite(targetVolume) || targetVolume <= 0) {
+      setTargetVolumeError("请输入大于 0 的目标方数。");
+      return;
+    }
     try {
       setSaving(true);
-      const result = await apiClient.post<BoxVolumeRecalculationResult>(`/waybills/${waybillId}/boxes/recalculate-volume`);
+      const result = await apiClient.post<BoxVolumeRecalculationResult>(`/waybills/${waybillId}/boxes/recalculate-volume`, {
+        target_volume: targetVolume
+      });
+      setVolumeCalcOpen(false);
       onChanged?.();
       if (result.adjusted) {
-        onMessage?.(`方数已按订舱方数 ${formatDecimal(result.booked_volume)} 等比调整：${formatDecimal(result.old_total_volume)} → ${formatDecimal(result.new_total_volume)}。`);
+        onMessage?.(
+          `方数已按目标 ${formatDecimal(result.target_volume)} CBM 等比调整：${formatDecimal(result.old_total_volume)} → ${formatDecimal(result.new_total_volume)}。一箱多件固定 ${formatDecimal(result.fixed_total_volume)} CBM，调整一箱一件 ${result.adjusted_box_count} 个。`
+        );
       } else {
-        onMessage?.(`当前总方数 ${formatDecimal(result.new_total_volume)} 未超过订舱方数 ${formatDecimal(result.booked_volume)}，无需调整。`);
+        onMessage?.(`当前总方数已等于目标 ${formatDecimal(result.target_volume)} CBM，无需调整。`);
       }
     } catch (error) {
+      setVolumeCalcOpen(false);
       setVolumeError(volumeCalculationError(error));
     } finally {
       setSaving(false);
@@ -443,7 +463,7 @@ export function CargoBoxesTable({
             <span className="text-slate-300">|</span>
             <span>总方数(CBM)：<strong>{formatDecimal(warehouseTotals.volume)}</strong></span>
           </div>
-          <Button type="button" variant="secondary" size="sm" disabled={saving || !boxes.length || !bookedVolume} onClick={() => void recalculateVolumes()}>
+          <Button type="button" variant="secondary" size="sm" disabled={saving || !boxes.length} onClick={openVolumeCalculationDialog}>
             <Calculator className="h-4 w-4" />
             方数计算
           </Button>
@@ -804,6 +824,47 @@ export function CargoBoxesTable({
               onClick={() => void submitTransfer()}
             >
               确认转移
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={volumeCalcOpen} onOpenChange={(open) => !saving && setVolumeCalcOpen(open)}>
+        <DialogContent>
+          <DialogTitle className="pr-10 text-base font-semibold text-slate-900">方数计算</DialogTitle>
+          <div className="mt-3 space-y-3">
+            <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+              当前总方数 {formatDecimal(warehouseTotals.volume)} CBM。请输入希望当前入仓号调整到的目标总方数；系统只会等比调整一箱一件的箱号，一箱多件箱号保持原始方数。
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-slate-700" htmlFor="target-volume">
+                目标总方数(CBM)
+              </label>
+              <Input
+                id="target-volume"
+                type="number"
+                min="0.001"
+                step="0.001"
+                value={targetVolumeDraft}
+                onChange={(event) => {
+                  setTargetVolumeDraft(event.target.value);
+                  setTargetVolumeError("");
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void recalculateVolumes();
+                  }
+                }}
+              />
+              {targetVolumeError ? <div className="text-xs text-red-600">{targetVolumeError}</div> : null}
+            </div>
+          </div>
+          <div className="mt-5 flex justify-end gap-2">
+            <Button type="button" variant="secondary" disabled={saving} onClick={() => setVolumeCalcOpen(false)}>
+              取消
+            </Button>
+            <Button type="button" disabled={saving} onClick={() => void recalculateVolumes()}>
+              确认计算
             </Button>
           </div>
         </DialogContent>

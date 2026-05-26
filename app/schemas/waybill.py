@@ -12,6 +12,7 @@ from app.schemas.user import UserSummaryOut
 
 
 class WaybillPlanIn(BaseModel):
+    planned_flight_info: str | None = Field(default=None, max_length=64)
     planned_flight_no: str | None = Field(default=None, max_length=32)
     planned_flight_date: date | None = None
     planned_destination: str | None = Field(default=None, max_length=16)
@@ -65,6 +66,25 @@ class WaybillAccessRequest(BaseModel):
 class WaybillStatusCount(BaseModel):
     status: WaybillLifecycleStatus
     count: int
+
+
+class WaybillBulkImportCreated(BaseModel):
+    id: int
+    waybill_no: str
+
+
+class WaybillBulkImportError(BaseModel):
+    row_number: int
+    waybill_no: str | None = None
+    message: str
+
+
+class WaybillBulkImportResult(BaseModel):
+    file_name: str
+    created_count: int
+    skipped_count: int
+    errors: list[WaybillBulkImportError]
+    created_waybills: list[WaybillBulkImportCreated]
 
 
 class WaybillPlanOut(BaseModel):

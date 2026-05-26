@@ -165,7 +165,7 @@ def _invalid_xlsx_bytes() -> bytes:
     return stream.getvalue()
 
 
-def _fake_box(box_id: int, box_no: str, weight: str, volume: str):
+def _fake_box(box_id: int, box_no: str, weight: str, volume: str, *, items_count: int = 1):
     return SimpleNamespace(
         id=box_id,
         current_waybill_id=7,
@@ -177,7 +177,22 @@ def _fake_box(box_id: int, box_no: str, weight: str, volume: str):
         unbound_reason=None,
         unbound_remark=None,
         raw_data={},
-        items=[],
+        items=[
+            SimpleNamespace(
+                id=index + 1,
+                box_id=box_id,
+                document_id=None,
+                warehouse_waybill_no=None,
+                goods_name=None,
+                quantity=None,
+                weight=None,
+                source_row_number=None,
+                raw_data={},
+                created_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
+            )
+            for index in range(items_count)
+        ],
         document=None,
         warehouse_receipt=None,
         warehouse_waybill_no=None,
@@ -371,46 +386,58 @@ def test_delete_box_removes_box_and_commits() -> None:
     assert service.db.committed is True
 
 
-def test_recalculate_box_volumes_scales_to_booked_volume() -> None:
-    waybill = SimpleNamespace(id=7, waybill_no="784-00000001", booked_volume=Decimal("9.500"), warehouse_no="AMS-IN-001")
+def test_recalculate_box_volumes_scales_single_item_boxes_to_target_volume() -> None:
+    waybill = SimpleNamespace(id=7, waybill_no="784-00000001", warehouse_no="AMS-IN-001")
     service = WarehouseFileService.__new__(WarehouseFileService)
     service.db = FakeDb()
     service.boxes = FakeBoxRepository()
     service.waybills = FakeWaybillRepository(waybill)
     service.boxes.boxes_list = [
         _fake_box(4, "BOX-001", "10.000", "6.000"),
-        _fake_box(5, "BOX-002", "5.000", "4.000"),
+        _fake_box(5, "BOX-002", "5.000", "4.000", items_count=2),
     ]
     user = SimpleNamespace(id=5, is_superuser=True, roles=[])
 
-    result = service.recalculate_box_volumes(7, user)
+    result = service.recalculate_box_volumes(7, Decimal("9.500"), user)
 
     assert result.adjusted is True
     assert str(result.old_total_volume) == "10.000"
+    assert str(result.original_total_volume) == "10.000"
+    assert str(result.fixed_total_volume) == "4.000"
+    assert str(result.adjustable_total_volume) == "6.000"
     assert str(result.new_total_volume) == "9.500"
-    assert [str(box.volume) for box in service.boxes.boxes_list] == ["5.700", "3.800"]
-    assert str(service.boxes.boxes_list[0].weight_volume_ratio) == "1.754"
-    assert service.boxes.boxes_list[0].raw_data["volume_recalculation"]["booked_volume"] == "9.500"
+    assert [str(box.volume) for box in service.boxes.boxes_list] == ["5.500", "4.000"]
+    assert str(service.boxes.boxes_list[0].weight_volume_ratio) == "1.818"
+    assert service.boxes.boxes_list[0].raw_data["volume_recalculation"]["target_volume"] == "9.500"
+    assert service.boxes.boxes_list[0].raw_data["volume_recalculation"]["base_volume"] == "6.000"
+    assert service.boxes.boxes_list[1].raw_data["volume_recalculation"]["adjustable"] is False
+    assert service.db.committed is True
+
+    service.db.committed = False
+    result = service.recalculate_box_volumes(7, Decimal("10.000"), user)
+
+    assert str(result.new_total_volume) == "10.000"
+    assert [str(box.volume) for box in service.boxes.boxes_list] == ["6.000", "4.000"]
     assert service.db.committed is True
 
 
-def test_recalculate_box_volumes_rejects_excess_over_one_cubic_meter() -> None:
-    waybill = SimpleNamespace(id=7, waybill_no="784-00000001", booked_volume=Decimal("8.900"), warehouse_no="AMS-IN-001")
+def test_recalculate_box_volumes_rejects_target_below_multi_item_fixed_volume() -> None:
+    waybill = SimpleNamespace(id=7, waybill_no="784-00000001", warehouse_no="AMS-IN-001")
     service = WarehouseFileService.__new__(WarehouseFileService)
     service.db = FakeDb()
     service.boxes = FakeBoxRepository()
     service.waybills = FakeWaybillRepository(waybill)
     service.boxes.boxes_list = [
         _fake_box(4, "BOX-001", "10.000", "6.000"),
-        _fake_box(5, "BOX-002", "5.000", "4.000"),
+        _fake_box(5, "BOX-002", "5.000", "4.000", items_count=2),
     ]
     user = SimpleNamespace(id=5, is_superuser=True, roles=[])
 
     with pytest.raises(HTTPException) as exc_info:
-        service.recalculate_box_volumes(7, user)
+        service.recalculate_box_volumes(7, Decimal("3.500"), user)
 
-    assert exc_info.value.detail["error_code"] == "warehouse_volume_exceeds_booking"
-    assert "请移除部分箱" in exc_info.value.detail["message"]
+    assert exc_info.value.detail["error_code"] == "target_volume_less_than_fixed_boxes"
+    assert exc_info.value.detail["fixed_total_volume"] == "4.000"
     assert service.db.committed is False
 
 

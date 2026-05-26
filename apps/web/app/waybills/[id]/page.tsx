@@ -20,6 +20,7 @@ import { useAuth } from "@/components/layout/auth-provider";
 import { apiClient } from "@/lib/client-api";
 import { compact, computeRatio, formatDateTime } from "@/lib/utils";
 import { lifecycleLabels } from "@/lib/constants";
+import { formatPlannedFlightInfo } from "@/lib/planned-flight";
 import { formatWarehouseUploadMessage } from "@/lib/warehouse-upload";
 import type {
   Alert,
@@ -280,7 +281,7 @@ export default function WaybillDetailPage() {
                       }`
                     : "待上传"
                 ],
-                ["计划航班", waybill.plan?.planned_flight_no],
+                ["计划航班", formatPlannedFlightInfo(waybill.plan)],
                 ["计划日期", waybill.plan?.planned_flight_date],
                 ["计划航程", waybill.plan?.planned_route_text],
                 ["订舱重量", waybill.booked_weight],
@@ -330,7 +331,6 @@ export default function WaybillDetailPage() {
               boxes={boxes}
               waybillId={waybill.id}
               warehouseNo={waybill.warehouse_no}
-              bookedVolume={waybill.booked_volume}
               readonly={!canEditBoxes}
               onBoxUpdated={(updated) => {
                 setBoxes((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));

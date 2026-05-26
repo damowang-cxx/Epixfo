@@ -235,17 +235,41 @@ export interface WarehouseFileUploadResult {
   conflicts: WarehouseBoxConflict[];
 }
 
+export interface WaybillBulkImportError {
+  row_number: number;
+  waybill_no?: string | null;
+  message: string;
+}
+
+export interface WaybillBulkImportCreated {
+  id: number;
+  waybill_no: string;
+}
+
+export interface WaybillBulkImportResult {
+  file_name: string;
+  created_count: number;
+  skipped_count: number;
+  errors: WaybillBulkImportError[];
+  created_waybills: WaybillBulkImportCreated[];
+}
+
 export interface BoxBatchOperationResult {
   updated_count: number;
   boxes: CargoBox[];
 }
 
 export interface BoxVolumeRecalculationResult {
-  booked_volume: string | number;
+  target_volume: string | number;
   total_weight: string | number;
+  original_total_volume: string | number;
   old_total_volume: string | number;
+  fixed_total_volume: string | number;
+  adjustable_total_volume: string | number;
   new_total_volume: string | number;
   adjusted: boolean;
+  adjusted_box_count: number;
+  fixed_box_count: number;
   boxes: CargoBox[];
 }
 

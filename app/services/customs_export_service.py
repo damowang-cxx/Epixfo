@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.models import AirWaybill, Box
 from app.repositories.box_repository import BoxRepository
+from app.utils.planned_flight import extract_planned_flight_no
 
 
 DECIMAL_001 = Decimal("0.001")
@@ -127,7 +128,7 @@ class CustomsExportService:
 
     def _format_flight_and_warehouse_text(self, waybill: AirWaybill) -> str:
         plan = getattr(waybill, "plan", None)
-        flight_no = _clean(getattr(plan, "planned_flight_no", None))
+        flight_no = _clean(extract_planned_flight_no(getattr(plan, "planned_flight_no", None)))
         flight_date = _format_flight_date(getattr(plan, "planned_flight_date", None))
         flight_text = "/".join(part for part in [flight_no, flight_date] if part)
         route_text = _clean(getattr(plan, "planned_route_text", None))

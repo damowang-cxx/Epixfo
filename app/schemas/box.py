@@ -151,10 +151,19 @@ class BoxBatchOperationResult(BaseModel):
     boxes: list[BoxOut]
 
 
+class BoxVolumeRecalculationRequest(BaseModel):
+    target_volume: Decimal = Field(gt=0)
+
+
 class BoxVolumeRecalculationResult(BaseModel):
-    booked_volume: Decimal
+    target_volume: Decimal
     total_weight: Decimal
+    original_total_volume: Decimal
     old_total_volume: Decimal
+    fixed_total_volume: Decimal
+    adjustable_total_volume: Decimal
     new_total_volume: Decimal
     adjusted: bool
+    adjusted_box_count: int
+    fixed_box_count: int
     boxes: list[BoxOut]

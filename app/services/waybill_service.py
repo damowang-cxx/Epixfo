@@ -22,10 +22,12 @@ from app.services.monitor_service import MonitorService
 from app.services.permission_service import PermissionService, VISIBLE_TO_CUSTOMER_SERVICE
 from app.utils.datetime_utils import compute_monitor_window, compute_next_query_at, local_now, utc_now
 from app.utils.pagination import normalize_pagination
+from app.utils.planned_flight import parse_planned_flight_filter, parse_planned_flight_info
 from app.utils.waybill_utils import normalize_waybill_no, validate_waybill_no
 
 
 PLAN_FIELDS = {"planned_flight_no", "planned_flight_date", "planned_destination", "planned_route_text"}
+PLAN_INPUT_FIELDS = PLAN_FIELDS | {"planned_flight_info"}
 
 
 class WaybillService:
@@ -48,7 +50,7 @@ class WaybillService:
         agent_snapshot = self._resolve_agent_snapshot(payload.carrier_agent_id, carrier_code)
         consignee_snapshot = self._resolve_consignee_snapshot(payload.consignee_contact_id)
         self._validate_customs_staff_id(payload.customs_staff_id)
-        plan_data = {field: getattr(payload, field) for field in PLAN_FIELDS}
+        plan_data = self._plan_data_from_payload(payload)
         first_monitor_at, next_query_at = compute_monitor_window(plan_data.get("planned_flight_date"))
         monitor_enabled = True
         lifecycle_status = WaybillLifecycleStatus.CREATED
@@ -56,7 +58,7 @@ class WaybillService:
             lifecycle_status = WaybillLifecycleStatus.WAITING_MONITOR if local_now() < first_monitor_at else WaybillLifecycleStatus.MONITORING
 
         waybill_data = payload.model_dump(
-            exclude=set(PLAN_FIELDS) | {"waybill_no", "carrier_agent_id", "consignee_contact_id", "consignee"},
+            exclude=PLAN_INPUT_FIELDS | {"waybill_no", "carrier_agent_id", "consignee_contact_id", "consignee"},
             exclude_none=True,
         )
         waybill = AirWaybill(
@@ -95,7 +97,7 @@ class WaybillService:
         if waybill.lifecycle_status == WaybillLifecycleStatus.VOIDED:
             raise bad_request("Voided waybill cannot be updated")
         data = payload.model_dump(exclude_unset=True)
-        plan_data = {key: data.pop(key) for key in list(data.keys()) if key in PLAN_FIELDS}
+        plan_data = self._plan_data_from_update_data(data)
         if "carrier_agent_id" in data:
             agent_snapshot = self._resolve_agent_snapshot(data.pop("carrier_agent_id"), waybill.carrier_code)
             if agent_snapshot is None:
@@ -221,6 +223,15 @@ class WaybillService:
         pagination = normalize_pagination(page, page_size)
         query = self.repo.base_query()
         query = PermissionService.filter_waybill_query(query, current_user)
+        if planned_flight_no:
+            try:
+                flight_filter = parse_planned_flight_filter(planned_flight_no, today=local_now().date())
+            except ValueError as exc:
+                raise bad_request("invalid_planned_flight_info") from exc
+            planned_flight_no = flight_filter.flight_no
+            if flight_filter.flight_date is not None:
+                planned_flight_date_from = flight_filter.flight_date
+                planned_flight_date_to = flight_filter.flight_date
         query = self.repo.apply_filters(
             query,
             waybill_no=waybill_no,
@@ -236,6 +247,52 @@ class WaybillService:
         )
         total = self.repo.count_filtered(query)
         return self.repo.list_filtered(query, pagination.offset, pagination.page_size), total, pagination.page, pagination.page_size
+
+    def _plan_data_from_payload(self, payload: WaybillCreate | WaybillUpdate) -> dict[str, object]:
+        plan_data = {field: getattr(payload, field) for field in PLAN_FIELDS}
+        flight_info = getattr(payload, "planned_flight_info", None)
+        if flight_info:
+            try:
+                parsed = parse_planned_flight_info(flight_info, today=local_now().date())
+            except ValueError as exc:
+                raise bad_request("invalid_planned_flight_info") from exc
+            plan_data["planned_flight_no"] = parsed.flight_no
+            plan_data["planned_flight_date"] = parsed.flight_date
+        else:
+            self._normalize_combined_planned_flight_no(plan_data)
+        return plan_data
+
+    def _plan_data_from_update_data(self, data: dict[str, object]) -> dict[str, object]:
+        plan_data = {key: data.pop(key) for key in list(data.keys()) if key in PLAN_FIELDS}
+        if "planned_flight_info" not in data:
+            self._normalize_combined_planned_flight_no(plan_data)
+            return plan_data
+
+        flight_info = data.pop("planned_flight_info")
+        if flight_info is None or str(flight_info).strip() == "":
+            plan_data["planned_flight_no"] = None
+            plan_data["planned_flight_date"] = None
+            return plan_data
+
+        try:
+            parsed = parse_planned_flight_info(str(flight_info), today=local_now().date())
+        except ValueError as exc:
+            raise bad_request("invalid_planned_flight_info") from exc
+        plan_data["planned_flight_no"] = parsed.flight_no
+        plan_data["planned_flight_date"] = parsed.flight_date
+        return plan_data
+
+    def _normalize_combined_planned_flight_no(self, plan_data: dict[str, object]) -> None:
+        flight_no = plan_data.get("planned_flight_no")
+        if not isinstance(flight_no, str) or ("/" not in flight_no and "_" not in flight_no):
+            return
+        try:
+            parsed = parse_planned_flight_info(flight_no, today=local_now().date())
+        except ValueError:
+            return
+        plan_data["planned_flight_no"] = parsed.flight_no
+        if plan_data.get("planned_flight_date") is None:
+            plan_data["planned_flight_date"] = parsed.flight_date
 
     def void(self, waybill_id: int, current_user: User) -> AirWaybill:
         PermissionService.require_any(current_user, {UserRoleCode.ADMIN})

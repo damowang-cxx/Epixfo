@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Pencil, Plus, Search, Trash2 } from "lucide-react";
+import { Download, Pencil, Plus, Search, Trash2, Upload } from "lucide-react";
 import { AlertLevelBadge, LifecycleBadge, LIFECYCLE_VARIANT, type LifecycleBadgeVariant } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -16,9 +16,18 @@ import { useAuth } from "@/components/layout/auth-provider";
 import { WarehouseFileUploadButton } from "@/components/waybills/warehouse-file-upload-button";
 import { ApiError, apiClient } from "@/lib/client-api";
 import { LIFECYCLE_ORDER, lifecycleLabels } from "@/lib/constants";
+import { formatPlannedFlightInfo } from "@/lib/planned-flight";
 import { cn, compact, formatDateTime } from "@/lib/utils";
 import { formatWarehouseUploadMessage } from "@/lib/warehouse-upload";
-import type { BoxBatchOperationResult, CargoBox, LifecycleStatus, PageResponse, WarehouseFileUploadResult, Waybill } from "@/lib/types";
+import type {
+  BoxBatchOperationResult,
+  CargoBox,
+  LifecycleStatus,
+  PageResponse,
+  WaybillBulkImportResult,
+  WarehouseFileUploadResult,
+  Waybill
+} from "@/lib/types";
 
 const lifecycleOptions: Array<{ value: LifecycleStatus | "all"; label: string }> = [
   { value: "all", label: "全部状态" },
@@ -115,6 +124,9 @@ export default function WaybillsPage() {
   const [requestingAccess, setRequestingAccess] = useState(false);
   const [uploadingUnboundFile, setUploadingUnboundFile] = useState(false);
   const unboundFileInputRef = useRef<HTMLInputElement>(null);
+  const bulkImportInputRef = useRef<HTMLInputElement>(null);
+  const [uploadingBulkImport, setUploadingBulkImport] = useState(false);
+  const [bulkImportResult, setBulkImportResult] = useState<WaybillBulkImportResult | null>(null);
 
   const query = useMemo(() => {
     const params = new URLSearchParams({ page: String(page), page_size: "20" });
@@ -246,6 +258,26 @@ export default function WaybillsPage() {
     }
   }
 
+  async function uploadWaybillImportFile(file: File | null | undefined) {
+    if (!file) return;
+    setUploadingBulkImport(true);
+    setMessage("");
+    setBulkImportResult(null);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const result = await apiClient.postForm<WaybillBulkImportResult>("/waybills/bulk-import", formData);
+      setBulkImportResult(result);
+      setMessage(`批量导入完成：成功 ${result.created_count} 票，失败 ${result.errors.length} 行。`);
+      load();
+      loadCounts();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "批量导入提单失败。");
+    } finally {
+      setUploadingBulkImport(false);
+    }
+  }
+
   function toggleUnboundBox(id: number, checked: boolean) {
     setSelectedBoxIds((prev) => {
       const next = new Set(prev);
@@ -330,11 +362,32 @@ export default function WaybillsPage() {
 
   return (
     <>
+      <input
+        ref={bulkImportInputRef}
+        type="file"
+        accept=".xlsx"
+        className="hidden"
+        onChange={(event) => {
+          const file = event.currentTarget.files?.[0];
+          event.currentTarget.value = "";
+          void uploadWaybillImportFile(file);
+        }}
+      />
       <PageHeader
         title="提单管理"
         description="录入、筛选、追踪航空头程提单"
         action={
           <div className="flex flex-wrap gap-2">
+            <Button asChild variant="secondary">
+              <a href="/templates/waybill-bulk-import-template.xlsx" download="批量上传提单号_模板.xlsx">
+                <Download className="h-4 w-4" />
+                下载模板
+              </a>
+            </Button>
+            <Button variant="secondary" disabled={uploadingBulkImport} onClick={() => bulkImportInputRef.current?.click()}>
+              <Upload className="h-4 w-4" />
+              {uploadingBulkImport ? "导入中..." : "批量导入"}
+            </Button>
             <Button variant="secondary" onClick={() => setUnboundOpen(true)}>
               未绑定箱号
             </Button>
@@ -483,7 +536,7 @@ export default function WaybillsPage() {
                 </TD>
                 <TD>{compact(item.departure_port)}</TD>
                 <TD>{compact(item.destination_port)}</TD>
-                <TD>{compact(item.plan?.planned_flight_no)}</TD>
+                <TD>{compact(formatPlannedFlightInfo(item.plan))}</TD>
                 <TD>{compact(item.plan?.planned_flight_date)}</TD>
                 <TD>{item.official_estimated_flight_date || ""}</TD>
                 <TD><LifecycleBadge value={item.lifecycle_status} /></TD>
@@ -524,6 +577,71 @@ export default function WaybillsPage() {
           </div>
         </div>
       </Panel>
+      <Dialog open={Boolean(bulkImportResult)} onOpenChange={(open) => !open && setBulkImportResult(null)}>
+        <DialogContent className="w-[min(760px,calc(100vw-32px))]">
+          <DialogTitle className="pr-10 text-base font-semibold text-slate-900">批量导入结果</DialogTitle>
+          {bulkImportResult ? (
+            <div className="space-y-4 text-sm">
+              <div className="grid gap-2 sm:grid-cols-3">
+                <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3">
+                  <div className="text-xs text-emerald-700">成功导入</div>
+                  <div className="mt-1 text-2xl font-semibold text-emerald-900">{bulkImportResult.created_count}</div>
+                </div>
+                <div className="rounded-md border border-red-200 bg-red-50 p-3">
+                  <div className="text-xs text-red-700">失败行</div>
+                  <div className="mt-1 text-2xl font-semibold text-red-900">{bulkImportResult.errors.length}</div>
+                </div>
+                <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                  <div className="text-xs text-slate-600">空行跳过</div>
+                  <div className="mt-1 text-2xl font-semibold text-slate-900">{bulkImportResult.skipped_count}</div>
+                </div>
+              </div>
+              {bulkImportResult.created_waybills.length ? (
+                <div>
+                  <div className="mb-1 font-medium text-slate-800">已导入提单</div>
+                  <div className="max-h-24 overflow-auto rounded-md border border-slate-200 bg-white p-2 text-slate-700">
+                    {bulkImportResult.created_waybills.map((item) => item.waybill_no).join("，")}
+                  </div>
+                </div>
+              ) : null}
+              {bulkImportResult.errors.length ? (
+                <div>
+                  <div className="mb-1 font-medium text-red-700">失败明细</div>
+                  <div className="max-h-72 overflow-auto rounded-md border border-red-200">
+                    <Table>
+                      <THead>
+                        <TR>
+                          <TH>行号</TH>
+                          <TH>提单号</TH>
+                          <TH>原因</TH>
+                        </TR>
+                      </THead>
+                      <TBody>
+                        {bulkImportResult.errors.map((item) => (
+                          <TR key={`${item.row_number}-${item.waybill_no || ""}`}>
+                            <TD>{item.row_number}</TD>
+                            <TD>{item.waybill_no || ""}</TD>
+                            <TD>{item.message}</TD>
+                          </TR>
+                        ))}
+                      </TBody>
+                    </Table>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-emerald-700">
+                  全部有效提单已成功导入。
+                </div>
+              )}
+              <div className="flex justify-end">
+                <Button type="button" onClick={() => setBulkImportResult(null)}>
+                  我知道了
+                </Button>
+              </div>
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
       <Dialog open={unboundOpen} onOpenChange={setUnboundOpen}>
         <DialogContent className="w-[min(960px,calc(100vw-32px))]">
           <DialogTitle className="pr-10 text-base font-semibold text-slate-900">未绑定箱号</DialogTitle>

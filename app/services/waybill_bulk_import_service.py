@@ -1,0 +1,436 @@
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from datetime import date, datetime, time
+from decimal import Decimal, InvalidOperation
+from io import BytesIO
+from pathlib import Path
+from typing import Any
+
+from fastapi import HTTPException
+from openpyxl import load_workbook
+from sqlalchemy import select
+from sqlalchemy.orm import Session, selectinload
+
+from app.core.exceptions import bad_request
+from app.models import CarrierAgent, Consignee, ConsigneeContact, User
+from app.schemas.waybill import (
+    WaybillBulkImportCreated,
+    WaybillBulkImportError,
+    WaybillBulkImportResult,
+    WaybillCreate,
+)
+from app.services.permission_service import PermissionService
+from app.services.waybill_service import WaybillService
+from app.utils.datetime_utils import local_now
+
+
+@dataclass
+class ParsedWaybillImportRow:
+    row_number: int
+    payload: WaybillCreate | None = None
+    waybill_no: str | None = None
+    error: str | None = None
+
+
+@dataclass
+class ParsedWaybillImportFile:
+    rows: list[ParsedWaybillImportRow] = field(default_factory=list)
+    skipped_count: int = 0
+
+
+def _normalize_header(value: Any) -> str:
+    return re.sub(r"\s+", "", str(value or "")).strip()
+
+
+def _normalize_lookup(value: Any) -> str:
+    return re.sub(r"\s+", "", str(value or "")).strip().lower()
+
+
+def _clean_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        cleaned = value.strip()
+    elif isinstance(value, float) and value.is_integer():
+        cleaned = str(int(value))
+    else:
+        cleaned = str(value).strip()
+    return cleaned or None
+
+
+def _decimal_or_none(value: Any) -> Decimal | None:
+    text = _clean_text(value)
+    if not text:
+        return None
+    ratio_match = re.fullmatch(r"1\s*[:/]\s*([-+]?\d+(\.\d+)?)", text)
+    if ratio_match:
+        text = ratio_match.group(1)
+    text = text.replace(",", "")
+    if not re.fullmatch(r"[-+]?\d+(\.\d+)?", text):
+        return None
+    try:
+        return Decimal(text)
+    except InvalidOperation:
+        return None
+
+
+def _date_or_none(value: Any) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = _clean_text(value)
+    if not text:
+        return None
+    current_year = local_now().year
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%m/%d", "%m-%d"):
+        try:
+            parsed = datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+        if "%Y" not in fmt:
+            parsed = parsed.replace(year=current_year)
+        return parsed.date()
+    return None
+
+
+def _datetime_or_none(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, date):
+        return datetime.combine(value, time.min)
+    text = _clean_text(value)
+    if not text:
+        return None
+    current_year = local_now().year
+    for fmt in (
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y/%m/%d %H:%M:%S",
+        "%Y/%m/%d %H:%M",
+        "%m/%d %H:%M",
+        "%m-%d %H:%M",
+    ):
+        try:
+            parsed = datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+        if "%Y" not in fmt:
+            parsed = parsed.replace(year=current_year)
+        return parsed
+    parsed_date = _date_or_none(text)
+    return datetime.combine(parsed_date, time.min) if parsed_date else None
+
+
+def _bool_or_none(value: Any) -> bool | None:
+    text = _clean_text(value)
+    if not text:
+        return None
+    lowered = text.lower()
+    if lowered in {"1", "true", "yes", "y", "是", "已通知", "通知", "含tc", "tc"}:
+        return True
+    if lowered in {"0", "false", "no", "n", "否", "不通知", "无"}:
+        return False
+    if "含tc" in lowered or lowered == "含":
+        return True
+    return None
+
+
+def _join_parts(parts: list[str]) -> str | None:
+    cleaned = [part for part in parts if part]
+    return "\n".join(cleaned) if cleaned else None
+
+
+class WaybillImportTemplateParser:
+    def __init__(
+        self,
+        *,
+        agents_by_name: dict[str, int] | None = None,
+        consignees_by_name: dict[str, int | None] | None = None,
+        users_by_name: dict[str, int] | None = None,
+    ) -> None:
+        self.agents_by_name = agents_by_name or {}
+        self.consignees_by_name = consignees_by_name or {}
+        self.users_by_name = users_by_name or {}
+
+    def parse(self, content: bytes) -> ParsedWaybillImportFile:
+        try:
+            workbook = load_workbook(BytesIO(content), data_only=True)
+        except Exception as exc:
+            raise bad_request("invalid_waybill_import_xlsx") from exc
+        worksheet = workbook.worksheets[0]
+        header_row_number = self._find_header_row(worksheet)
+        if header_row_number is None:
+            raise bad_request("waybill_import_header_not_found")
+
+        headers = [_normalize_header(cell.value) for cell in worksheet[header_row_number]]
+        header_map = {header: index for index, header in enumerate(headers) if header}
+        if "提单号" not in header_map:
+            raise bad_request("waybill_import_header_not_found")
+
+        parsed = ParsedWaybillImportFile()
+        for row_number in range(header_row_number + 1, worksheet.max_row + 1):
+            values = [cell.value for cell in worksheet[row_number]]
+            if not any(_clean_text(value) for value in values):
+                parsed.skipped_count += 1
+                continue
+            parsed.rows.append(self._parse_row(row_number, values, header_map, headers))
+        return parsed
+
+    def _find_header_row(self, worksheet) -> int | None:
+        for row_number in range(1, min(10, worksheet.max_row) + 1):
+            headers = {_normalize_header(cell.value) for cell in worksheet[row_number]}
+            if "提单号" in headers and "航班信息" in headers:
+                return row_number
+        return None
+
+    def _parse_row(
+        self,
+        row_number: int,
+        values: list[Any],
+        header_map: dict[str, int],
+        headers: list[str],
+    ) -> ParsedWaybillImportRow:
+        def cell(header: str) -> Any:
+            index = header_map.get(header)
+            if index is None or index >= len(values):
+                return None
+            return values[index]
+
+        waybill_no = _clean_text(cell("提单号"))
+        if not waybill_no:
+            return ParsedWaybillImportRow(row_number=row_number, error="提单号不能为空")
+        planned_flight_info = _clean_text(cell("航班信息"))
+        if not planned_flight_info:
+            return ParsedWaybillImportRow(row_number=row_number, waybill_no=waybill_no, error="航班信息不能为空")
+
+        notes: list[str] = []
+        carrier_agent_id = self._lookup_optional(self.agents_by_name, cell("航代"), "航代", notes)
+        if carrier_agent_id is None and _clean_text(cell("航代")):
+            return ParsedWaybillImportRow(row_number=row_number, waybill_no=waybill_no, error=notes[-1])
+        consignee_contact_id = self._lookup_optional(self.consignees_by_name, cell("收件人"), "收件人", notes)
+        if consignee_contact_id is None and _clean_text(cell("收件人")):
+            return ParsedWaybillImportRow(row_number=row_number, waybill_no=waybill_no, error=notes[-1])
+
+        document_operator_id = self._lookup_optional(self.users_by_name, cell("资料数据"), "资料数据", notes)
+        planned_route_text = _clean_text(cell("航程"))
+        cutoff_text = _clean_text(cell("截单时间"))
+        if not planned_route_text and cutoff_text and "-" in cutoff_text and not _datetime_or_none(cutoff_text):
+            planned_route_text = cutoff_text
+            cutoff_text = None
+
+        departure_port, destination_port = self._route_ports(planned_route_text)
+        warehouse_data_remark = self._warehouse_data_remark(values, header_map, headers)
+        include_tc = _bool_or_none(self._blank_after(values, header_map, "报价")) or _bool_or_none(cell("报价")) or False
+        notify_pickup = _bool_or_none(cell("通知提取")) or False
+
+        delivery_time = _datetime_or_note(cell("交货时间"), "交货时间", notes)
+        document_cutoff_time = _datetime_or_note(cutoff_text if cutoff_text is not None else cell("截单时间"), "截单时间", notes)
+        pickup_time = _datetime_or_note(cell("提取时间"), "提取时间", notes)
+        payment_date = _date_or_note(cell("付款日期"), "付款日期", notes)
+        density = _decimal_or_note(cell("密度"), "密度", notes)
+
+        flight_out_text = _clean_text(cell("飞出时间"))
+        arrival_text = _clean_text(cell("到达时间"))
+        carrier_text = _clean_text(cell("航司"))
+        for label, value in (("航司", carrier_text), ("飞出时间", flight_out_text), ("到达时间", arrival_text)):
+            if value:
+                notes.append(f"{label}: {value}")
+
+        remark = _clean_text(cell("备注"))
+        if remark:
+            notes.append(remark)
+
+        try:
+            payload = WaybillCreate(
+                waybill_no=waybill_no,
+                carrier_agent_id=carrier_agent_id,
+                warehouse_no=_clean_text(cell("入仓号")),
+                consignee_contact_id=consignee_contact_id,
+                document_operator_id=document_operator_id,
+                planned_flight_info=planned_flight_info,
+                planned_route_text=planned_route_text,
+                planned_destination=destination_port,
+                departure_port=departure_port,
+                destination_port=destination_port,
+                delivery_time=delivery_time,
+                document_cutoff_time=document_cutoff_time,
+                booked_weight=_decimal_or_none(cell("订舱重量")),
+                booked_volume=_decimal_or_none(cell("方数")),
+                density=density,
+                quotation=_clean_text(cell("报价")),
+                include_tc=include_tc,
+                warehouse_data_remark=warehouse_data_remark,
+                notify_pickup=notify_pickup,
+                pickup_time=pickup_time,
+                internal_remark=_join_parts(notes),
+                air_freight_cost=_decimal_or_none(cell("航空费")),
+                payment_date=payment_date,
+            )
+        except Exception as exc:
+            return ParsedWaybillImportRow(row_number=row_number, waybill_no=waybill_no, error=str(exc))
+        return ParsedWaybillImportRow(row_number=row_number, waybill_no=waybill_no, payload=payload)
+
+    def _lookup_optional(
+        self,
+        lookup: dict[str, int | None],
+        value: Any,
+        label: str,
+        notes: list[str],
+    ) -> int | None:
+        text = _clean_text(value)
+        if not text:
+            return None
+        matched = lookup.get(_normalize_lookup(text))
+        if matched is None:
+            notes.append(f"{label}未匹配: {text}")
+            return None
+        return matched
+
+    def _route_ports(self, route: str | None) -> tuple[str | None, str | None]:
+        if not route:
+            return None, None
+        parts = [part.strip().upper() for part in re.split(r"[-/>\s]+", route) if part.strip()]
+        if len(parts) < 2:
+            return None, None
+        return parts[0][:16], parts[-1][:16]
+
+    def _blank_after(self, values: list[Any], header_map: dict[str, int], header: str) -> Any:
+        index = header_map.get(header)
+        if index is None:
+            return None
+        next_index = index + 1
+        return values[next_index] if next_index < len(values) else None
+
+    def _warehouse_data_remark(self, values: list[Any], header_map: dict[str, int], headers: list[str]) -> str | None:
+        start = header_map.get("入仓数据")
+        if start is None:
+            return None
+        parts: list[str] = []
+        for index in range(start, min(len(values), len(headers))):
+            if index > start and headers[index]:
+                break
+            text = _clean_text(values[index])
+            if text:
+                parts.append(text)
+        return " / ".join(parts) if parts else None
+
+
+def _datetime_or_note(value: Any, label: str, notes: list[str]) -> datetime | None:
+    parsed = _datetime_or_none(value)
+    text = _clean_text(value)
+    if text and parsed is None:
+        notes.append(f"{label}: {text}")
+    return parsed
+
+
+def _date_or_note(value: Any, label: str, notes: list[str]) -> date | None:
+    parsed = _date_or_none(value)
+    text = _clean_text(value)
+    if text and parsed is None:
+        notes.append(f"{label}: {text}")
+    return parsed
+
+
+def _decimal_or_note(value: Any, label: str, notes: list[str]) -> Decimal | None:
+    parsed = _decimal_or_none(value)
+    text = _clean_text(value)
+    if text and parsed is None:
+        notes.append(f"{label}: {text}")
+    return parsed
+
+
+class WaybillBulkImportService:
+    def __init__(self, db: Session):
+        self.db = db
+        self.waybills = WaybillService(db)
+
+    def import_file(self, file_name: str, content: bytes, current_user: User) -> WaybillBulkImportResult:
+        PermissionService.assert_waybill_write(current_user)
+        if Path(file_name).suffix.lower() != ".xlsx":
+            raise bad_request("waybill_import_only_xlsx_supported")
+
+        parser = WaybillImportTemplateParser(
+            agents_by_name=self._agent_lookup(),
+            consignees_by_name=self._consignee_lookup(),
+            users_by_name=self._user_lookup(),
+        )
+        parsed = parser.parse(content)
+
+        created: list[WaybillBulkImportCreated] = []
+        errors: list[WaybillBulkImportError] = []
+        for row in parsed.rows:
+            if row.payload is None:
+                errors.append(
+                    WaybillBulkImportError(row_number=row.row_number, waybill_no=row.waybill_no, message=row.error or "导入失败")
+                )
+                continue
+            try:
+                waybill = self.waybills.create(row.payload, current_user)
+            except HTTPException as exc:
+                self.db.rollback()
+                errors.append(
+                    WaybillBulkImportError(row_number=row.row_number, waybill_no=row.waybill_no, message=str(exc.detail))
+                )
+                continue
+            except Exception as exc:
+                self.db.rollback()
+                errors.append(WaybillBulkImportError(row_number=row.row_number, waybill_no=row.waybill_no, message=str(exc)))
+                continue
+            created.append(WaybillBulkImportCreated(id=waybill.id, waybill_no=waybill.waybill_no))
+
+        return WaybillBulkImportResult(
+            file_name=file_name,
+            created_count=len(created),
+            skipped_count=parsed.skipped_count,
+            errors=errors,
+            created_waybills=created,
+        )
+
+    def _agent_lookup(self) -> dict[str, int]:
+        rows = self.db.scalars(select(CarrierAgent).where(CarrierAgent.enabled.is_(True))).all()
+        return _single_value_lookup((agent.agent_name, agent.id) for agent in rows)
+
+    def _consignee_lookup(self) -> dict[str, int | None]:
+        contacts = self.db.scalars(
+            select(ConsigneeContact)
+            .options(selectinload(ConsigneeContact.consignee))
+            .join(Consignee)
+            .where(Consignee.enabled.is_(True), ConsigneeContact.enabled.is_(True))
+        ).all()
+        pairs: list[tuple[str | None, int]] = []
+        for contact in contacts:
+            company = contact.consignee.name if contact.consignee else None
+            pairs.append((contact.name, contact.id))
+            pairs.append((company, contact.id))
+            if company:
+                pairs.append((f"{company}{contact.name}", contact.id))
+                pairs.append((f"{company} {contact.name}", contact.id))
+        return _single_value_lookup(pairs)
+
+    def _user_lookup(self) -> dict[str, int]:
+        users = self.db.scalars(select(User).where(User.is_active.is_(True))).all()
+        pairs: list[tuple[str | None, int]] = []
+        for user in users:
+            pairs.append((user.username, user.id))
+            pairs.append((user.display_name, user.id))
+        return _single_value_lookup(pairs)
+
+
+def _single_value_lookup(pairs) -> dict[str, int | None]:
+    lookup: dict[str, int | None] = {}
+    for name, value in pairs:
+        key = _normalize_lookup(name)
+        if not key:
+            continue
+        if key in lookup and lookup[key] != value:
+            lookup[key] = None
+        else:
+            lookup[key] = value
+    return lookup

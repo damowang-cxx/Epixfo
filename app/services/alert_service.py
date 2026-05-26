@@ -17,6 +17,7 @@ from app.repositories.alert_repository import AlertRepository
 from app.repositories.waybill_repository import WaybillRepository
 from app.services.permission_service import PermissionService, VISIBLE_TO_CUSTOMER_SERVICE
 from app.utils.datetime_utils import local_day_start, local_now, utc_now
+from app.utils.planned_flight import extract_planned_flight_no
 
 
 ALERT_LEVEL_ORDER = {
@@ -154,7 +155,7 @@ class AlertService:
         events = self.waybills.status_events(waybill.id)
         official_info = self.waybills.official_info(waybill.id)
 
-        planned_flight_no = waybill.plan.planned_flight_no
+        planned_flight_no = extract_planned_flight_no(waybill.plan.planned_flight_no)
         planned_flight_date = waybill.plan.planned_flight_date
         planned_route = waybill.plan.planned_route_text
 

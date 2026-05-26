@@ -216,20 +216,24 @@ class WarehouseFileService:
         self._refresh_receipt_totals(receipt)
         self.db.commit()
 
-    def recalculate_box_volumes(self, waybill_id: int, current_user: User) -> BoxVolumeRecalculationResult:
+    def recalculate_box_volumes(
+        self,
+        waybill_id: int,
+        target_volume: Decimal,
+        current_user: User,
+    ) -> BoxVolumeRecalculationResult:
         PermissionService.assert_waybill_write(current_user)
         waybill = self.waybills.get(waybill_id)
         if waybill is None:
             raise bad_request("waybill_not_found")
-        booked_volume = waybill.booked_volume
-        if booked_volume is None or booked_volume <= 0:
-            raise bad_request("booked_volume_required")
+        target_volume = target_volume.quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
+        if target_volume <= 0:
+            raise bad_request("target_volume_required")
 
         boxes = self.boxes.list_by_waybill(waybill_id)
         if not boxes:
             raise bad_request("warehouse_boxes_required")
 
-        booked_volume = booked_volume.quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
         old_total_volume = sum((item.volume or Decimal("0.000") for item in boxes), Decimal("0.000")).quantize(
             DECIMAL_001,
             rounding=ROUND_HALF_UP,
@@ -238,38 +242,53 @@ class WarehouseFileService:
             DECIMAL_001,
             rounding=ROUND_HALF_UP,
         )
-        if old_total_volume <= 0:
+        base_volumes = {box.id: _box_original_volume(box) for box in boxes}
+        original_total_volume = sum(base_volumes.values(), Decimal("0.000")).quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
+        if original_total_volume <= 0:
             raise bad_request("warehouse_volume_required")
-        if old_total_volume <= booked_volume:
-            return BoxVolumeRecalculationResult(
-                booked_volume=booked_volume,
-                total_weight=total_weight,
-                old_total_volume=old_total_volume,
-                new_total_volume=old_total_volume,
-                adjusted=False,
-                boxes=boxes,
-            )
 
-        excess_volume = (old_total_volume - booked_volume).quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
-        if excess_volume > Decimal("1.000"):
+        fixed_boxes = [box for box in boxes if len(box.items or []) > 1]
+        adjustable_boxes = [box for box in boxes if len(box.items or []) <= 1]
+        fixed_total_volume = sum((base_volumes[box.id] for box in fixed_boxes), Decimal("0.000")).quantize(
+            DECIMAL_001,
+            rounding=ROUND_HALF_UP,
+        )
+        adjustable_base_total = sum((base_volumes[box.id] for box in adjustable_boxes), Decimal("0.000")).quantize(
+            DECIMAL_001,
+            rounding=ROUND_HALF_UP,
+        )
+        adjustable_target_volume = (target_volume - fixed_total_volume).quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
+        if adjustable_target_volume < 0:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
-                    "error_code": "warehouse_volume_exceeds_booking",
-                    "message": "入仓箱数超出订舱方数，请移除部分箱。",
-                    "booked_volume": str(booked_volume),
-                    "total_volume": str(old_total_volume),
-                    "excess_volume": str(excess_volume),
+                    "error_code": "target_volume_less_than_fixed_boxes",
+                    "message": "目标方数小于一箱多件箱号的原始固定方数，无法只调整一箱一件箱号。",
+                    "target_volume": str(target_volume),
+                    "fixed_total_volume": str(fixed_total_volume),
+                    "original_total_volume": str(original_total_volume),
+                },
+            )
+        if adjustable_target_volume > 0 and adjustable_base_total <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error_code": "warehouse_adjustable_volume_required",
+                    "message": "没有可用于等比调整的一箱一件箱号。",
+                    "target_volume": str(target_volume),
+                    "fixed_total_volume": str(fixed_total_volume),
+                    "adjustable_total_volume": str(adjustable_base_total),
                 },
             )
 
-        scaled_volumes = _scale_box_volumes_to_target(boxes, booked_volume, old_total_volume)
-        ratio = booked_volume / old_total_volume
+        scaled_volumes = _scale_box_base_volumes_to_target(adjustable_boxes, base_volumes, adjustable_target_volume)
+        ratio = adjustable_target_volume / adjustable_base_total if adjustable_base_total > 0 else Decimal("0.000")
+        adjustable_box_ids = {box.id for box in adjustable_boxes}
         recalculated_at = datetime.now(UTC).isoformat()
         touched_receipt_ids = {box.warehouse_receipt_id for box in boxes if box.warehouse_receipt_id is not None}
         for box in boxes:
             old_volume = box.volume or Decimal("0.000")
-            new_volume = scaled_volumes.get(box.id, Decimal("0.000"))
+            new_volume = scaled_volumes.get(box.id, base_volumes[box.id])
             box.volume = new_volume
             box.weight_volume_ratio = (
                 ((box.weight or Decimal("0.000")) / new_volume).quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
@@ -278,12 +297,17 @@ class WarehouseFileService:
             )
             raw_data = dict(box.raw_data or {})
             raw_data["volume_recalculation"] = {
-                "source": "booked_volume_fit",
+                "source": "target_volume_fit",
+                "base_volume": str(base_volumes[box.id]),
                 "old_volume": str(old_volume.quantize(DECIMAL_001, rounding=ROUND_HALF_UP)),
                 "new_volume": str(new_volume),
                 "old_total_volume": str(old_total_volume),
-                "booked_volume": str(booked_volume),
+                "original_total_volume": str(original_total_volume),
+                "target_volume": str(target_volume),
+                "fixed_total_volume": str(fixed_total_volume),
+                "adjustable_target_volume": str(adjustable_target_volume),
                 "ratio": str(ratio.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)),
+                "adjustable": box.id in adjustable_box_ids,
                 "recalculated_at": recalculated_at,
             }
             box.raw_data = raw_data
@@ -297,11 +321,16 @@ class WarehouseFileService:
             rounding=ROUND_HALF_UP,
         )
         return BoxVolumeRecalculationResult(
-            booked_volume=booked_volume,
+            target_volume=target_volume,
             total_weight=total_weight,
+            original_total_volume=original_total_volume,
             old_total_volume=old_total_volume,
+            fixed_total_volume=fixed_total_volume,
+            adjustable_total_volume=adjustable_base_total,
             new_total_volume=new_total_volume,
-            adjusted=True,
+            adjusted=new_total_volume != old_total_volume,
+            adjusted_box_count=len(adjustable_boxes),
+            fixed_box_count=len(fixed_boxes),
             boxes=updated_boxes,
         )
 
@@ -844,27 +873,82 @@ def parse_warehouse_xlsx(file_name: str, content: bytes) -> WarehouseFileParseRe
     return WarehouseFileParseResult(boxes=[boxes_by_no[box_no] for box_no in box_order], skipped_count=skipped_count, errors=errors)
 
 
-def _scale_box_volumes_to_target(boxes: list[Box], target_volume: Decimal, current_total_volume: Decimal) -> dict[int, Decimal]:
-    positive_boxes = [box for box in boxes if (box.volume or Decimal("0.000")) > 0]
+def _scale_box_base_volumes_to_target(
+    boxes: list[Box],
+    base_volumes: dict[int, Decimal],
+    target_volume: Decimal,
+) -> dict[int, Decimal]:
+    positive_boxes = [box for box in boxes if base_volumes.get(box.id, Decimal("0.000")) > 0]
+    result = {box.id: Decimal("0.000") for box in boxes}
     if not positive_boxes:
-        return {box.id: Decimal("0.000") for box in boxes}
+        return result
+
+    current_total_volume = sum((base_volumes[box.id] for box in positive_boxes), Decimal("0.000"))
+    if current_total_volume <= 0:
+        return result
 
     ratio = target_volume / current_total_volume
     scaled_rows: list[tuple[Box, Decimal, Decimal]] = []
     floor_sum = Decimal("0.000")
     for box in positive_boxes:
-        raw = (box.volume or Decimal("0.000")) * ratio
+        raw = base_volumes[box.id] * ratio
         floored = raw.quantize(DECIMAL_001, rounding=ROUND_DOWN)
         scaled_rows.append((box, floored, raw - floored))
         floor_sum += floored
 
     remainder_units = int(((target_volume - floor_sum) / DECIMAL_001).to_integral_value(rounding=ROUND_DOWN))
     scaled_rows.sort(key=lambda item: item[2], reverse=True)
-    result = {box.id: Decimal("0.000") for box in boxes}
     for index, (box, floored, _fraction) in enumerate(scaled_rows):
         increment = DECIMAL_001 if index < remainder_units else Decimal("0.000")
         result[box.id] = (floored + increment).quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
     return result
+
+
+def _box_original_volume(box: Box) -> Decimal:
+    raw_data = box.raw_data or {}
+    if isinstance(raw_data, dict):
+        recalculation = raw_data.get("volume_recalculation")
+        if isinstance(recalculation, dict):
+            stored_base = _decimal_from_optional_value(recalculation.get("base_volume"))
+            if stored_base is not None:
+                return stored_base
+
+    original_volume = _parse_original_volume_text(box.original_volume_info)
+    if original_volume is not None:
+        return original_volume
+    return (box.volume or Decimal("0.000")).quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
+
+
+def _parse_original_volume_text(value: str | None) -> Decimal | None:
+    if not value:
+        return None
+    text = _clean_text(value).replace(",", "")
+    if not text:
+        return None
+    try:
+        dimension_match = DIMENSION_VOLUME_PATTERN.search(text)
+        if dimension_match:
+            length, width, height = (Decimal(part) for part in dimension_match.groups())
+            decimal = length * width * height / Decimal("1000000")
+        else:
+            decimal = _to_decimal(text, "original_volume_info")
+    except (InvalidOperation, ValueError):
+        return None
+    if decimal < 0:
+        return None
+    return decimal.quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
+
+
+def _decimal_from_optional_value(value: Any) -> Decimal | None:
+    if value is None:
+        return None
+    try:
+        decimal = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+    if decimal < 0:
+        return None
+    return decimal.quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
 
 
 def _format_no_valid_rows_error(errors: list[WarehouseFileImportError]) -> str:

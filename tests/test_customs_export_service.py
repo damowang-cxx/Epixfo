@@ -39,7 +39,7 @@ def _make_waybill(**overrides):
             notify_party=None,
         ),
         "plan": SimpleNamespace(
-            planned_flight_no="EK9871",
+            planned_flight_no="EK9871/22",
             planned_flight_date=date(2026, 5, 22),
             planned_route_text="CAN- DWC - AMS",
         ),
@@ -85,6 +85,7 @@ def test_customs_export_includes_two_sheets_and_single_box_row() -> None:
     assert rows["品名"] is None
     assert "ALLINE BV" in rows["收货人"]
     assert "EK9871/22MAY" in rows["航班号截单时间隐含签名仓库/打板交单地址"]
+    assert "EK9871/22/22MAY" not in rows["航班号截单时间隐含签名仓库/打板交单地址"]
     assert "航程：CAN- DWC - AMS" in rows["航班号截单时间隐含签名仓库/打板交单地址"]
     assert "喜提达打板截单时间" in rows["航班号截单时间隐含签名仓库/打板交单地址"]
 
