@@ -125,8 +125,10 @@ export default function WaybillsPage() {
   const [uploadingUnboundFile, setUploadingUnboundFile] = useState(false);
   const unboundFileInputRef = useRef<HTMLInputElement>(null);
   const bulkImportInputRef = useRef<HTMLInputElement>(null);
+  const [bulkImportOpen, setBulkImportOpen] = useState(false);
   const [uploadingBulkImport, setUploadingBulkImport] = useState(false);
   const [bulkImportResult, setBulkImportResult] = useState<WaybillBulkImportResult | null>(null);
+  const [bulkImportError, setBulkImportError] = useState("");
 
   const query = useMemo(() => {
     const params = new URLSearchParams({ page: String(page), page_size: "20" });
@@ -260,7 +262,9 @@ export default function WaybillsPage() {
 
   async function uploadWaybillImportFile(file: File | null | undefined) {
     if (!file) return;
+    setBulkImportOpen(true);
     setUploadingBulkImport(true);
+    setBulkImportError("");
     setMessage("");
     setBulkImportResult(null);
     try {
@@ -272,7 +276,9 @@ export default function WaybillsPage() {
       load();
       loadCounts();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "批量导入提单失败。");
+      const errorMessage = error instanceof Error ? error.message : "批量导入提单失败。";
+      setBulkImportError(errorMessage);
+      setMessage(errorMessage);
     } finally {
       setUploadingBulkImport(false);
     }
@@ -378,15 +384,9 @@ export default function WaybillsPage() {
         description="录入、筛选、追踪航空头程提单"
         action={
           <div className="flex flex-wrap gap-2">
-            <Button asChild variant="secondary">
-              <a href="/templates/waybill-bulk-import-template.xlsx" download="批量上传提单号_模板.xlsx">
-                <Download className="h-4 w-4" />
-                下载模板
-              </a>
-            </Button>
-            <Button variant="secondary" disabled={uploadingBulkImport} onClick={() => bulkImportInputRef.current?.click()}>
+            <Button variant="secondary" onClick={() => setBulkImportOpen(true)}>
               <Upload className="h-4 w-4" />
-              {uploadingBulkImport ? "导入中..." : "批量导入"}
+              批量上传提单
             </Button>
             <Button variant="secondary" onClick={() => setUnboundOpen(true)}>
               未绑定箱号
@@ -577,69 +577,103 @@ export default function WaybillsPage() {
           </div>
         </div>
       </Panel>
-      <Dialog open={Boolean(bulkImportResult)} onOpenChange={(open) => !open && setBulkImportResult(null)}>
-        <DialogContent className="w-[min(760px,calc(100vw-32px))]">
-          <DialogTitle className="pr-10 text-base font-semibold text-slate-900">批量导入结果</DialogTitle>
-          {bulkImportResult ? (
-            <div className="space-y-4 text-sm">
-              <div className="grid gap-2 sm:grid-cols-3">
-                <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3">
-                  <div className="text-xs text-emerald-700">成功导入</div>
-                  <div className="mt-1 text-2xl font-semibold text-emerald-900">{bulkImportResult.created_count}</div>
-                </div>
-                <div className="rounded-md border border-red-200 bg-red-50 p-3">
-                  <div className="text-xs text-red-700">失败行</div>
-                  <div className="mt-1 text-2xl font-semibold text-red-900">{bulkImportResult.errors.length}</div>
-                </div>
-                <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                  <div className="text-xs text-slate-600">空行跳过</div>
-                  <div className="mt-1 text-2xl font-semibold text-slate-900">{bulkImportResult.skipped_count}</div>
-                </div>
-              </div>
-              {bulkImportResult.created_waybills.length ? (
-                <div>
-                  <div className="mb-1 font-medium text-slate-800">已导入提单</div>
-                  <div className="max-h-24 overflow-auto rounded-md border border-slate-200 bg-white p-2 text-slate-700">
-                    {bulkImportResult.created_waybills.map((item) => item.waybill_no).join("，")}
-                  </div>
-                </div>
-              ) : null}
-              {bulkImportResult.errors.length ? (
-                <div>
-                  <div className="mb-1 font-medium text-red-700">失败明细</div>
-                  <div className="max-h-72 overflow-auto rounded-md border border-red-200">
-                    <Table>
-                      <THead>
-                        <TR>
-                          <TH>行号</TH>
-                          <TH>提单号</TH>
-                          <TH>原因</TH>
-                        </TR>
-                      </THead>
-                      <TBody>
-                        {bulkImportResult.errors.map((item) => (
-                          <TR key={`${item.row_number}-${item.waybill_no || ""}`}>
-                            <TD>{item.row_number}</TD>
-                            <TD>{item.waybill_no || ""}</TD>
-                            <TD>{item.message}</TD>
-                          </TR>
-                        ))}
-                      </TBody>
-                    </Table>
-                  </div>
-                </div>
-              ) : (
-                <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-emerald-700">
-                  全部有效提单已成功导入。
-                </div>
-              )}
-              <div className="flex justify-end">
-                <Button type="button" onClick={() => setBulkImportResult(null)}>
-                  我知道了
+      <Dialog open={bulkImportOpen} onOpenChange={setBulkImportOpen}>
+        <DialogContent className="w-[min(980px,calc(100vw-32px))]">
+          <DialogTitle className="pr-10 text-base font-semibold text-slate-900">批量上传提单</DialogTitle>
+          <div className="space-y-4 text-sm">
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-200 bg-slate-50 p-3">
+              <div className="flex flex-wrap gap-2">
+                <Button asChild variant="secondary">
+                  <a href="/templates/waybill-bulk-import-template.xlsx" download="批量上传提单号_模板.xlsx">
+                    <Download className="h-4 w-4" />
+                    下载模板
+                  </a>
+                </Button>
+                <Button type="button" disabled={uploadingBulkImport} onClick={() => bulkImportInputRef.current?.click()}>
+                  <Upload className="h-4 w-4" />
+                  {uploadingBulkImport ? "上传中..." : "上传文件"}
                 </Button>
               </div>
+              <div className="flex gap-3 text-xs text-slate-600">
+                <span>成功 {bulkImportResult?.created_count ?? 0}</span>
+                <span>失败 {bulkImportResult?.errors.length ?? 0}</span>
+                <span>跳过 {bulkImportResult?.skipped_count ?? 0}</span>
+              </div>
             </div>
-          ) : null}
+            {bulkImportError ? (
+              <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-red-700">{bulkImportError}</div>
+            ) : null}
+            <div className="grid gap-4 xl:grid-cols-2">
+              <section className="space-y-2">
+                <div className="font-medium text-slate-800">上传成功</div>
+                <div className="max-h-80 overflow-auto rounded-md border border-slate-200">
+                  <Table>
+                    <THead>
+                      <TR>
+                        <TH>序号</TH>
+                        <TH>提单号</TH>
+                        <TH>操作</TH>
+                      </TR>
+                    </THead>
+                    <TBody>
+                      {(bulkImportResult?.created_waybills || []).map((item, index) => (
+                        <TR key={item.id}>
+                          <TD>{index + 1}</TD>
+                          <TD className="font-medium">{item.waybill_no}</TD>
+                          <TD>
+                            <Link
+                              href={`/waybills/${item.id}`}
+                              className="text-purple-700 underline-offset-2 hover:text-purple-900 hover:underline"
+                              onClick={() => setBulkImportOpen(false)}
+                            >
+                              打开
+                            </Link>
+                          </TD>
+                        </TR>
+                      ))}
+                      {!bulkImportResult?.created_waybills.length ? (
+                        <TR>
+                          <TD colSpan={3} className="py-6 text-center text-slate-500">
+                            暂无成功数据
+                          </TD>
+                        </TR>
+                      ) : null}
+                    </TBody>
+                  </Table>
+                </div>
+              </section>
+              <section className="space-y-2">
+                <div className="font-medium text-red-700">上传失败</div>
+                <div className="max-h-80 overflow-auto rounded-md border border-red-200">
+                  <Table>
+                    <THead>
+                      <TR>
+                        <TH>行号</TH>
+                        <TH>提单号</TH>
+                        <TH>原因</TH>
+                      </TR>
+                    </THead>
+                    <TBody>
+                      {(bulkImportResult?.errors || []).map((item) => (
+                        <TR key={`${item.row_number}-${item.waybill_no || ""}`}>
+                          <TD>{item.row_number}</TD>
+                          <TD>{item.waybill_no || ""}</TD>
+                          <TD>{item.message}</TD>
+                        </TR>
+                      ))}
+                      {!bulkImportResult?.errors.length ? (
+                        <TR>
+                          <TD colSpan={3} className="py-6 text-center text-slate-500">
+                            暂无失败数据
+                          </TD>
+                        </TR>
+                      ) : null}
+                    </TBody>
+                  </Table>
+                </div>
+              </section>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
       <Dialog open={unboundOpen} onOpenChange={setUnboundOpen}>
