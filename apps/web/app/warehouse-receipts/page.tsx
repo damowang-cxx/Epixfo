@@ -101,11 +101,6 @@ function channelTags(tags?: string[] | null) {
   return (tags || []).filter(Boolean);
 }
 
-function receiptOptionLabel(item: WarehouseReceipt) {
-  const tags = channelTags(item.channel_tags);
-  return tags.length ? `${receiptLabel(item)} · ${tags.join("/")}` : receiptLabel(item);
-}
-
 function channelLabel(value?: string | null) {
   if (!value) return "";
   return CHANNEL_LABELS[value] || value;
@@ -185,6 +180,8 @@ export default function WarehouseReceiptsPage() {
   const [unboundRemark, setUnboundRemark] = useState("");
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [receiptOptionsLoading, setReceiptOptionsLoading] = useState(false);
+  const [receiptOptionsError, setReceiptOptionsError] = useState("");
   const [message, setMessage] = useState("");
   const [batchUploadResult, setBatchUploadResult] = useState<BatchUploadResult | null>(null);
 
@@ -225,6 +222,8 @@ export default function WarehouseReceiptsPage() {
   }, []);
 
   const loadAllReceipts = useCallback(async () => {
+    setReceiptOptionsLoading(true);
+    setReceiptOptionsError("");
     try {
       const firstPage = await apiClient.get<PageResponse<WarehouseReceipt>>("/warehouse-receipts?page=1&page_size=200");
       const items = [...firstPage.items];
@@ -235,8 +234,11 @@ export default function WarehouseReceiptsPage() {
         items.push(...data.items);
       }
       setAllReceipts(items);
-    } catch {
+    } catch (error) {
       setAllReceipts([]);
+      setReceiptOptionsError(error instanceof Error ? error.message : "加载目标入仓号失败。");
+    } finally {
+      setReceiptOptionsLoading(false);
     }
   }, []);
 
@@ -936,28 +938,51 @@ export default function WarehouseReceiptsPage() {
             {transferMode === "receipt" ? (
               <div className="space-y-2">
                 <div className="font-medium text-slate-700">目标入仓号</div>
-                <select
-                  value={targetReceiptId}
-                  disabled={!hasTargetReceipts}
-                  onChange={(event) => setTargetReceiptId(event.target.value)}
-                  className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:ring-2 focus:ring-slate-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
-                >
-                  <option value="">选择目标入仓号</option>
+                <div className="max-h-72 overflow-y-auto rounded-md border border-slate-200 bg-white">
+                  {receiptOptionsLoading ? <div className="px-3 py-4 text-sm text-slate-500">正在加载目标入仓号...</div> : null}
+                  {receiptOptionsError ? <div className="px-3 py-4 text-sm text-rose-600">{receiptOptionsError}</div> : null}
+                  {!receiptOptionsLoading && !receiptOptionsError && !hasTargetReceipts ? (
+                    <div className="px-3 py-4 text-sm text-slate-500">暂无可移动的其他入仓号。</div>
+                  ) : null}
                   {targetReceiptGroups.map((group) =>
                     group.items.length ? (
-                      <optgroup key={group.key} label={group.label}>
-                        {group.items.map((item) => (
-                          <option key={item.id} value={String(item.id)}>
-                            {receiptOptionLabel(item)}
-                          </option>
-                        ))}
-                      </optgroup>
+                      <div key={group.key} className="border-b border-slate-100 last:border-b-0">
+                        <div className="sticky top-0 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-500">{group.label}</div>
+                        <div className="divide-y divide-slate-100">
+                          {group.items.map((item) => {
+                            const selected = targetReceiptId === String(item.id);
+                            const tags = channelTags(item.channel_tags);
+                            return (
+                              <button
+                                key={item.id}
+                                type="button"
+                                onClick={() => setTargetReceiptId(String(item.id))}
+                                className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm transition ${
+                                  selected ? "bg-slate-900 text-white" : "bg-white text-slate-700 hover:bg-slate-50"
+                                }`}
+                              >
+                                <span className="min-w-0">
+                                  <span className="block truncate font-medium">{receiptLabel(item)}</span>
+                                  <span className={`block text-xs ${selected ? "text-slate-200" : "text-slate-500"}`}>
+                                    箱数 {item.box_count ?? 0} / 重量 {formatDecimal(item.total_weight)} / 方数 {formatDecimal(item.total_volume)}
+                                  </span>
+                                </span>
+                                {tags.length ? (
+                                  <span className="flex shrink-0 flex-wrap justify-end gap-1">
+                                    {tags.map((tag) => (
+                                      <Badge key={tag} variant={selected ? "default" : "amber"}>{tag}</Badge>
+                                    ))}
+                                  </span>
+                                ) : null}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
                     ) : null
                   )}
-                </select>
-                <div className="text-xs text-slate-500">
-                  {hasTargetReceipts ? "支持移动到未绑定入仓号、预排仓入仓号、提单管理入仓号。" : "暂无可移动的其他入仓号。"}
                 </div>
+                <div className="text-xs text-slate-500">支持移动到未绑定入仓号、预排仓入仓号、提单管理入仓号。</div>
               </div>
             ) : (
               <div className="space-y-3">

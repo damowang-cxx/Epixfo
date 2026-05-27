@@ -117,6 +117,8 @@ export default function PrebookingsPage() {
   const [targetReceiptId, setTargetReceiptId] = useState("");
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
+  const [receiptOptionsLoading, setReceiptOptionsLoading] = useState(false);
+  const [receiptOptionsError, setReceiptOptionsError] = useState("");
 
   const loadList = useCallback(() => {
     apiClient.get<PageResponse<WaybillPrebooking>>(`/prebookings?page=${page}&page_size=20`).then((result) => {
@@ -129,11 +131,25 @@ export default function PrebookingsPage() {
     apiClient.get<CarrierAgent[]>("/carrier-agents").then((items) => setAgents(items.filter((item) => item.enabled)));
   }, []);
 
-  const loadUnboundReceipts = useCallback(() => {
-    apiClient
-      .get<PageResponse<WarehouseReceipt>>("/warehouse-receipts/unbound?page=1&page_size=300")
-      .then((result) => setUnboundReceipts(result.items))
-      .catch(() => setUnboundReceipts([]));
+  const loadUnboundReceipts = useCallback(async () => {
+    setReceiptOptionsLoading(true);
+    setReceiptOptionsError("");
+    try {
+      const firstPage = await apiClient.get<PageResponse<WarehouseReceipt>>("/warehouse-receipts/unbound?page=1&page_size=200");
+      const items = [...firstPage.items];
+      const pageSize = firstPage.page_size || 200;
+      const totalPages = Math.ceil(firstPage.total / pageSize);
+      for (let pageNumber = 2; pageNumber <= totalPages; pageNumber += 1) {
+        const result = await apiClient.get<PageResponse<WarehouseReceipt>>(`/warehouse-receipts/unbound?page=${pageNumber}&page_size=${pageSize}`);
+        items.push(...result.items);
+      }
+      setUnboundReceipts(items);
+    } catch (error) {
+      setUnboundReceipts([]);
+      setReceiptOptionsError(error instanceof Error ? error.message : "加载未绑定入仓号失败。");
+    } finally {
+      setReceiptOptionsLoading(false);
+    }
   }, []);
 
   const loadSelected = useCallback(() => {
@@ -275,6 +291,12 @@ export default function PrebookingsPage() {
     }
   }
 
+  function openBindReceipt() {
+    setTargetReceiptId("");
+    setBindOpen(true);
+    void loadUnboundReceipts();
+  }
+
   async function convertPrebooking() {
     if (!selected || !convertDraft) return;
     const payload = {
@@ -411,7 +433,7 @@ export default function PrebookingsPage() {
               action={
                 selected.status === "draft" ? (
                   <div className="flex flex-wrap justify-end gap-2">
-                    <Button variant="secondary" onClick={() => setBindOpen(true)}>
+                    <Button variant="secondary" onClick={openBindReceipt}>
                       绑定已有入仓号
                     </Button>
                     <WarehouseFileUploadButton
@@ -505,16 +527,43 @@ export default function PrebookingsPage() {
         <DialogContent>
           <DialogTitle>绑定已有入仓号</DialogTitle>
           <div className="mt-3 space-y-3">
-            <Select value={targetReceiptId} onValueChange={setTargetReceiptId}>
-              <SelectTrigger><SelectValue placeholder="选择未绑定入仓号" /></SelectTrigger>
-              <SelectContent>
-                {unboundReceipts.map((receipt) => (
-                  <SelectItem key={receipt.id} value={String(receipt.id)}>
-                    {receipt.warehouse_no} / 箱数 {receipt.box_count ?? 0} / 方数 {formatDecimal(receipt.total_volume)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <div className="max-h-72 overflow-y-auto rounded-md border border-slate-200 bg-white">
+              {receiptOptionsLoading ? <div className="px-3 py-4 text-sm text-slate-500">正在加载未绑定入仓号...</div> : null}
+              {receiptOptionsError ? <div className="px-3 py-4 text-sm text-rose-600">{receiptOptionsError}</div> : null}
+              {!receiptOptionsLoading && !receiptOptionsError && !unboundReceipts.length ? (
+                <div className="px-3 py-4 text-sm text-slate-500">暂无可绑定的未绑定入仓号。</div>
+              ) : null}
+              <div className="divide-y divide-slate-100">
+                {unboundReceipts.map((receipt) => {
+                  const selectedReceipt = targetReceiptId === String(receipt.id);
+                  const tags = channelTags(receipt.channel_tags);
+                  return (
+                    <button
+                      key={receipt.id}
+                      type="button"
+                      onClick={() => setTargetReceiptId(String(receipt.id))}
+                      className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm transition ${
+                        selectedReceipt ? "bg-slate-900 text-white" : "bg-white text-slate-700 hover:bg-slate-50"
+                      }`}
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate font-medium">{receipt.warehouse_no}</span>
+                        <span className={`block text-xs ${selectedReceipt ? "text-slate-200" : "text-slate-500"}`}>
+                          箱数 {receipt.box_count ?? 0} / 重量 {formatDecimal(receipt.total_weight)} / 方数 {formatDecimal(receipt.total_volume)}
+                        </span>
+                      </span>
+                      {tags.length ? (
+                        <span className="flex shrink-0 flex-wrap justify-end gap-1">
+                          {tags.map((tag) => (
+                            <Badge key={tag} variant={selectedReceipt ? "default" : "amber"}>{tag}</Badge>
+                          ))}
+                        </span>
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           </div>
           <div className="mt-5 flex justify-end gap-2">
             <Button variant="secondary" disabled={saving} onClick={() => setBindOpen(false)}>取消</Button>
