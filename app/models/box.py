@@ -35,20 +35,24 @@ class WarehouseReceipt(Base, TimestampMixin):
     __tablename__ = "warehouse_receipts"
     __table_args__ = (
         Index("idx_warehouse_receipts_waybill_id", "waybill_id"),
+        Index("idx_warehouse_receipts_prebooking_id", "prebooking_id"),
         Index("idx_warehouse_receipts_warehouse_no", "warehouse_no"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     warehouse_no: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
     waybill_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("air_waybills.id", ondelete="SET NULL"))
+    prebooking_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("waybill_prebookings.id", ondelete="SET NULL"))
     source_document_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("box_documents.id", ondelete="SET NULL"))
     uploaded_by: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"))
     total_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     total_weight: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 3))
     total_volume: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 3))
     weight_volume_ratio: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 3))
+    channel_tags: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
 
     source_document: Mapped[Optional[BoxDocument]] = relationship(back_populates="receipts")
+    prebooking = relationship("WaybillPrebooking", back_populates="receipts")
     boxes: Mapped[list[Box]] = relationship(back_populates="warehouse_receipt")
 
 

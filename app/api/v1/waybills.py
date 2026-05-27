@@ -238,7 +238,12 @@ def recalculate_waybill_box_volumes(
 ):
     PermissionService.assert_waybill_write(current_user)
     WaybillService(db).get_visible(waybill_id, current_user)
-    return WarehouseFileService(db).recalculate_box_volumes(waybill_id, payload.target_volume, current_user)
+    return WarehouseFileService(db).recalculate_box_volumes(
+        waybill_id,
+        payload.target_volume,
+        current_user,
+        warehouse_receipt_id=payload.warehouse_receipt_id,
+    )
 
 
 @router.post("/{waybill_id}/warehouse-file", response_model=WarehouseFileUploadResult)

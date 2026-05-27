@@ -124,7 +124,10 @@ function volumeCalculationError(error: unknown): VolumeErrorDialog {
 interface CargoBoxesTableProps {
   boxes: CargoBox[];
   waybillId?: number;
+  boxApiBasePath?: string;
   warehouseNo?: string | null;
+  warehouseReceiptId?: number | null;
+  allowCreate?: boolean;
   readonly?: boolean;
   onBoxUpdated?: (box: CargoBox) => void;
   onBoxDeleted?: (boxId: number) => void;
@@ -136,7 +139,10 @@ interface CargoBoxesTableProps {
 export function CargoBoxesTable({
   boxes,
   waybillId,
+  boxApiBasePath,
   warehouseNo,
+  warehouseReceiptId,
+  allowCreate = true,
   readonly = false,
   onBoxUpdated,
   onBoxDeleted,
@@ -167,8 +173,14 @@ export function CargoBoxesTable({
   const [targetVolumeError, setTargetVolumeError] = useState("");
 
   const selectedCount = selectedIds.size;
-  const canManageBoxes = Boolean(waybillId && !readonly);
-  const canCreateBox = Boolean(canManageBoxes && warehouseNo);
+  const apiBasePath = boxApiBasePath || (waybillId ? `/waybills/${waybillId}` : "");
+  const canManageBoxes = Boolean(apiBasePath && !readonly);
+  const canCreateBox = Boolean(canManageBoxes && warehouseNo && allowCreate);
+  const createDisabledMessage = !warehouseNo
+    ? "当前提单没有入仓号，请先上传入仓文件。"
+    : !allowCreate
+      ? "手动新增箱号仅支持当前提单最近入仓号。"
+      : "";
   const selectableWaybills = useMemo(
     () => waybillOptions.filter((item) => item.id !== waybillId && Boolean(item.warehouse_no)),
     [waybillId, waybillOptions]
@@ -277,7 +289,7 @@ export function CargoBoxesTable({
   }
 
   async function createBox() {
-    if (!waybillId) return;
+    if (!apiBasePath) return;
     const boxNo = newBoxDraft.box_no.trim();
     if (!boxNo) {
       onError?.("外箱条码不能为空。");
@@ -286,8 +298,9 @@ export function CargoBoxesTable({
 
     try {
       setSaving(true);
-      await apiClient.post<CargoBox>(`/waybills/${waybillId}/boxes`, {
+      await apiClient.post<CargoBox>(`${apiBasePath}/boxes`, {
         box_no: boxNo,
+        warehouse_receipt_id: warehouseReceiptId || undefined,
         warehouse_waybill_no: optionalText(newBoxDraft.warehouse_waybill_no),
         goods_name: optionalText(newBoxDraft.goods_name),
         quantity: optionalNumber(newBoxDraft.quantity),
@@ -305,7 +318,7 @@ export function CargoBoxesTable({
   }
 
   async function saveBoxNo(item: CargoBox) {
-    if (!waybillId) return;
+    if (!apiBasePath) return;
     const nextBoxNo = boxNoDraft.trim();
     if (!nextBoxNo) {
       onError?.("外箱条码不能为空。");
@@ -314,7 +327,7 @@ export function CargoBoxesTable({
 
     try {
       setSaving(true);
-      const updated = await apiClient.patch<CargoBox>(`/waybills/${waybillId}/boxes/${item.id}`, {
+      const updated = await apiClient.patch<CargoBox>(`${apiBasePath}/boxes/${item.id}`, {
         box_no: nextBoxNo
       });
       onBoxUpdated?.(updated);
@@ -327,10 +340,10 @@ export function CargoBoxesTable({
   }
 
   async function toggleGeneralCargo(item: CargoBox) {
-    if (!waybillId) return;
+    if (!apiBasePath) return;
     try {
       setSaving(true);
-      const updated = await apiClient.patch<CargoBox>(`/waybills/${waybillId}/boxes/${item.id}`, {
+      const updated = await apiClient.patch<CargoBox>(`${apiBasePath}/boxes/${item.id}`, {
         is_general_cargo: !item.is_general_cargo
       });
       onBoxUpdated?.(updated);
@@ -342,12 +355,12 @@ export function CargoBoxesTable({
   }
 
   async function deleteBox(item: CargoBox) {
-    if (!waybillId) return;
+    if (!apiBasePath) return;
     if (!window.confirm(`确认永久删除箱号 ${item.box_no} 及其箱内明细吗？`)) return;
 
     try {
       setSaving(true);
-      await apiClient.delete<void>(`/waybills/${waybillId}/boxes/${item.id}`);
+      await apiClient.delete<void>(`${apiBasePath}/boxes/${item.id}`);
       setSelectedIds((prev) => {
         const next = new Set(prev);
         next.delete(item.id);
@@ -410,7 +423,7 @@ export function CargoBoxesTable({
   }
 
   async function recalculateVolumes() {
-    if (!waybillId) return;
+    if (!apiBasePath) return;
     const targetVolume = Number(targetVolumeDraft);
     if (!Number.isFinite(targetVolume) || targetVolume <= 0) {
       setTargetVolumeError("请输入大于 0 的目标方数。");
@@ -418,8 +431,9 @@ export function CargoBoxesTable({
     }
     try {
       setSaving(true);
-      const result = await apiClient.post<BoxVolumeRecalculationResult>(`/waybills/${waybillId}/boxes/recalculate-volume`, {
-        target_volume: targetVolume
+      const result = await apiClient.post<BoxVolumeRecalculationResult>(`${apiBasePath}/boxes/recalculate-volume`, {
+        target_volume: targetVolume,
+        warehouse_receipt_id: warehouseReceiptId || undefined
       });
       setVolumeCalcOpen(false);
       onChanged?.();
@@ -449,7 +463,7 @@ export function CargoBoxesTable({
             <Plus className="h-4 w-4" />
             新增箱号
           </Button>
-          {!canCreateBox ? <span className="text-slate-500">当前提单没有入仓号，请先上传入仓文件。</span> : null}
+          {!canCreateBox ? <span className="text-slate-500">{createDisabledMessage}</span> : null}
           <span className="text-slate-600">已选 {selectedCount} 个箱号</span>
           <Button type="button" variant="secondary" size="sm" disabled={!boxes.length} onClick={() => setBatchSelectOpen(true)}>
             <ListChecks className="h-4 w-4" />

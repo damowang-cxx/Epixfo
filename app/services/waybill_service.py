@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from decimal import Decimal
 
 from app.core.platform_patch import patch_platform_wmi
 
@@ -361,7 +360,6 @@ class WaybillService:
                 update(Box)
                 .where(Box.warehouse_receipt_id.in_(receipt_ids))
                 .values(
-                    warehouse_receipt_id=None,
                     current_waybill_id=None,
                     status="unbound",
                     never_bound_direct_upload=False,
@@ -374,10 +372,6 @@ class WaybillService:
                 .where(WarehouseReceipt.id.in_(receipt_ids))
                 .values(
                     waybill_id=None,
-                    total_quantity=0,
-                    total_weight=Decimal("0.000"),
-                    total_volume=Decimal("0.000"),
-                    weight_volume_ratio=Decimal("0.000"),
                 )
             )
         self.db.execute(

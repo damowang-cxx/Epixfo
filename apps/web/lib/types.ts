@@ -186,12 +186,61 @@ export interface WarehouseReceipt {
   id: number;
   warehouse_no: string;
   waybill_id?: number | null;
+  waybill_no?: string | null;
+  prebooking_id?: number | null;
+  prebooking_status?: string | null;
+  prebooking_label?: string | null;
   source_document_id?: number | null;
+  source_file_name?: string | null;
   uploaded_by?: number | null;
   total_quantity: number;
   total_weight?: string | number | null;
   total_volume?: string | number | null;
   weight_volume_ratio?: string | number | null;
+  channel_tags: string[];
+  box_count?: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export type PrebookingStatus = "draft" | "converted" | "cancelled";
+
+export interface WaybillPrebooking {
+  id: number;
+  status: PrebookingStatus;
+  carrier_agent_id: number;
+  carrier_agent?: CarrierAgent | null;
+  agent?: string | null;
+  planned_flight_date: string;
+  booked_volume: string | number;
+  waybill_no?: string | null;
+  departure_port?: string | null;
+  destination_port?: string | null;
+  planned_flight_no?: string | null;
+  planned_route_text?: string | null;
+  consignee?: string | null;
+  consignee_contact_id?: number | null;
+  consignee_contact?: ConsigneeContact | null;
+  customs_staff_id?: number | null;
+  customs_staff?: UserSummary | null;
+  data_charge?: string | number | null;
+  delivery_time?: string | null;
+  document_cutoff_time?: string | null;
+  booked_weight?: string | number | null;
+  density?: string | number | null;
+  quotation?: string | number | null;
+  include_tc: boolean;
+  warehouse_data_remark?: string | null;
+  notify_pickup: boolean;
+  pickup_time?: string | null;
+  internal_remark?: string | null;
+  customer_remark?: string | null;
+  air_freight_cost?: string | number | null;
+  other_charge?: string | number | null;
+  payment_date?: string | null;
+  converted_waybill_id?: number | null;
+  converted_waybill?: Waybill | null;
+  receipts: WarehouseReceipt[];
   created_at: string;
   updated_at: string;
 }
@@ -225,6 +274,18 @@ export interface WarehouseBoxConflict {
   target_warehouse_no: string;
 }
 
+export interface WarehouseChannelReviewIssue {
+  box_no: string;
+  prefix: string;
+  reason: string;
+  message: string;
+}
+
+export interface WarehouseChannelReview {
+  detected_channel: "europe" | "uk" | "unknown" | "mixed";
+  warnings: string[];
+}
+
 export interface WarehouseFileUploadResult {
   file_name: string;
   warehouse_no: string;
@@ -233,6 +294,8 @@ export interface WarehouseFileUploadResult {
   skipped_count: number;
   errors: WarehouseFileImportError[];
   conflicts: WarehouseBoxConflict[];
+  channel_review?: WarehouseChannelReview | null;
+  channel_tags: string[];
 }
 
 export interface WaybillBulkImportError {

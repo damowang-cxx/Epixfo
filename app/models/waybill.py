@@ -56,6 +56,60 @@ class WaybillBoard(Base, TimestampMixin):
         return sum((item.booked_volume or Decimal("0.000") for item in self.waybills or []), Decimal("0.000"))
 
 
+class WaybillPrebooking(Base, TimestampMixin):
+    __tablename__ = "waybill_prebookings"
+    __table_args__ = (
+        Index("idx_waybill_prebookings_status", "status"),
+        Index("idx_waybill_prebookings_flight_date", "planned_flight_date"),
+        Index("idx_waybill_prebookings_agent_id", "carrier_agent_id"),
+        Index("idx_waybill_prebookings_converted_waybill_id", "converted_waybill_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft", server_default="draft")
+
+    carrier_agent_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("carrier_agents.id"), nullable=False)
+    agent: Mapped[Optional[str]] = mapped_column(String(128))
+    planned_flight_date: Mapped[date] = mapped_column(Date, nullable=False)
+    booked_volume: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
+
+    waybill_no: Mapped[Optional[str]] = mapped_column(String(64))
+    departure_port: Mapped[Optional[str]] = mapped_column(String(16))
+    destination_port: Mapped[Optional[str]] = mapped_column(String(16))
+    planned_flight_no: Mapped[Optional[str]] = mapped_column(String(32))
+    planned_route_text: Mapped[Optional[str]] = mapped_column(String(255))
+
+    consignee: Mapped[Optional[str]] = mapped_column(String(255))
+    consignee_contact_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("consignee_contacts.id"))
+    customs_staff_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"))
+
+    data_charge: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2))
+    delivery_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    document_cutoff_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    booked_weight: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 3))
+    density: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 3))
+    quotation: Mapped[Optional[str]] = mapped_column(String(64))
+    include_tc: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    warehouse_data_remark: Mapped[Optional[str]] = mapped_column(Text)
+    notify_pickup: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    pickup_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    internal_remark: Mapped[Optional[str]] = mapped_column(Text)
+    customer_remark: Mapped[Optional[str]] = mapped_column(Text)
+    air_freight_cost: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2))
+    other_charge: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2))
+    payment_date: Mapped[Optional[date]] = mapped_column(Date)
+
+    converted_waybill_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("air_waybills.id", ondelete="SET NULL"))
+    created_by: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"))
+    updated_by: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"))
+
+    carrier_agent = relationship("CarrierAgent", lazy="joined")
+    consignee_contact = relationship("ConsigneeContact", lazy="joined")
+    customs_staff = relationship("User", foreign_keys=[customs_staff_id], lazy="joined")
+    converted_waybill = relationship("AirWaybill", foreign_keys=[converted_waybill_id], lazy="joined")
+    receipts = relationship("WarehouseReceipt", back_populates="prebooking")
+
+
 class AirWaybill(Base, TimestampMixin):
     __tablename__ = "air_waybills"
     __table_args__ = (

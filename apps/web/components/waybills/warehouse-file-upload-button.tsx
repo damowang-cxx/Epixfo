@@ -22,13 +22,15 @@ function isWarehouseConflictDetail(detail: unknown): detail is {
 
 export function WarehouseFileUploadButton({
   waybillId,
+  uploadPath,
   label = "上传入仓文件",
   size = "sm",
   variant = "secondary",
   onUploaded,
   onError
 }: {
-  waybillId: number;
+  waybillId?: number;
+  uploadPath?: string;
   label?: string;
   size?: "default" | "sm" | "icon";
   variant?: "default" | "secondary" | "ghost" | "danger";
@@ -49,7 +51,7 @@ export function WarehouseFileUploadButton({
     setUploading(true);
     try {
       const result = await apiClient.postForm<WarehouseFileUploadResult>(
-        `/waybills/${waybillId}/warehouse-file`,
+        uploadPath || `/waybills/${waybillId}/warehouse-file`,
         formData
       );
       setPendingFile(null);
@@ -102,7 +104,7 @@ export function WarehouseFileUploadButton({
         variant={variant}
         size={size}
         onClick={() => inputRef.current?.click()}
-        disabled={uploading}
+        disabled={uploading || (!uploadPath && !waybillId)}
       >
         <Upload className="h-4 w-4" />
         {uploading ? "上传中..." : label}

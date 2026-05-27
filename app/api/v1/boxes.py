@@ -72,6 +72,7 @@ def batch_transfer_boxes(
         payload.target_type,
         current_user,
         target_waybill_id=payload.target_waybill_id,
+        target_receipt_id=payload.target_receipt_id,
         unbound_reason=payload.unbound_reason,
         unbound_remark=payload.unbound_remark,
     )

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { Ban, Download, Pencil, Play, Trash2, UserCheck } from "lucide-react";
@@ -75,6 +75,10 @@ function userDisplayName(user?: Waybill["customs_staff"]) {
   return user.display_name || user.username;
 }
 
+function channelTags(tags?: string[] | null) {
+  return (tags || []).filter(Boolean);
+}
+
 export default function WaybillDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
@@ -123,6 +127,42 @@ export default function WaybillDetailPage() {
     if (!canEditBoxes) return;
     apiClient.get<User[]>("/users").then(setUsers).catch(() => setUsers([]));
   }, [canEditBoxes]);
+
+  const boxGroups = useMemo(() => {
+    const groups = new Map<
+      string,
+      {
+        key: string;
+        receiptId?: number | null;
+        warehouseNo?: string | null;
+        totalQuantity?: number | null;
+        totalWeight?: string | number | null;
+        totalVolume?: string | number | null;
+        weightVolumeRatio?: string | number | null;
+        channelTags: string[];
+        boxes: CargoBox[];
+      }
+    >();
+    for (const box of boxes) {
+      const receipt = box.warehouse_receipt;
+      const key = receipt?.id ? String(receipt.id) : "none";
+      if (!groups.has(key)) {
+        groups.set(key, {
+          key,
+          receiptId: receipt?.id,
+          warehouseNo: receipt?.warehouse_no || waybill?.warehouse_no,
+          totalQuantity: receipt?.total_quantity,
+          totalWeight: receipt?.total_weight,
+          totalVolume: receipt?.total_volume,
+          weightVolumeRatio: receipt?.weight_volume_ratio,
+          channelTags: channelTags(receipt?.channel_tags),
+          boxes: []
+        });
+      }
+      groups.get(key)?.boxes.push(box);
+    }
+    return Array.from(groups.values());
+  }, [boxes, waybill?.warehouse_no]);
 
   async function triggerQuery() {
     if (!id) return;
@@ -378,25 +418,67 @@ export default function WaybillDetailPage() {
               ) : null
             }
           >
-            <CargoBoxesTable
-              boxes={boxes}
-              waybillId={waybill.id}
-              warehouseNo={waybill.warehouse_no}
-              readonly={!canEditBoxes}
-              onBoxUpdated={(updated) => {
-                setBoxes((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
-                setMessage("外箱条码已更新。");
-              }}
-              onBoxDeleted={(boxId) => {
-                setBoxes((prev) => prev.filter((item) => item.id !== boxId));
-              }}
-              onChanged={() => {
-                setMessage("箱号绑定已更新。");
-                load();
-              }}
-              onError={setMessage}
-              onMessage={setMessage}
-            />
+            {boxGroups.length ? (
+              <div className="space-y-4">
+                {boxGroups.map((group) => (
+                  <div key={group.key} className="rounded-md border border-slate-200">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 bg-slate-50 px-3 py-2 text-sm">
+                      <div className="flex flex-wrap items-center gap-2 font-semibold text-slate-900">
+                        <span>入仓号：{group.warehouseNo || "未归属入仓号"}</span>
+                        {group.channelTags.map((tag) => (
+                          <Badge key={tag} variant="amber">
+                            {tag}
+                          </Badge>
+                        ))}
+                      </div>
+                      <div className="flex flex-wrap gap-3 text-xs text-slate-600">
+                        <span>箱数 {group.boxes.length}</span>
+                        <span>总数量 {compact(group.totalQuantity)}</span>
+                        <span>总重量 {compact(group.totalWeight)}</span>
+                        <span>总方数 {compact(group.totalVolume)}</span>
+                        <span>重量/方 {compact(group.weightVolumeRatio)}</span>
+                      </div>
+                    </div>
+                    <div className="p-3">
+                      <CargoBoxesTable
+                        boxes={group.boxes}
+                        waybillId={waybill.id}
+                        warehouseNo={group.warehouseNo}
+                        warehouseReceiptId={group.receiptId}
+                        allowCreate={group.warehouseNo === waybill.warehouse_no}
+                        readonly={!canEditBoxes}
+                        onBoxUpdated={(updated) => {
+                          setBoxes((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+                          setMessage("外箱条码已更新。");
+                        }}
+                        onBoxDeleted={(boxId) => {
+                          setBoxes((prev) => prev.filter((item) => item.id !== boxId));
+                        }}
+                        onChanged={() => {
+                          setMessage("箱号绑定已更新。");
+                          load();
+                        }}
+                        onError={setMessage}
+                        onMessage={setMessage}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <CargoBoxesTable
+                boxes={[]}
+                waybillId={waybill.id}
+                warehouseNo={waybill.warehouse_no}
+                readonly={!canEditBoxes}
+                onChanged={() => {
+                  setMessage("箱号绑定已更新。");
+                  load();
+                }}
+                onError={setMessage}
+                onMessage={setMessage}
+              />
+            )}
           </Panel>
         </TabsContent>
         <TabsContent value="official">

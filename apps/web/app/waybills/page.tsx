@@ -14,14 +14,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { useAuth } from "@/components/layout/auth-provider";
 import { WarehouseFileUploadButton } from "@/components/waybills/warehouse-file-upload-button";
-import { ApiError, apiClient } from "@/lib/client-api";
+import { apiClient } from "@/lib/client-api";
 import { LIFECYCLE_ORDER, lifecycleLabels } from "@/lib/constants";
 import { formatPlannedFlightInfo } from "@/lib/planned-flight";
 import { cn, compact, formatDateTime } from "@/lib/utils";
 import { formatWarehouseUploadMessage } from "@/lib/warehouse-upload";
 import type {
-  BoxBatchOperationResult,
-  CargoBox,
   LifecycleStatus,
   PageResponse,
   WaybillBulkImportResult,
@@ -54,16 +52,6 @@ const CARD_BG: Record<LifecycleBadgeVariant, string> = {
   teal: "border-teal-300 bg-teal-100 hover:bg-teal-200",
   pink: "border-pink-300 bg-pink-100 hover:bg-pink-200"
 };
-
-const UNBOUND_REASON_LABELS: Record<string, string> = {
-  customs_inspection: "海关查验",
-  other: "其他"
-};
-
-function unboundReasonLabel(reason?: string | null) {
-  if (!reason) return "";
-  return UNBOUND_REASON_LABELS[reason] || reason;
-}
 
 function userDisplayName(user?: Waybill["customs_staff"]) {
   if (!user) return "";
@@ -113,17 +101,9 @@ export default function WaybillsPage() {
   const [lifecycleStatus, setLifecycleStatus] = useState<LifecycleStatus | "all">("all");
   const [page, setPage] = useState(1);
   const [message, setMessage] = useState("");
-  const [unboundOpen, setUnboundOpen] = useState(false);
-  const [unboundData, setUnboundData] = useState<PageResponse<CargoBox> | null>(null);
-  const [unboundPage, setUnboundPage] = useState(1);
-  const [selectedBoxIds, setSelectedBoxIds] = useState<Set<number>>(new Set());
-  const [targetWaybillId, setTargetWaybillId] = useState("");
-  const [waybillOptions, setWaybillOptions] = useState<Waybill[]>([]);
   const [deletingWaybillId, setDeletingWaybillId] = useState<number | null>(null);
   const [accessWaybillNo, setAccessWaybillNo] = useState("");
   const [requestingAccess, setRequestingAccess] = useState(false);
-  const [uploadingUnboundFile, setUploadingUnboundFile] = useState(false);
-  const unboundFileInputRef = useRef<HTMLInputElement>(null);
   const bulkImportInputRef = useRef<HTMLInputElement>(null);
   const [bulkImportOpen, setBulkImportOpen] = useState(false);
   const [uploadingBulkImport, setUploadingBulkImport] = useState(false);
@@ -151,17 +131,6 @@ export default function WaybillsPage() {
       .catch(() => undefined);
   }, []);
 
-  const loadUnbound = useCallback(() => {
-    apiClient.get<PageResponse<CargoBox>>(`/boxes/unbound?page=${unboundPage}&page_size=20`).then(setUnboundData);
-  }, [unboundPage]);
-
-  const loadWaybillOptions = useCallback(() => {
-    apiClient
-      .get<PageResponse<Waybill>>("/waybills?page=1&page_size=200")
-      .then((rows) => setWaybillOptions(rows.items.filter((item) => Boolean(item.warehouse_no))))
-      .catch(() => undefined);
-  }, []);
-
   useEffect(() => {
     load();
   }, [load]);
@@ -169,13 +138,6 @@ export default function WaybillsPage() {
   useEffect(() => {
     loadCounts();
   }, [data, loadCounts]);
-
-  useEffect(() => {
-    if (unboundOpen) {
-      loadUnbound();
-      loadWaybillOptions();
-    }
-  }, [loadUnbound, loadWaybillOptions, unboundOpen]);
 
   const totalCount = useMemo(() => Object.values(counts).reduce((a, b) => a + b, 0), [counts]);
   const boardRowSpans = useMemo(() => {
@@ -213,53 +175,6 @@ export default function WaybillsPage() {
     loadCounts();
   }
 
-  function formatUnboundUploadError(error: unknown) {
-    if (error instanceof ApiError && error.detail && typeof error.detail === "object") {
-      const detail = error.detail as { message?: unknown; conflicts?: unknown };
-      if (Array.isArray(detail.conflicts) && detail.conflicts.length > 0) {
-        const boxNos = detail.conflicts
-          .map((item) => (item && typeof item === "object" ? (item as { box_no?: unknown }).box_no : null))
-          .filter(Boolean)
-          .join("、");
-        return `${typeof detail.message === "string" ? detail.message : error.message}${boxNos ? `：${boxNos}` : ""}`;
-      }
-    }
-    return error instanceof Error ? error.message : "上传未绑定箱号文件失败。";
-  }
-
-  function formatUnboundUploadMessage(result: WarehouseFileUploadResult) {
-    const skippedText = result.skipped_count ? `，跳过空行 ${result.skipped_count} 行` : "";
-    const errorText = result.errors?.length
-      ? `，失败 ${result.errors.length} 行：${result.errors
-          .slice(0, 5)
-          .map((item) => `第 ${item.row_number} 行（${item.message}）`)
-          .join("；")}${result.errors.length > 5 ? `；另 ${result.errors.length - 5} 行` : ""}`
-      : "";
-    return `未绑定箱号文件已上传：${result.warehouse_no}，导入 ${result.success_count} 个外箱条码${skippedText}${errorText}。`;
-  }
-
-  async function uploadUnboundWarehouseFile(file: File | null | undefined) {
-    if (!file) return;
-    setUploadingUnboundFile(true);
-    setMessage("");
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      const result = await apiClient.postForm<WarehouseFileUploadResult>("/boxes/unbound/warehouse-file", formData);
-      setMessage(formatUnboundUploadMessage(result));
-      setSelectedBoxIds(new Set());
-      if (unboundPage === 1) {
-        loadUnbound();
-      } else {
-        setUnboundPage(1);
-      }
-    } catch (error) {
-      setMessage(formatUnboundUploadError(error));
-    } finally {
-      setUploadingUnboundFile(false);
-    }
-  }
-
   async function uploadWaybillImportFile(file: File | null | undefined) {
     if (!file) return;
     setBulkImportOpen(true);
@@ -281,34 +196,6 @@ export default function WaybillsPage() {
       setMessage(errorMessage);
     } finally {
       setUploadingBulkImport(false);
-    }
-  }
-
-  function toggleUnboundBox(id: number, checked: boolean) {
-    setSelectedBoxIds((prev) => {
-      const next = new Set(prev);
-      if (checked) next.add(id);
-      else next.delete(id);
-      return next;
-    });
-  }
-
-  async function bindSelectedUnboundBoxes() {
-    if (!selectedBoxIds.size || !targetWaybillId) return;
-    try {
-      const result = await apiClient.post<BoxBatchOperationResult>("/boxes/batch-transfer", {
-        box_ids: Array.from(selectedBoxIds),
-        target_type: "waybill",
-        target_waybill_id: Number(targetWaybillId)
-      });
-      setMessage(`已绑定 ${result.updated_count} 个箱号。`);
-      setSelectedBoxIds(new Set());
-      setTargetWaybillId("");
-      loadUnbound();
-      load();
-      loadCounts();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "批量绑定失败。");
     }
   }
 
@@ -335,10 +222,6 @@ export default function WaybillsPage() {
         load();
       }
       loadCounts();
-      if (unboundOpen) {
-        loadUnbound();
-        loadWaybillOptions();
-      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "删除提单失败。");
     } finally {
@@ -387,9 +270,6 @@ export default function WaybillsPage() {
             <Button variant="secondary" onClick={() => setBulkImportOpen(true)}>
               <Upload className="h-4 w-4" />
               批量上传提单
-            </Button>
-            <Button variant="secondary" onClick={() => setUnboundOpen(true)}>
-              未绑定箱号
             </Button>
             <Button asChild>
               <Link href="/waybills/new">
@@ -672,124 +552,6 @@ export default function WaybillsPage() {
                   </Table>
                 </div>
               </section>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-      <Dialog open={unboundOpen} onOpenChange={setUnboundOpen}>
-        <DialogContent className="w-[min(960px,calc(100vw-32px))]">
-          <DialogTitle className="pr-10 text-base font-semibold text-slate-900">未绑定箱号</DialogTitle>
-          <div className="space-y-3">
-            <Input
-              ref={unboundFileInputRef}
-              type="file"
-              accept=".xlsx"
-              className="hidden"
-              onChange={(event) => {
-                const file = event.currentTarget.files?.[0];
-                event.currentTarget.value = "";
-                void uploadUnboundWarehouseFile(file);
-              }}
-            />
-            <div className="flex flex-wrap items-center gap-2 text-sm">
-              <span className="text-slate-600">已选 {selectedBoxIds.size} 个箱号</span>
-              <Button
-                type="button"
-                variant="secondary"
-                disabled={uploadingUnboundFile}
-                onClick={() => unboundFileInputRef.current?.click()}
-              >
-                {uploadingUnboundFile ? "上传中..." : "上传入仓文件到未绑定池"}
-              </Button>
-              <Select value={targetWaybillId} onValueChange={setTargetWaybillId}>
-                <SelectTrigger className="w-72">
-                  <SelectValue placeholder="选择目标提单入仓号" />
-                </SelectTrigger>
-                <SelectContent>
-                  {waybillOptions.map((item) => (
-                    <SelectItem key={item.id} value={String(item.id)}>
-                      {item.waybill_no} · {item.warehouse_no}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button
-                variant="secondary"
-                disabled={!selectedBoxIds.size || !targetWaybillId}
-                onClick={() => void bindSelectedUnboundBoxes()}
-              >
-                批量绑定
-              </Button>
-            </div>
-            <Table>
-              <THead>
-                <TR>
-                  <TH>选择</TH>
-                  <TH>外箱条码</TH>
-                  <TH>来源</TH>
-                  <TH>箱内提单数</TH>
-                  <TH>首个仓库提单号码</TH>
-                  <TH>品名</TH>
-                  <TH>原因</TH>
-                  <TH>备注</TH>
-                  <TH>数量</TH>
-                  <TH>重量</TH>
-                  <TH>方数</TH>
-                  <TH>重量/方</TH>
-                </TR>
-              </THead>
-              <TBody>
-                {(unboundData?.items || []).map((item) => (
-                  <TR key={item.id}>
-                    <TD>
-                      <input
-                        type="checkbox"
-                        checked={selectedBoxIds.has(item.id)}
-                        onChange={(event) => toggleUnboundBox(item.id, event.target.checked)}
-                      />
-                    </TD>
-                    <TD className="font-medium">{item.box_no}</TD>
-                    <TD>
-                      {item.never_bound_direct_upload ? (
-                        <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-800">
-                          从未绑定过任何提单
-                        </span>
-                      ) : null}
-                    </TD>
-                    <TD>{item.items?.length || 0}</TD>
-                    <TD>{compact(item.warehouse_waybill_no)}</TD>
-                    <TD>{compact(item.goods_name)}</TD>
-                    <TD>
-                      {item.unbound_reason ? (
-                        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-700">
-                          {unboundReasonLabel(item.unbound_reason)}
-                        </span>
-                      ) : null}
-                    </TD>
-                    <TD>{compact(item.unbound_remark)}</TD>
-                    <TD>{compact(item.quantity)}</TD>
-                    <TD>{compact(item.weight)}</TD>
-                    <TD>{compact(item.volume)}</TD>
-                    <TD>{compact(item.weight_volume_ratio)}</TD>
-                  </TR>
-                ))}
-              </TBody>
-            </Table>
-            <div className="flex items-center justify-between text-sm text-slate-500">
-              <span>共 {unboundData?.total ?? 0} 个未绑定箱号</span>
-              <div className="flex gap-2">
-                <Button variant="secondary" size="sm" disabled={unboundPage <= 1} onClick={() => setUnboundPage((prev) => prev - 1)}>
-                  上一页
-                </Button>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={!unboundData || unboundPage * unboundData.page_size >= unboundData.total}
-                  onClick={() => setUnboundPage((prev) => prev + 1)}
-                >
-                  下一页
-                </Button>
-              </div>
             </div>
           </div>
         </DialogContent>

@@ -25,14 +25,45 @@ class WarehouseReceiptOut(BaseModel):
     id: int
     warehouse_no: str
     waybill_id: int | None = None
+    prebooking_id: int | None = None
     source_document_id: int | None = None
     uploaded_by: int | None = None
     total_quantity: int
     total_weight: Decimal | None = None
     total_volume: Decimal | None = None
     weight_volume_ratio: Decimal | None = None
+    channel_tags: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+
+
+class WarehouseReceiptListOut(BaseModel):
+    id: int
+    warehouse_no: str
+    waybill_id: int | None = None
+    waybill_no: str | None = None
+    prebooking_id: int | None = None
+    prebooking_status: str | None = None
+    prebooking_label: str | None = None
+    source_document_id: int | None = None
+    source_file_name: str | None = None
+    uploaded_by: int | None = None
+    total_quantity: int
+    total_weight: Decimal | None = None
+    total_volume: Decimal | None = None
+    weight_volume_ratio: Decimal | None = None
+    channel_tags: list[str] = Field(default_factory=list)
+    box_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class WarehouseReceiptBindRequest(BaseModel):
+    target_waybill_id: int
+
+
+class WarehouseReceiptBindPrebookingRequest(BaseModel):
+    receipt_id: int
 
 
 class BoxItemOut(BaseModel):
@@ -94,6 +125,7 @@ class BoxCreate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     box_no: str = Field(min_length=1, max_length=128)
+    warehouse_receipt_id: int | None = None
     warehouse_waybill_no: str | None = Field(default=None, max_length=128)
     goods_name: str | None = None
     quantity: int | None = Field(default=None, ge=0)
@@ -117,6 +149,18 @@ class WarehouseBoxConflict(BaseModel):
     target_warehouse_no: str
 
 
+class WarehouseChannelReviewIssue(BaseModel):
+    box_no: str
+    prefix: str
+    reason: str
+    message: str
+
+
+class WarehouseChannelReviewOut(BaseModel):
+    detected_channel: Literal["europe", "uk", "unknown", "mixed"]
+    warnings: list[str] = Field(default_factory=list)
+
+
 class WarehouseFileUploadResult(BaseModel):
     file_name: str
     warehouse_no: str
@@ -125,6 +169,8 @@ class WarehouseFileUploadResult(BaseModel):
     skipped_count: int
     errors: list[WarehouseFileImportError]
     conflicts: list[WarehouseBoxConflict] = Field(default_factory=list)
+    channel_review: WarehouseChannelReviewOut | None = None
+    channel_tags: list[str] = Field(default_factory=list)
 
 
 class BoxBatchBindRequest(BaseModel):
@@ -140,8 +186,9 @@ class BoxBatchTransferRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     box_ids: list[int] = Field(min_length=1)
-    target_type: Literal["waybill", "unbound"]
+    target_type: Literal["waybill", "receipt", "unbound"]
     target_waybill_id: int | None = None
+    target_receipt_id: int | None = None
     unbound_reason: Literal["customs_inspection", "other"] | None = None
     unbound_remark: str | None = None
 
@@ -153,6 +200,7 @@ class BoxBatchOperationResult(BaseModel):
 
 class BoxVolumeRecalculationRequest(BaseModel):
     target_volume: Decimal = Field(gt=0)
+    warehouse_receipt_id: int | None = None
 
 
 class BoxVolumeRecalculationResult(BaseModel):

@@ -7,7 +7,7 @@ patch_platform_wmi()
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models import AirWaybill, Box, BoxDocument, BoxItem, WarehouseReceipt
+from app.models import AirWaybill, Box, BoxDocument, BoxItem, WarehouseReceipt, WaybillPrebooking
 
 
 class BoxRepository:
@@ -21,7 +21,18 @@ class BoxRepository:
                 .join(WarehouseReceipt, WarehouseReceipt.id == Box.warehouse_receipt_id)
                 .options(selectinload(Box.document), selectinload(Box.warehouse_receipt), selectinload(Box.items))
                 .where(WarehouseReceipt.waybill_id == waybill_id)
-                .order_by(Box.source_row_number, Box.id)
+                .order_by(WarehouseReceipt.id, Box.source_row_number, Box.id)
+            )
+        )
+
+    def list_by_prebooking(self, prebooking_id: int) -> list[Box]:
+        return list(
+            self.db.scalars(
+                select(Box)
+                .join(WarehouseReceipt, WarehouseReceipt.id == Box.warehouse_receipt_id)
+                .options(selectinload(Box.document), selectinload(Box.warehouse_receipt), selectinload(Box.items))
+                .where(WarehouseReceipt.prebooking_id == prebooking_id)
+                .order_by(WarehouseReceipt.id, Box.source_row_number, Box.id)
             )
         )
 
@@ -31,6 +42,14 @@ class BoxRepository:
             .join(WarehouseReceipt, WarehouseReceipt.id == Box.warehouse_receipt_id)
             .options(selectinload(Box.document), selectinload(Box.warehouse_receipt), selectinload(Box.items))
             .where(WarehouseReceipt.waybill_id == waybill_id, Box.id == box_id)
+        )
+
+    def get_by_prebooking(self, prebooking_id: int, box_id: int) -> Box | None:
+        return self.db.scalar(
+            select(Box)
+            .join(WarehouseReceipt, WarehouseReceipt.id == Box.warehouse_receipt_id)
+            .options(selectinload(Box.document), selectinload(Box.warehouse_receipt), selectinload(Box.items))
+            .where(WarehouseReceipt.prebooking_id == prebooking_id, Box.id == box_id)
         )
 
     def delete_by_waybill(self, waybill_id: int) -> int:
@@ -98,6 +117,35 @@ class BoxRepository:
         )
         return items, int(total)
 
+    def list_receipts(
+        self,
+        *,
+        page: int,
+        page_size: int,
+        unbound_only: bool = False,
+    ) -> tuple[list[tuple[WarehouseReceipt, str | None, WaybillPrebooking | None, str | None, int]], int]:
+        stmt = (
+            select(
+                WarehouseReceipt,
+                AirWaybill.waybill_no,
+                WaybillPrebooking,
+                BoxDocument.file_name,
+                func.count(Box.id).label("box_count"),
+            )
+            .outerjoin(AirWaybill, AirWaybill.id == WarehouseReceipt.waybill_id)
+            .outerjoin(WaybillPrebooking, WaybillPrebooking.id == WarehouseReceipt.prebooking_id)
+            .outerjoin(BoxDocument, BoxDocument.id == WarehouseReceipt.source_document_id)
+            .outerjoin(Box, Box.warehouse_receipt_id == WarehouseReceipt.id)
+            .group_by(WarehouseReceipt.id, AirWaybill.waybill_no, WaybillPrebooking.id, BoxDocument.file_name)
+            .order_by(WarehouseReceipt.updated_at.desc(), WarehouseReceipt.id.desc())
+        )
+        if unbound_only:
+            stmt = stmt.where(WarehouseReceipt.waybill_id.is_(None), WarehouseReceipt.prebooking_id.is_(None))
+        total_stmt = select(func.count()).select_from(stmt.order_by(None).subquery())
+        total = int(self.db.scalar(total_stmt) or 0)
+        rows = self.db.execute(stmt.offset((page - 1) * page_size).limit(page_size)).all()
+        return [(row[0], row[1], row[2], row[3], int(row[4] or 0)) for row in rows], total
+
     def list_by_receipt_id(self, receipt_id: int) -> list[Box]:
         return list(
             self.db.scalars(
@@ -121,6 +169,9 @@ class BoxRepository:
         self.db.add(receipt)
         self.db.flush()
         return receipt
+
+    def delete_receipt(self, receipt: WarehouseReceipt) -> None:
+        self.db.delete(receipt)
 
     def delete_items_for_box(self, box_id: int) -> int:
         result = self.db.execute(delete(BoxItem).where(BoxItem.box_id == box_id))

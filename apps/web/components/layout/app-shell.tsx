@@ -6,6 +6,8 @@ import { usePathname, useRouter } from "next/navigation";
 import {
   Activity,
   AlertTriangle,
+  Archive,
+  CalendarClock,
   ClipboardList,
   Home,
   Layers,
@@ -44,7 +46,9 @@ const navItems: Array<{
 }> = [
   { href: "/", label: "总览", icon: Home },
   { href: "/waybills", label: "提单管理", icon: ClipboardList },
+  { href: "/prebookings", label: "预排仓", icon: CalendarClock, roles: ["admin", "route_staff"] },
   { href: "/boards", label: "板号管理", icon: Layers, roles: ["admin", "route_staff"] },
+  { href: "/warehouse-receipts", label: "未绑定箱号", icon: Archive, roles: ["admin", "route_staff"] },
   { href: "/waybills/lookup", label: "提单速查", icon: Search, roles: ["admin", "route_staff"] },
   { href: "/alerts", label: "异常中心", icon: AlertTriangle },
   { href: "/carriers", label: "航司配置", icon: Plane, roles: ["admin", "route_staff"] },

@@ -27,6 +27,7 @@ def test_core_model_tables_are_registered() -> None:
         "waybill_query_snapshots",
         "waybill_alerts",
         "waybill_boards",
+        "waybill_prebookings",
         "waybill_customs_access_grants",
         "waybill_view_logs",
         "user_refresh_tokens",
@@ -107,6 +108,7 @@ def test_atomic_box_tables_have_expected_binding_columns() -> None:
 
     assert "warehouse_no" in receipt_columns
     assert "waybill_id" in receipt_columns
+    assert "prebooking_id" in receipt_columns
     assert "total_volume" in receipt_columns
     assert "box_id" in item_columns
     assert "warehouse_waybill_no" in item_columns
