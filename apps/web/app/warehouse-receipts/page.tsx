@@ -26,6 +26,7 @@ import type {
 
 type TransferMode = "receipt" | "unbound";
 type TransferSource = "receipt" | "scatter";
+type RightPanelMode = "scatter" | "receipt_summary";
 type UnboundReason = "customs_inspection" | "other";
 
 const UNBOUND_REASON_LABELS: Record<string, string> = {
@@ -182,6 +183,7 @@ export default function WarehouseReceiptsPage() {
   const [saving, setSaving] = useState(false);
   const [receiptOptionsLoading, setReceiptOptionsLoading] = useState(false);
   const [receiptOptionsError, setReceiptOptionsError] = useState("");
+  const [rightPanelMode, setRightPanelMode] = useState<RightPanelMode>("scatter");
   const [message, setMessage] = useState("");
   const [batchUploadResult, setBatchUploadResult] = useState<BatchUploadResult | null>(null);
 
@@ -208,6 +210,10 @@ export default function WarehouseReceiptsPage() {
     ];
   }, [allReceipts, expandedReceiptId, transferSource]);
   const hasTargetReceipts = targetReceiptGroups.some((group) => group.items.length > 0);
+  const unboundReceiptSummaries = useMemo(
+    () => allReceipts.filter((item) => !item.waybill_id && !item.prebooking_id),
+    [allReceipts]
+  );
 
   const loadReceipts = useCallback(() => {
     apiClient
@@ -227,7 +233,7 @@ export default function WarehouseReceiptsPage() {
     try {
       const firstPage = await apiClient.get<PageResponse<WarehouseReceipt>>("/warehouse-receipts?page=1&page_size=100");
       const items = [...firstPage.items];
-      const pageSize = firstPage.page_size || 200;
+      const pageSize = firstPage.page_size || 100;
       const totalPages = Math.ceil(firstPage.total / pageSize);
       for (let page = 2; page <= totalPages; page += 1) {
         const data = await apiClient.get<PageResponse<WarehouseReceipt>>(`/warehouse-receipts?page=${page}&page_size=${pageSize}`);
@@ -664,8 +670,32 @@ export default function WarehouseReceiptsPage() {
             </div>
           </div>
         </Panel>
-        <Panel title="散箱池">
-          <div className="space-y-3">
+        <div className="xl:sticky xl:top-4 xl:self-start">
+          <Panel
+            title={rightPanelMode === "scatter" ? "散箱池" : "入仓号汇总"}
+            action={
+              <div className="flex rounded-md bg-slate-100 p-1">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={rightPanelMode === "scatter" ? "default" : "ghost"}
+                  onClick={() => setRightPanelMode("scatter")}
+                >
+                  散箱池
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={rightPanelMode === "receipt_summary" ? "default" : "ghost"}
+                  onClick={() => setRightPanelMode("receipt_summary")}
+                >
+                  入仓号汇总
+                </Button>
+              </div>
+            }
+          >
+            {rightPanelMode === "scatter" ? (
+              <div className="space-y-3">
             <div className="flex flex-wrap items-center gap-2 text-sm">
               <span className="text-slate-600">已选 {selectedScatterIds.size} 个散箱</span>
               <Button type="button" variant="secondary" size="sm" disabled={!selectedScatterIds.size} onClick={() => openTransfer("scatter")}>
@@ -750,8 +780,67 @@ export default function WarehouseReceiptsPage() {
                 </Button>
               </div>
             </div>
-          </div>
-        </Panel>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between text-sm text-slate-600">
+                  <span>共 {unboundReceiptSummaries.length} 个未绑定入仓号文件</span>
+                </div>
+                {receiptOptionsLoading ? <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500">正在加载入仓号汇总...</div> : null}
+                {receiptOptionsError ? <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-4 text-sm text-rose-600">{receiptOptionsError}</div> : null}
+                {!receiptOptionsLoading && !receiptOptionsError && unboundReceiptSummaries.length ? (
+                  <div className="max-h-[680px] overflow-auto">
+                    <Table className="min-w-[680px]">
+                      <THead>
+                        <TR>
+                          <TH>入仓号文件名</TH>
+                          <TH>箱数</TH>
+                          <TH>渠道标签</TH>
+                          <TH>件数</TH>
+                          <TH>重量</TH>
+                          <TH>方数</TH>
+                        </TR>
+                      </THead>
+                      <TBody>
+                        {unboundReceiptSummaries.map((receipt) => {
+                          const fileName = receipt.source_file_name || receipt.warehouse_no;
+                          const tags = channelTags(receipt.channel_tags);
+                          return (
+                            <TR key={receipt.id}>
+                              <TD>
+                                <span className="inline-block max-w-56 truncate align-bottom" title={fileName}>
+                                  {fileName}
+                                </span>
+                              </TD>
+                              <TD>{receipt.box_count ?? 0}</TD>
+                              <TD>
+                                {tags.length ? (
+                                  <span className="flex flex-wrap gap-1">
+                                    {tags.map((tag) => (
+                                      <Badge key={tag} variant="amber">{tag}</Badge>
+                                    ))}
+                                  </span>
+                                ) : (
+                                  "-"
+                                )}
+                              </TD>
+                              <TD>{compact(receipt.total_quantity)}</TD>
+                              <TD>{formatDecimal(receipt.total_weight)}</TD>
+                              <TD>{formatDecimal(receipt.total_volume)}</TD>
+                            </TR>
+                          );
+                        })}
+                      </TBody>
+                    </Table>
+                  </div>
+                ) : null}
+                {!receiptOptionsLoading && !receiptOptionsError && !unboundReceiptSummaries.length ? (
+                  <EmptyState title="暂无入仓号汇总" description="上传未绑定入仓号文件后，这里会汇总全部未绑定入仓号。" />
+                ) : null}
+              </div>
+            )}
+          </Panel>
+        </div>
       </div>
       <Dialog open={Boolean(batchUploadResult)} onOpenChange={(open) => !open && setBatchUploadResult(null)}>
         <DialogContent className="w-[min(980px,calc(100vw-32px))]">
