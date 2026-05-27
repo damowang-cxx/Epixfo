@@ -869,3 +869,69 @@ def test_batch_transfer_to_receipt_moves_boxes_without_waybill() -> None:
     assert service.boxes.box.unbound_reason is None
     assert receipt.channel_tags == ["LHR"]
     assert service.db.committed is True
+
+
+def test_batch_transfer_to_prebooking_receipt_marks_boxes_prebooked() -> None:
+    service = WarehouseFileService.__new__(WarehouseFileService)
+    service.db = FakeDb()
+    service.boxes = FakeBoxRepository()
+    service.boxes.box.box_no = "DHL001"
+    receipt = WarehouseReceipt(
+        warehouse_no="PREBOOKING-IN",
+        waybill_id=None,
+        prebooking_id=31,
+        total_quantity=0,
+        total_weight=Decimal("0.000"),
+        total_volume=Decimal("0.000"),
+        weight_volume_ratio=Decimal("0.000"),
+    )
+    receipt.id = 90
+    service.boxes.receipts_by_no[receipt.warehouse_no] = receipt
+    service.boxes.box.current_waybill_id = None
+    service.boxes.box.warehouse_receipt_id = None
+    service.boxes.box.status = "unbound"
+    service.boxes.box.unbound_reason = "other"
+    user = SimpleNamespace(id=5, is_superuser=True, roles=[])
+
+    result = service.batch_transfer_boxes([4], "receipt", user, target_receipt_id=90)
+
+    assert result.updated_count == 1
+    assert service.boxes.box.warehouse_receipt_id == 90
+    assert service.boxes.box.current_waybill_id is None
+    assert service.boxes.box.status == "prebooked"
+    assert service.boxes.box.unbound_reason is None
+    assert receipt.channel_tags == ["AMS"]
+    assert service.db.committed is True
+
+
+def test_batch_transfer_to_waybill_receipt_marks_boxes_bound() -> None:
+    service = WarehouseFileService.__new__(WarehouseFileService)
+    service.db = FakeDb()
+    service.boxes = FakeBoxRepository()
+    service.boxes.box.box_no = "DHL001"
+    receipt = WarehouseReceipt(
+        warehouse_no="BOUND-IN",
+        waybill_id=7,
+        prebooking_id=None,
+        total_quantity=0,
+        total_weight=Decimal("0.000"),
+        total_volume=Decimal("0.000"),
+        weight_volume_ratio=Decimal("0.000"),
+    )
+    receipt.id = 90
+    service.boxes.receipts_by_no[receipt.warehouse_no] = receipt
+    service.boxes.box.current_waybill_id = None
+    service.boxes.box.warehouse_receipt_id = None
+    service.boxes.box.status = "unbound"
+    service.boxes.box.unbound_reason = "customs_inspection"
+    user = SimpleNamespace(id=5, is_superuser=True, roles=[])
+
+    result = service.batch_transfer_boxes([4], "receipt", user, target_receipt_id=90)
+
+    assert result.updated_count == 1
+    assert service.boxes.box.warehouse_receipt_id == 90
+    assert service.boxes.box.current_waybill_id == 7
+    assert service.boxes.box.status == "bound"
+    assert service.boxes.box.unbound_reason is None
+    assert receipt.channel_tags == ["AMS"]
+    assert service.db.committed is True

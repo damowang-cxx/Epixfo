@@ -37,7 +37,10 @@ export function SelectContent({
   return (
     <SelectPrimitive.Portal>
       <SelectPrimitive.Content
-        className={cn("z-50 overflow-hidden rounded-md border border-slate-200 bg-white shadow-md", className)}
+        // z-[60] 高于 Dialog (z-50)：否则嵌在 Dialog 内的 Select 下拉点击
+        // 会被 Dialog 的 focus trap 拦截，表现为"SelectItem 点了没反应"。
+        className={cn("z-[60] overflow-hidden rounded-md border border-slate-200 bg-white shadow-md", className)}
+        position="popper"
         {...props}
       >
         <SelectPrimitive.Viewport className="p-1">{children}</SelectPrimitive.Viewport>

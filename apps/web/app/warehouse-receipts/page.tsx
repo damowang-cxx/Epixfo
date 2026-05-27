@@ -87,7 +87,14 @@ function formatDecimal(value?: string | number | null) {
 }
 
 function receiptLabel(item: WarehouseReceipt) {
-  return item.waybill_no ? `${item.warehouse_no} · 已绑定 ${item.waybill_no}` : `${item.warehouse_no} · 未绑定`;
+  if (item.waybill_no) {
+    return `${item.warehouse_no} · 已绑定提单 ${item.waybill_no}`;
+  }
+  if (item.prebooking_id) {
+    const label = item.prebooking_label || `#${item.prebooking_id}`;
+    return `${item.warehouse_no} · 预排仓 ${label}`;
+  }
+  return `${item.warehouse_no} · 未绑定`;
 }
 
 function channelTags(tags?: string[] | null) {
@@ -182,6 +189,28 @@ export default function WarehouseReceiptsPage() {
   const [batchUploadResult, setBatchUploadResult] = useState<BatchUploadResult | null>(null);
 
   const selectedTransferIds = transferSource === "receipt" ? selectedReceiptBoxIds : selectedScatterIds;
+  const targetReceiptGroups = useMemo(() => {
+    const sourceReceiptId = transferSource === "receipt" ? expandedReceiptId : null;
+    const options = allReceipts.filter((item) => item.id !== sourceReceiptId);
+    return [
+      {
+        key: "unbound",
+        label: "未绑定入仓号",
+        items: options.filter((item) => !item.waybill_id && !item.prebooking_id)
+      },
+      {
+        key: "prebooking",
+        label: "预排仓入仓号",
+        items: options.filter((item) => Boolean(item.prebooking_id))
+      },
+      {
+        key: "waybill",
+        label: "提单管理入仓号",
+        items: options.filter((item) => Boolean(item.waybill_id))
+      }
+    ];
+  }, [allReceipts, expandedReceiptId, transferSource]);
+  const hasTargetReceipts = targetReceiptGroups.some((group) => group.items.length > 0);
 
   const loadReceipts = useCallback(() => {
     apiClient
@@ -195,11 +224,20 @@ export default function WarehouseReceiptsPage() {
       .then(setReceipts);
   }, []);
 
-  const loadAllReceipts = useCallback(() => {
-    apiClient
-      .get<PageResponse<WarehouseReceipt>>("/warehouse-receipts?page=1&page_size=300")
-      .then((data) => setAllReceipts(data.items))
-      .catch(() => setAllReceipts([]));
+  const loadAllReceipts = useCallback(async () => {
+    try {
+      const firstPage = await apiClient.get<PageResponse<WarehouseReceipt>>("/warehouse-receipts?page=1&page_size=200");
+      const items = [...firstPage.items];
+      const pageSize = firstPage.page_size || 200;
+      const totalPages = Math.ceil(firstPage.total / pageSize);
+      for (let page = 2; page <= totalPages; page += 1) {
+        const data = await apiClient.get<PageResponse<WarehouseReceipt>>(`/warehouse-receipts?page=${page}&page_size=${pageSize}`);
+        items.push(...data.items);
+      }
+      setAllReceipts(items);
+    } catch {
+      setAllReceipts([]);
+    }
   }, []);
 
   const loadScatter = useCallback(() => {
@@ -221,7 +259,7 @@ export default function WarehouseReceiptsPage() {
   }, [loadAllReceipts, loadReceipts, loadScatter, loadWaybills]);
 
   useEffect(() => {
-    refreshAll();
+    void Promise.resolve().then(refreshAll);
   }, [refreshAll]);
 
   useEffect(() => {
@@ -402,6 +440,7 @@ export default function WarehouseReceiptsPage() {
     setTargetReceiptId("");
     setUnboundReason("other");
     setUnboundRemark("");
+    void loadAllReceipts();
     setTransferOpen(true);
   }
 
@@ -418,6 +457,15 @@ export default function WarehouseReceiptsPage() {
       setMessage("请选择目标入仓号。");
       return;
     }
+    const targetReceiptNumber = transferMode === "receipt" ? Number(targetReceiptId) : null;
+    if (transferMode === "receipt" && (!targetReceiptNumber || !Number.isFinite(targetReceiptNumber))) {
+      setMessage("请选择有效的目标入仓号。");
+      return;
+    }
+    if (transferMode === "receipt" && transferSource === "receipt" && targetReceiptNumber === expandedReceiptId) {
+      setMessage("不能移动到当前入仓号，请选择其他目标入仓号。");
+      return;
+    }
     setSaving(true);
     setMessage("");
     try {
@@ -426,7 +474,7 @@ export default function WarehouseReceiptsPage() {
           ? {
               box_ids: Array.from(selectedTransferIds),
               target_type: "receipt",
-              target_receipt_id: Number(targetReceiptId)
+              target_receipt_id: targetReceiptNumber
             }
           : {
               box_ids: Array.from(selectedTransferIds),
@@ -888,18 +936,28 @@ export default function WarehouseReceiptsPage() {
             {transferMode === "receipt" ? (
               <div className="space-y-2">
                 <div className="font-medium text-slate-700">目标入仓号</div>
-                <Select value={targetReceiptId} onValueChange={setTargetReceiptId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="选择目标入仓号" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {allReceipts.map((item) => (
-                      <SelectItem key={item.id} value={String(item.id)}>
-                        {receiptOptionLabel(item)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <select
+                  value={targetReceiptId}
+                  disabled={!hasTargetReceipts}
+                  onChange={(event) => setTargetReceiptId(event.target.value)}
+                  className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:ring-2 focus:ring-slate-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
+                >
+                  <option value="">选择目标入仓号</option>
+                  {targetReceiptGroups.map((group) =>
+                    group.items.length ? (
+                      <optgroup key={group.key} label={group.label}>
+                        {group.items.map((item) => (
+                          <option key={item.id} value={String(item.id)}>
+                            {receiptOptionLabel(item)}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ) : null
+                  )}
+                </select>
+                <div className="text-xs text-slate-500">
+                  {hasTargetReceipts ? "支持移动到未绑定入仓号、预排仓入仓号、提单管理入仓号。" : "暂无可移动的其他入仓号。"}
+                </div>
               </div>
             ) : (
               <div className="space-y-3">
@@ -928,7 +986,7 @@ export default function WarehouseReceiptsPage() {
             </Button>
             <Button
               type="button"
-              disabled={saving || !selectedTransferIds.size || (transferMode === "receipt" && !targetReceiptId)}
+              disabled={saving || !selectedTransferIds.size || (transferMode === "receipt" && (!targetReceiptId || !hasTargetReceipts))}
               onClick={() => void submitTransfer()}
             >
               确认移动
