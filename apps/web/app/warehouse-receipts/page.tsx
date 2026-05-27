@@ -307,7 +307,9 @@ export default function WarehouseReceiptsPage() {
         setBoxesByReceipt({});
         setExpandedReceiptId(null);
         await loadReceiptPage(1);
-        refreshAll();
+        loadAllReceipts();
+        loadScatter();
+        loadWaybills();
       }
     } finally {
       setUploading(false);

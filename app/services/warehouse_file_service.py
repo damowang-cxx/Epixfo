@@ -878,6 +878,7 @@ class WarehouseFileService:
                 WarehouseReceipt(
                     warehouse_no=warehouse_no,
                     waybill_id=None,
+                    prebooking_id=None,
                     source_document_id=document.id,
                     uploaded_by=current_user.id,
                     total_quantity=0,
@@ -887,10 +888,14 @@ class WarehouseFileService:
                 )
             )
         else:
+            receipt.waybill_id = None
+            receipt.prebooking_id = None
             receipt.source_document_id = document.id
             receipt.uploaded_by = current_user.id
 
         self._sync_unbound_receipt_boxes(receipt, document, parse_result.boxes)
+        receipt.waybill_id = None
+        receipt.prebooking_id = None
         self._refresh_receipt_totals(receipt)
         receipt.channel_tags = compute_warehouse_receipt_channel_tags([item.box_no for item in parse_result.boxes])
 

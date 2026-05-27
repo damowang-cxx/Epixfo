@@ -277,6 +277,7 @@ def test_upload_unbound_file_creates_unbound_receipt_boxes(tmp_path) -> None:
     assert service.boxes.document.bound_waybill_id is None
     receipt = service.boxes.receipts_by_no["UNBOUND-IN-001"]
     assert receipt.waybill_id is None
+    assert receipt.prebooking_id is None
     assert receipt.source_document_id == 99
     assert receipt.channel_tags == ["AMS"]
     assert result.channel_tags == ["AMS"]
@@ -289,6 +290,33 @@ def test_upload_unbound_file_creates_unbound_receipt_boxes(tmp_path) -> None:
     assert added_box.unbound_reason is None
     assert added_box.raw_data["source"] == "unbound_receipt_upload"
     assert len(service.boxes.added_items) == 1
+    assert service.db.committed is True
+
+
+def test_upload_unbound_file_reuses_receipt_without_binding_elsewhere(tmp_path) -> None:
+    service, user = _unbound_service(tmp_path)
+    receipt = WarehouseReceipt(
+        warehouse_no="UNBOUND-IN-001",
+        waybill_id=None,
+        prebooking_id=None,
+        total_quantity=0,
+        total_weight=Decimal("0.000"),
+        total_volume=Decimal("0.000"),
+        weight_volume_ratio=Decimal("0.000"),
+    )
+    receipt.id = 88
+    receipt.channel_tags = []
+    service.boxes.receipts_by_no[receipt.warehouse_no] = receipt
+
+    result = service.upload_unbound_file("UNBOUND-IN-001.xlsx", _xlsx_bytes("DHL001"), user)
+
+    assert result.warehouse_no == "UNBOUND-IN-001"
+    assert receipt.waybill_id is None
+    assert receipt.prebooking_id is None
+    added_box = next(item for item in service.db.added if item.__class__.__name__ == "Box" and item.box_no == "DHL001")
+    assert added_box.warehouse_receipt_id == receipt.id
+    assert added_box.current_waybill_id is None
+    assert added_box.status == "unbound"
     assert service.db.committed is True
 
 
