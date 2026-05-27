@@ -38,15 +38,15 @@ from app.services.permission_service import PermissionService
 
 
 REQUIRED_COLUMNS = {
-    "outer_barcode": {"外箱条码", "箱号", "外箱号", "box_no", "box no", "barcode"},
-    "warehouse_waybill_no": {"提单号码", "提单号", "仓库提单号", "warehouse waybill no"},
-    "goods_name": {"品名", "货物品名", "goods_name", "goods name", "cargo name"},
-    "quantity": {"数量", "件数", "qty", "quantity"},
-    "weight": {"重量", "收货重量", "weight", "weight kg"},
-    "volume": {"收货体积信息", "体积", "方数", "volume", "volume cbm"},
+    "outer_barcode": {"外箱条码", "外箱條碼", "箱号", "箱號", "外箱号", "外箱號", "box_no", "box no", "barcode"},
+    "warehouse_waybill_no": {"提单号码", "提單號碼", "提单号", "提單號", "仓库提单号", "倉庫提單號", "warehouse waybill no"},
+    "goods_name": {"品名", "货物品名", "貨物品名", "goods_name", "goods name", "cargo name"},
+    "quantity": {"数量", "數量", "件数", "件數", "qty", "quantity"},
+    "weight": {"重量", "收货重量", "收貨重量", "weight", "weight kg"},
+    "volume": {"收货体积信息", "收貨體積信息", "体积", "體積", "方数", "方數", "volume", "volume cbm"},
 }
 OPTIONAL_COLUMNS = {
-    "original_weight_volume_ratio": {"收货重量/方", "重量/方", "weight/volume", "weight volume ratio"},
+    "original_weight_volume_ratio": {"收货重量/方", "收貨重量/方", "重量/方", "weight/volume", "weight volume ratio"},
 }
 
 DECIMAL_001 = Decimal("0.001")
@@ -120,6 +120,16 @@ class WarehouseFileService:
         page_size = min(max(page_size, 1), 200)
         items, total = self.boxes.list_unbound(page=page, page_size=page_size)
         return items, total, page, page_size
+
+    def delete_unbound_box(self, box_id: int, current_user: User) -> None:
+        PermissionService.assert_waybill_write(current_user)
+        box = self.boxes.get_by_id(box_id)
+        if box is None:
+            raise bad_request("box_not_found")
+        if box.warehouse_receipt_id is not None or box.current_waybill_id is not None:
+            raise bad_request("box_is_not_unbound")
+        self.db.delete(box)
+        self.db.commit()
 
     def list_receipts(
         self,

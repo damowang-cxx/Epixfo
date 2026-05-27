@@ -358,6 +358,35 @@ export default function WarehouseReceiptsPage() {
     }
   }
 
+  async function deleteScatterBox(item: CargoBox) {
+    if (!window.confirm(`确认删除散箱 ${item.box_no} 及其箱内明细吗？删除后不可恢复。`)) return;
+    setSaving(true);
+    setMessage("");
+    try {
+      await apiClient.delete<void>(`/boxes/unbound/${item.id}`);
+      setSelectedScatterIds((prev) => {
+        const next = new Set(prev);
+        next.delete(item.id);
+        return next;
+      });
+      setScatterData((prev) =>
+        prev
+          ? {
+              ...prev,
+              items: prev.items.filter((box) => box.id !== item.id),
+              total: Math.max(0, prev.total - 1)
+            }
+          : prev
+      );
+      setMessage(`散箱 ${item.box_no} 已删除。`);
+      loadScatter();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "删除散箱失败。");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   function openTransfer(source: TransferSource) {
     setTransferSource(source);
     setTransferMode("receipt");
@@ -598,6 +627,7 @@ export default function WarehouseReceiptsPage() {
                       <TH>品名</TH>
                       <TH>重量</TH>
                       <TH>方数</TH>
+                      <TH>操作</TH>
                     </TR>
                   </THead>
                   <TBody>
@@ -631,6 +661,12 @@ export default function WarehouseReceiptsPage() {
                         <TD>{compact(box.goods_name)}</TD>
                         <TD>{formatDecimal(box.weight)}</TD>
                         <TD>{formatDecimal(box.volume)}</TD>
+                        <TD>
+                          <Button type="button" variant="ghost" size="sm" disabled={saving} onClick={() => void deleteScatterBox(box)}>
+                            <Trash2 className="h-4 w-4 text-red-600" />
+                            删除
+                          </Button>
+                        </TD>
                       </TR>
                     ))}
                   </TBody>

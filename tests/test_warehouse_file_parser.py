@@ -1,3 +1,4 @@
+from decimal import Decimal
 from io import BytesIO
 
 import pytest
@@ -40,6 +41,26 @@ def test_parse_warehouse_xlsx_success_and_calculates_ratio() -> None:
     assert str(result.boxes[0].weight_volume_ratio) == "2.500"
     assert result.boxes[1].goods_name == "Bags"
     assert str(result.boxes[1].weight_volume_ratio) == "3.000"
+
+
+def test_parse_warehouse_xlsx_accepts_traditional_chinese_headers() -> None:
+    content = _xlsx_bytes(
+        [
+            ["外箱條碼", "提單號碼", "品名", "數量", "重量", "收貨體積信息", "收貨重量/方"],
+            ["BOX-TW-001", "WH-TW-001", "Shoes", 4, 12, "60*50*40", "0.120"],
+        ]
+    )
+
+    result = parse_warehouse_xlsx("warehouse.xlsx", content)
+
+    assert result.errors == []
+    assert len(result.boxes) == 1
+    assert result.boxes[0].box_no == "BOX-TW-001"
+    assert result.boxes[0].warehouse_waybill_no == "WH-TW-001"
+    assert result.boxes[0].quantity == 4
+    assert result.boxes[0].original_volume_info == "60*50*40"
+    assert result.boxes[0].original_weight_volume_ratio == "0.120"
+    assert result.boxes[0].volume == Decimal("0.120")
 
 
 def test_parse_warehouse_xlsx_rejects_non_xlsx() -> None:

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, Response, UploadFile
 
 from app.core.platform_patch import patch_platform_wmi
 
@@ -48,6 +48,17 @@ async def upload_unbound_warehouse_file(
         content=content,
         current_user=current_user,
     )
+
+
+@router.delete("/unbound/{box_id}", status_code=204)
+def delete_unbound_box(
+    box_id: int,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    PermissionService.assert_waybill_write(current_user)
+    WarehouseFileService(db).delete_unbound_box(box_id, current_user)
+    return Response(status_code=204)
 
 
 @router.post("/batch-bind", response_model=BoxBatchOperationResult)
