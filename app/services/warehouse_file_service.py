@@ -117,7 +117,7 @@ class WarehouseFileService:
 
     def list_unbound_boxes(self, *, page: int, page_size: int) -> tuple[list[Box], int, int, int]:
         page = max(page, 1)
-        page_size = min(max(page_size, 1), 200)
+        page_size = min(max(page_size, 1), 100)
         items, total = self.boxes.list_unbound(page=page, page_size=page_size)
         return items, total, page, page_size
 
@@ -139,7 +139,7 @@ class WarehouseFileService:
         unbound_only: bool = False,
     ) -> tuple[list[WarehouseReceiptListOut], int, int, int]:
         page = max(page, 1)
-        page_size = min(max(page_size, 1), 200)
+        page_size = min(max(page_size, 1), 100)
         rows, total = self.boxes.list_receipts(page=page, page_size=page_size, unbound_only=unbound_only)
         return [self._receipt_list_out(*row) for row in rows], total, page, page_size
 

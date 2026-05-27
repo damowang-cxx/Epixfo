@@ -225,7 +225,7 @@ export default function WarehouseReceiptsPage() {
     setReceiptOptionsLoading(true);
     setReceiptOptionsError("");
     try {
-      const firstPage = await apiClient.get<PageResponse<WarehouseReceipt>>("/warehouse-receipts?page=1&page_size=200");
+      const firstPage = await apiClient.get<PageResponse<WarehouseReceipt>>("/warehouse-receipts?page=1&page_size=100");
       const items = [...firstPage.items];
       const pageSize = firstPage.page_size || 200;
       const totalPages = Math.ceil(firstPage.total / pageSize);
@@ -248,7 +248,7 @@ export default function WarehouseReceiptsPage() {
 
   const loadWaybills = useCallback(() => {
     apiClient
-      .get<PageResponse<Waybill>>("/waybills?page=1&page_size=300")
+      .get<PageResponse<Waybill>>("/waybills?page=1&page_size=100")
       .then((data) => setWaybillOptions(data.items))
       .catch(() => setWaybillOptions([]));
   }, []);

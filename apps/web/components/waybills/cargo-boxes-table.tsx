@@ -202,7 +202,7 @@ export function CargoBoxesTable({
 
   const loadWaybillOptions = useCallback(() => {
     apiClient
-      .get<PageResponse<Waybill>>("/waybills?page=1&page_size=200")
+      .get<PageResponse<Waybill>>("/waybills?page=1&page_size=100")
       .then((data) => setWaybillOptions(data.items))
       .catch(() => undefined);
   }, []);

@@ -135,7 +135,7 @@ export default function PrebookingsPage() {
     setReceiptOptionsLoading(true);
     setReceiptOptionsError("");
     try {
-      const firstPage = await apiClient.get<PageResponse<WarehouseReceipt>>("/warehouse-receipts/unbound?page=1&page_size=200");
+      const firstPage = await apiClient.get<PageResponse<WarehouseReceipt>>("/warehouse-receipts/unbound?page=1&page_size=100");
       const items = [...firstPage.items];
       const pageSize = firstPage.page_size || 200;
       const totalPages = Math.ceil(firstPage.total / pageSize);
