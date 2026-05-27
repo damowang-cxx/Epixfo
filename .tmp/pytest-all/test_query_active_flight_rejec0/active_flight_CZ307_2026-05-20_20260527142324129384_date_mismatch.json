@@ -1,0 +1,6 @@
+{
+  "stage": "active_flight_date_mismatch",
+  "flight_no": "CZ307",
+  "requested_flight_date": "2026-05-20",
+  "selected_flight_date": "2026-05-21"
+}

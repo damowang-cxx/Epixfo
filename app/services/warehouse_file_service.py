@@ -159,7 +159,15 @@ class WarehouseFileService:
         document = self.db.get(BoxDocument, receipt.source_document_id) if receipt.source_document_id else None
         prebooking = self.db.get(WaybillPrebooking, receipt.prebooking_id) if receipt.prebooking_id else None
         box_count = len(self.boxes.list_by_receipt_id(receipt.id))
-        return self._receipt_list_out(receipt, waybill_no, prebooking, document.file_name if document else None, box_count)
+        return self._receipt_list_out(
+            receipt,
+            waybill_no,
+            prebooking.id if prebooking else None,
+            prebooking.status if prebooking else None,
+            prebooking.planned_flight_date if prebooking else None,
+            document.file_name if document else None,
+            box_count,
+        )
 
     def update_box_no(self, waybill_id: int, box_id: int, box_no: str, current_user: User) -> Box:
         """向后兼容：旧调用方仍可只改 box_no。"""
@@ -1412,20 +1420,22 @@ class WarehouseFileService:
         self,
         receipt: WarehouseReceipt,
         waybill_no: str | None,
-        prebooking: WaybillPrebooking | None,
+        prebooking_id: int | None,
+        prebooking_status: str | None,
+        prebooking_planned_flight_date: date | None,
         source_file_name: str | None,
         box_count: int,
     ) -> WarehouseReceiptListOut:
         prebooking_label = None
-        if prebooking is not None:
-            prebooking_label = f"预排仓 #{prebooking.id} / {prebooking.planned_flight_date}"
+        if prebooking_id is not None:
+            prebooking_label = f"预排仓 #{prebooking_id} / {prebooking_planned_flight_date}"
         return WarehouseReceiptListOut(
             id=receipt.id,
             warehouse_no=receipt.warehouse_no,
             waybill_id=receipt.waybill_id,
             waybill_no=waybill_no,
-            prebooking_id=receipt.prebooking_id,
-            prebooking_status=prebooking.status if prebooking else None,
+            prebooking_id=prebooking_id,
+            prebooking_status=prebooking_status,
             prebooking_label=prebooking_label,
             source_document_id=receipt.source_document_id,
             source_file_name=source_file_name,

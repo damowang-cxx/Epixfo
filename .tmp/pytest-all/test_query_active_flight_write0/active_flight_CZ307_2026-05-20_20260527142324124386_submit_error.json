@@ -1,0 +1,7 @@
+{
+  "stage": "active_flight_submit_error",
+  "flight_no": "CZ307",
+  "flight_date": "2026-05-20",
+  "error_type": "ConnectionError",
+  "error": "connection closed"
+}

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date
+
 from app.core.platform_patch import patch_platform_wmi
 
 patch_platform_wmi()
@@ -123,12 +125,14 @@ class BoxRepository:
         page: int,
         page_size: int,
         unbound_only: bool = False,
-    ) -> tuple[list[tuple[WarehouseReceipt, str | None, WaybillPrebooking | None, str | None, int]], int]:
+    ) -> tuple[list[tuple[WarehouseReceipt, str | None, int | None, str | None, date | None, str | None, int]], int]:
         stmt = (
             select(
                 WarehouseReceipt,
                 AirWaybill.waybill_no,
-                WaybillPrebooking,
+                WaybillPrebooking.id.label("prebooking_id"),
+                WaybillPrebooking.status.label("prebooking_status"),
+                WaybillPrebooking.planned_flight_date.label("prebooking_planned_flight_date"),
                 BoxDocument.file_name,
                 func.count(Box.id).label("box_count"),
             )
@@ -136,7 +140,14 @@ class BoxRepository:
             .outerjoin(WaybillPrebooking, WaybillPrebooking.id == WarehouseReceipt.prebooking_id)
             .outerjoin(BoxDocument, BoxDocument.id == WarehouseReceipt.source_document_id)
             .outerjoin(Box, Box.warehouse_receipt_id == WarehouseReceipt.id)
-            .group_by(WarehouseReceipt.id, AirWaybill.waybill_no, WaybillPrebooking.id, BoxDocument.file_name)
+            .group_by(
+                WarehouseReceipt.id,
+                AirWaybill.waybill_no,
+                WaybillPrebooking.id,
+                WaybillPrebooking.status,
+                WaybillPrebooking.planned_flight_date,
+                BoxDocument.file_name,
+            )
             .order_by(WarehouseReceipt.updated_at.desc(), WarehouseReceipt.id.desc())
         )
         if unbound_only:
@@ -144,7 +155,7 @@ class BoxRepository:
         total_stmt = select(func.count()).select_from(stmt.order_by(None).subquery())
         total = int(self.db.scalar(total_stmt) or 0)
         rows = self.db.execute(stmt.offset((page - 1) * page_size).limit(page_size)).all()
-        return [(row[0], row[1], row[2], row[3], int(row[4] or 0)) for row in rows], total
+        return [(row[0], row[1], row[2], row[3], row[4], row[5], int(row[6] or 0)) for row in rows], total
 
     def list_by_receipt_id(self, receipt_id: int) -> list[Box]:
         return list(

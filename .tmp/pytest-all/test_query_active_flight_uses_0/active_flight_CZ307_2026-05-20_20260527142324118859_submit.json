@@ -1,0 +1,30 @@
+{
+  "stage": "active_flight_submit",
+  "flight_no": "CZ307",
+  "flight_date": "2026-05-20",
+  "dep_station": null,
+  "arr_station": null,
+  "img_id": "img-1",
+  "url": "https://tang.csair.com/WebFace/Tang.WebFace.ActiveFlight/NewActiveFlightQuery.aspx?menuID=1",
+  "headers": {
+    "Referer": "https://tang.csair.com/WebFace/Tang.WebFace.ActiveFlight/NewActiveFlightQuery.aspx?menuID=1",
+    "Origin": "https://tang.csair.com"
+  },
+  "form": {
+    "__EVENTTARGET": "",
+    "__EVENTARGUMENT": "",
+    "__LASTFOCUS": "",
+    "ctl00$lancode": "zh-cn",
+    "ctl00$ContentPlaceHolder1$txtFdep": "",
+    "ctl00$ContentPlaceHolder1$txtFdest": "",
+    "ctl00$ContentPlaceHolder1$txtFlightNo": "CZ307",
+    "ctl00$ContentPlaceHolder1$txtFlightDepTime": "2026-05-20",
+    "ctl00$ContentPlaceHolder1$selectTime": "00:01-24:00",
+    "ctl00$ContentPlaceHolder1$txtImgId": "img-1",
+    "ctl00$ContentPlaceHolder1$btnQuery": "查询",
+    "__VIEWSTATE": {
+      "present": true,
+      "length": 1
+    }
+  }
+}
