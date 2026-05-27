@@ -828,6 +828,8 @@ class WarehouseFileService:
         receipt = self.boxes.get_receipt_by_warehouse_no(warehouse_no)
         if receipt is not None and receipt.waybill_id is not None:
             raise bad_request("warehouse_receipt_bound_to_waybill")
+        if receipt is not None and receipt.prebooking_id is not None:
+            raise bad_request("warehouse_receipt_bound_to_prebooking")
 
         parsed_by_no = {item.box_no: item for item in parse_result.boxes}
         existing_by_no = {box.box_no: box for box in self.boxes.list_by_box_nos(list(parsed_by_no))}

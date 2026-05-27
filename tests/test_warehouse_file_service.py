@@ -313,6 +313,29 @@ def test_upload_unbound_file_rejects_already_bound_boxes(tmp_path) -> None:
     assert service.db.added == []
 
 
+def test_upload_unbound_file_rejects_prebooking_bound_receipt(tmp_path) -> None:
+    service, user = _unbound_service(tmp_path)
+    receipt = WarehouseReceipt(
+        warehouse_no="UNBOUND-IN-001",
+        waybill_id=None,
+        prebooking_id=3,
+        total_quantity=1,
+        total_weight=Decimal("1.000"),
+        total_volume=Decimal("0.064"),
+        weight_volume_ratio=Decimal("15.625"),
+    )
+    receipt.id = 88
+    receipt.channel_tags = ["AMS"]
+    service.boxes.receipts_by_no[receipt.warehouse_no] = receipt
+
+    with pytest.raises(HTTPException) as exc_info:
+        service.upload_unbound_file("UNBOUND-IN-001.xlsx", _xlsx_bytes("DHL001"), user)
+
+    assert exc_info.value.detail == "warehouse_receipt_bound_to_prebooking"
+    assert service.boxes.document is None
+    assert service.db.committed is False
+
+
 def test_upload_unbound_file_allows_uk_channel(tmp_path) -> None:
     service, user = _unbound_service(tmp_path)
 

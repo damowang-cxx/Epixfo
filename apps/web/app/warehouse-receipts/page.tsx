@@ -189,6 +189,12 @@ export default function WarehouseReceiptsPage() {
       .then(setReceipts);
   }, [receiptPage]);
 
+  const loadReceiptPage = useCallback((page: number) => {
+    return apiClient
+      .get<PageResponse<WarehouseReceipt>>(`/warehouse-receipts/unbound?page=${page}&page_size=20`)
+      .then(setReceipts);
+  }, []);
+
   const loadAllReceipts = useCallback(() => {
     apiClient
       .get<PageResponse<WarehouseReceipt>>("/warehouse-receipts?page=1&page_size=300")
@@ -300,6 +306,7 @@ export default function WarehouseReceiptsPage() {
         setReceiptPage(1);
         setBoxesByReceipt({});
         setExpandedReceiptId(null);
+        await loadReceiptPage(1);
         refreshAll();
       }
     } finally {
