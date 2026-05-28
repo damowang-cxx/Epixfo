@@ -219,7 +219,7 @@ def _unbound_service(tmp_path):
     return service, user
 
 
-def _fake_box(box_id: int, box_no: str, weight: str, volume: str, *, items_count: int = 1):
+def _fake_box(box_id: int, box_no: str, weight: str, volume: str, *, items_count: int = 1, original_volume_info: str | None = None):
     return SimpleNamespace(
         id=box_id,
         current_waybill_id=7,
@@ -253,7 +253,7 @@ def _fake_box(box_id: int, box_no: str, weight: str, volume: str, *, items_count
         goods_name=None,
         quantity=None,
         weight=Decimal(weight),
-        original_volume_info=None,
+        original_volume_info=original_volume_info,
         original_weight_volume_ratio=None,
         volume=Decimal(volume),
         weight_volume_ratio=None,
@@ -654,8 +654,8 @@ def test_recalculate_box_volumes_scales_single_item_boxes_to_target_volume() -> 
     service.boxes = FakeBoxRepository()
     service.waybills = FakeWaybillRepository(waybill)
     service.boxes.boxes_list = [
-        _fake_box(4, "BOX-001", "10.000", "6.000"),
-        _fake_box(5, "BOX-002", "5.000", "4.000", items_count=2),
+        _fake_box(4, "BOX-001", "10.000", "6.000", original_volume_info="100*100*600"),
+        _fake_box(5, "BOX-002", "5.000", "4.000", items_count=2, original_volume_info="100*100*400"),
     ]
     user = SimpleNamespace(id=5, is_superuser=True, roles=[])
 
@@ -671,7 +671,10 @@ def test_recalculate_box_volumes_scales_single_item_boxes_to_target_volume() -> 
     assert str(service.boxes.boxes_list[0].weight_volume_ratio) == "1.818"
     assert service.boxes.boxes_list[0].raw_data["volume_recalculation"]["target_volume"] == "9.500"
     assert service.boxes.boxes_list[0].raw_data["volume_recalculation"]["base_volume"] == "6.000"
+    assert service.boxes.boxes_list[0].raw_data["volume_recalculation"]["calculated_volume_info"].endswith("(5.5)")
+    assert "*" in service.boxes.boxes_list[0].raw_data["volume_recalculation"]["calculated_volume_info"]
     assert service.boxes.boxes_list[1].raw_data["volume_recalculation"]["adjustable"] is False
+    assert service.boxes.boxes_list[1].raw_data["volume_recalculation"]["calculated_volume_info"] == "100*100*400(4)"
     assert service.db.committed is True
 
     service.db.committed = False

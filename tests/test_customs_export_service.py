@@ -59,6 +59,7 @@ def test_customs_export_includes_two_sheets_and_single_box_row() -> None:
         goods_name="SPORTS SHOES",
         quantity=10,
         weight=Decimal("13.500"),
+        original_volume_info="50*40*40",
         volume=Decimal("0.080"),
         weight_volume_ratio=Decimal("168.750"),
         items=[],
@@ -74,7 +75,7 @@ def test_customs_export_includes_two_sheets_and_single_box_row() -> None:
         "SPORTS SHOES",
         10,
         "13.5",
-        "0.080",
+        "50*40*40",
         "168.750",
     ]
     assert [cell.value for cell in inbound[3]][3:7] == ["合计", "13.5", "0.080", "168.750"]
@@ -154,6 +155,31 @@ def test_customs_export_moves_general_cargo_below_regular_rows_and_highlights() 
             assert cell.fill.fill_type == "solid"
             assert cell.fill.fgColor.rgb.endswith("FFF2CC")
     assert [cell.value for cell in inbound[5]][4:7] == ["15", "0.300", "50.000"]
+
+
+def test_customs_export_uses_calculated_dimensions_without_cbm_suffix() -> None:
+    box = SimpleNamespace(
+        box_no="BOX-CALC",
+        warehouse_waybill_no="WH-CALC-1",
+        goods_name="CALCULATED GOODS",
+        quantity=1,
+        weight=Decimal("9.000"),
+        original_volume_info="50*40*40",
+        volume=Decimal("0.076"),
+        weight_volume_ratio=Decimal("118.421"),
+        raw_data={
+            "volume_recalculation": {
+                "calculated_volume_info": "49.15*39.32*39.32(0.076)",
+            }
+        },
+        items=[],
+    )
+
+    workbook = _load_export(_make_service([box]).build_waybill_export(_make_waybill()))
+    inbound = workbook.active
+
+    assert inbound[2][5].value == "49.15*39.32*39.32"
+    assert inbound[3][5].value == "0.076"
 
 
 def test_customs_export_outputs_notify_party_only_when_different() -> None:

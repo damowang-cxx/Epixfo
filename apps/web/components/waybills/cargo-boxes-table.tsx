@@ -57,6 +57,44 @@ function formatDecimal(value?: string | number | null) {
   return num.toFixed(3).replace(/\.?0+$/, "");
 }
 
+function formatCbm(value?: string | number | null) {
+  return formatDecimal(value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function parseDimensions(value?: string | null) {
+  if (!value) return null;
+  const match = value.replace(/,/g, "").match(/(\d+(?:\.\d+)?)\s*(?:\*|x|X|×)\s*(\d+(?:\.\d+)?)\s*(?:\*|x|X|×)\s*(\d+(?:\.\d+)?)/);
+  if (!match) return null;
+  const dimensions = match.slice(1, 4).map(Number);
+  return dimensions.every((item) => Number.isFinite(item) && item > 0) ? dimensions : null;
+}
+
+function formatDimension(value: number) {
+  const rounded = Math.round(value * 100) / 100;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2).replace(/\.?0+$/, "");
+}
+
+function formatCalculatedVolumeInfo(item: CargoBox) {
+  const recalculation = isRecord(item.raw_data?.volume_recalculation) ? item.raw_data.volume_recalculation : null;
+  const storedInfo = recalculation?.calculated_volume_info;
+  if (typeof storedInfo === "string" && storedInfo.trim()) return storedInfo.trim();
+
+  const dimensions = parseDimensions(item.original_volume_info);
+  const volume = Number(item.volume);
+  if (!dimensions || !Number.isFinite(volume) || volume <= 0) return formatCbm(item.volume);
+
+  const originalVolume = (dimensions[0] * dimensions[1] * dimensions[2]) / 1_000_000;
+  if (!Number.isFinite(originalVolume) || originalVolume <= 0) return formatCbm(item.volume);
+
+  const scale = Math.cbrt(volume / originalVolume);
+  const dimensionText = dimensions.map((value) => formatDimension(value * scale)).join("*");
+  return `${dimensionText}(${formatCbm(item.volume)})`;
+}
+
 function optionalText(value: string) {
   const trimmed = value.trim();
   return trimmed || undefined;
@@ -572,8 +610,8 @@ export function CargoBoxesTable({
               <TH>总重量</TH>
               <TH>原始收货体积信息</TH>
               <TH>原始收货重量/方</TH>
-              <TH>收货体积信息(CBM)</TH>
-              <TH>收货重量/方</TH>
+              <TH>收货体积信息</TH>
+              <TH>收货重量/方(CBM)</TH>
               <TH>源行</TH>
               {readonly ? null : <TH>操作</TH>}
             </TR>
@@ -637,8 +675,8 @@ export function CargoBoxesTable({
                     <TD>{formatDecimal(item.weight)}</TD>
                     <TD>{compact(item.original_volume_info)}</TD>
                     <TD>{compact(item.original_weight_volume_ratio)}</TD>
-                    <TD>{formatDecimal(item.volume)}</TD>
-                    <TD>{formatDecimal(item.weight_volume_ratio)}</TD>
+                    <TD>{formatCalculatedVolumeInfo(item)}</TD>
+                    <TD>{formatCbm(item.volume)}</TD>
                     <TD>{compact(item.source_row_number)}</TD>
                     {readonly ? null : (
                       <TD>

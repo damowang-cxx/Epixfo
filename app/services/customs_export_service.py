@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import date
 from decimal import Decimal
 from io import BytesIO
@@ -23,6 +24,9 @@ DECIMAL_001 = Decimal("0.001")
 SUMMARY_FILL = PatternFill(fill_type="solid", fgColor="FFF2CC")
 GENERAL_CARGO_FILL = PatternFill(fill_type="solid", fgColor="FFF2CC")
 MONTH_CODES = ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
+DIMENSION_VOLUME_PATTERN = re.compile(
+    r"(\d+(?:\.\d+)?)\s*(?:\*|x|X|×)\s*(\d+(?:\.\d+)?)\s*(?:\*|x|X|×)\s*(\d+(?:\.\d+)?)"
+)
 
 
 class CustomsExportService:
@@ -64,7 +68,7 @@ class CustomsExportService:
                         box.goods_name,
                         box.quantity,
                         _format_decimal_trim(box.weight),
-                        _format_decimal_3(box.volume),
+                        _format_box_volume_info(box),
                         _format_decimal_3(box.weight_volume_ratio),
                     ]
                 )
@@ -83,7 +87,7 @@ class CustomsExportService:
                         item.goods_name,
                         item.quantity,
                         _format_decimal_trim(item.weight),
-                        _format_decimal_3(box.volume) if is_first else "",
+                        _format_box_volume_info(box) if is_first else "",
                         _format_decimal_3(box.weight_volume_ratio) if is_first else "",
                     ]
                 )
@@ -235,6 +239,50 @@ def _format_decimal_trim(value: Decimal | int | float | str | None) -> str:
         return ""
     text = str(decimal.normalize())
     return text if "E" not in text else format(decimal, "f").rstrip("0").rstrip(".")
+
+
+def _format_box_volume_info(box: Box) -> str:
+    calculated = _extract_calculated_volume_dimensions(box)
+    if calculated:
+        return calculated
+
+    original = _extract_dimensions_text(getattr(box, "original_volume_info", None))
+    if original:
+        return original
+
+    return _format_decimal_3(getattr(box, "volume", None))
+
+
+def _extract_calculated_volume_dimensions(box: Box) -> str:
+    raw_data = getattr(box, "raw_data", None)
+    if not isinstance(raw_data, dict):
+        return ""
+    recalculation = raw_data.get("volume_recalculation")
+    if not isinstance(recalculation, dict):
+        return ""
+    calculated_info = _clean(recalculation.get("calculated_volume_info"))
+    if not calculated_info:
+        return ""
+    before_parenthesis = calculated_info.split("(", 1)[0].strip()
+    return _extract_dimensions_text(before_parenthesis)
+
+
+def _extract_dimensions_text(value: Any) -> str:
+    text = _clean(value).replace(",", "")
+    if not text:
+        return ""
+    match = DIMENSION_VOLUME_PATTERN.search(text)
+    if not match:
+        return ""
+    return "*".join(_format_dimension_part(part) for part in match.groups())
+
+
+def _format_dimension_part(value: str) -> str:
+    decimal = Decimal(value)
+    text = format(decimal, "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text or "0"
 
 
 def _to_decimal(value: Decimal | int | float | str | None) -> Decimal | None:

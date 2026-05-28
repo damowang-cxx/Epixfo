@@ -483,6 +483,7 @@ class WarehouseFileService:
                 "base_volume": str(base_volumes[box.id]),
                 "old_volume": str(old_volume.quantize(DECIMAL_001, rounding=ROUND_HALF_UP)),
                 "new_volume": str(new_volume),
+                "calculated_volume_info": _calculated_volume_info(box, new_volume),
                 "old_total_volume": str(old_total_volume),
                 "original_total_volume": str(original_total_volume),
                 "target_volume": str(target_volume),
@@ -607,6 +608,7 @@ class WarehouseFileService:
                 "base_volume": str(base_volumes[box.id]),
                 "old_volume": str(old_volume.quantize(DECIMAL_001, rounding=ROUND_HALF_UP)),
                 "new_volume": str(new_volume),
+                "calculated_volume_info": _calculated_volume_info(box, new_volume),
                 "old_total_volume": str(old_total_volume),
                 "original_total_volume": str(original_total_volume),
                 "target_volume": str(target_volume),
@@ -1829,6 +1831,50 @@ def _box_original_volume(box: Box) -> Decimal:
     return (box.volume or Decimal("0.000")).quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
 
 
+def _calculated_volume_info(box: Box, volume: Decimal) -> str | None:
+    dimensions = _parse_dimensions_text(box.original_volume_info)
+    if dimensions is None:
+        return None
+    original_volume = _volume_from_dimensions(dimensions)
+    if original_volume <= 0 or volume <= 0:
+        return None
+    scale = Decimal(str(float(volume / original_volume) ** (1 / 3)))
+    scaled_dimensions = tuple((item * scale).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) for item in dimensions)
+    dimension_text = "*".join(_format_dimension_value(item) for item in scaled_dimensions)
+    return f"{dimension_text}({_format_decimal_display(volume)})"
+
+
+def _parse_dimensions_text(value: str | None) -> tuple[Decimal, Decimal, Decimal] | None:
+    if not value:
+        return None
+    text = _clean_text(value).replace(",", "")
+    dimension_match = DIMENSION_VOLUME_PATTERN.search(text)
+    if not dimension_match:
+        return None
+    try:
+        dimensions = tuple(Decimal(part) for part in dimension_match.groups())
+    except (InvalidOperation, ValueError):
+        return None
+    if any(item <= 0 for item in dimensions):
+        return None
+    return dimensions
+
+
+def _volume_from_dimensions(dimensions: tuple[Decimal, Decimal, Decimal]) -> Decimal:
+    length, width, height = dimensions
+    return (length * width * height / Decimal("1000000")).quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
+
+
+def _format_dimension_value(value: Decimal) -> str:
+    text = format(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), "f").rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def _format_decimal_display(value: Decimal) -> str:
+    text = format(value.quantize(DECIMAL_001, rounding=ROUND_HALF_UP), "f").rstrip("0").rstrip(".")
+    return text or "0"
+
+
 def _parse_original_volume_text(value: str | None) -> Decimal | None:
     if not value:
         return None
@@ -1836,10 +1882,9 @@ def _parse_original_volume_text(value: str | None) -> Decimal | None:
     if not text:
         return None
     try:
-        dimension_match = DIMENSION_VOLUME_PATTERN.search(text)
-        if dimension_match:
-            length, width, height = (Decimal(part) for part in dimension_match.groups())
-            decimal = length * width * height / Decimal("1000000")
+        dimensions = _parse_dimensions_text(text)
+        if dimensions is not None:
+            decimal = _volume_from_dimensions(dimensions)
         else:
             decimal = _to_decimal(text, "original_volume_info")
     except (InvalidOperation, ValueError):
