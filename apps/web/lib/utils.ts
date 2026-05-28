@@ -29,6 +29,32 @@ export function formatDate(value?: string | null) {
   }).format(date);
 }
 
+function parseLocalDate(value: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(year, month - 1, day);
+  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return null;
+  return date;
+}
+
+export function formatOutboundDate(value?: string | null) {
+  if (!value) return "";
+  const date = parseLocalDate(value);
+  if (!date) return value;
+  const todaySource = new Date();
+  const today = new Date(todaySource.getFullYear(), todaySource.getMonth(), todaySource.getDate());
+  const diffDays = Math.round((date.getTime() - today.getTime()) / 86_400_000);
+  const day = String(date.getDate()).padStart(2, "0");
+  if (diffDays >= 0 && diffDays <= 7) {
+    const weekdays = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+    return `${weekdays[date.getDay()]}（${day}）`;
+  }
+  return `${String(date.getMonth() + 1).padStart(2, "0")}/${day}`;
+}
+
 export function compact(value: unknown) {
   if (value === null || value === undefined || value === "") return "-";
   return String(value);

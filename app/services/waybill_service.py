@@ -6,6 +6,8 @@ from app.core.platform_patch import patch_platform_wmi
 
 patch_platform_wmi()
 
+from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session, selectinload
 
@@ -13,7 +15,16 @@ from app.core.exceptions import bad_request, forbidden, not_found
 from app.models import AirWaybill, Box, BoxDocument, User, WarehouseReceipt, WaybillCustomsAccessGrant, WaybillPlan, WaybillViewLog
 from app.models.enums import AlertLevel, UserRoleCode, WaybillLifecycleStatus
 from app.repositories.waybill_repository import WaybillRepository
-from app.schemas.waybill import ManualStatusRequest, WaybillCreate, WaybillStatusCount, WaybillUpdate
+from app.schemas.waybill import (
+    ManualStatusRequest,
+    WaybillBulkUpdateError,
+    WaybillBulkUpdateItem,
+    WaybillBulkUpdateRequest,
+    WaybillBulkUpdateResult,
+    WaybillCreate,
+    WaybillStatusCount,
+    WaybillUpdate,
+)
 from app.services.alert_service import AlertService
 from app.services.carrier_service import CarrierService
 from app.services.consignee_service import ConsigneeService
@@ -27,6 +38,19 @@ from app.utils.waybill_utils import normalize_waybill_no, validate_waybill_no
 
 PLAN_FIELDS = {"planned_flight_no", "planned_flight_date", "planned_destination", "planned_route_text"}
 PLAN_INPUT_FIELDS = PLAN_FIELDS | {"planned_flight_info"}
+WAYBILL_BULK_UPDATE_FIELDS = {
+    "customs_staff_id",
+    "outbound_date",
+    "carrier_agent_id",
+    "consignee_contact_id",
+    "departure_port",
+    "destination_port",
+    "planned_flight_info",
+    "planned_route_text",
+    "warehouse_data_remark",
+    "customer_remark",
+    "internal_remark",
+}
 
 
 class WaybillService:
@@ -131,6 +155,60 @@ class WaybillService:
         waybill.updated_by = current_user.id
         self.db.commit()
         return self.repo.get(waybill.id) or waybill
+
+    def bulk_update(self, payload: WaybillBulkUpdateRequest, current_user: User) -> WaybillBulkUpdateResult:
+        PermissionService.assert_waybill_write(current_user)
+        if payload.field not in WAYBILL_BULK_UPDATE_FIELDS:
+            raise bad_request("invalid_bulk_update_field")
+
+        updated: list[WaybillBulkUpdateItem] = []
+        errors: list[WaybillBulkUpdateError] = []
+        for waybill_id in payload.waybill_ids:
+            try:
+                update_payload = WaybillUpdate.model_validate({payload.field: payload.value})
+                waybill = self.update(waybill_id, update_payload, current_user)
+                updated.append(WaybillBulkUpdateItem(id=waybill.id, waybill_no=waybill.waybill_no))
+            except ValidationError as exc:
+                self.db.rollback()
+                errors.append(
+                    WaybillBulkUpdateError(
+                        id=waybill_id,
+                        waybill_no=self._safe_waybill_no(waybill_id),
+                        message=exc.errors()[0].get("msg", "invalid_value") if exc.errors() else "invalid_value",
+                    )
+                )
+            except HTTPException as exc:
+                self.db.rollback()
+                errors.append(
+                    WaybillBulkUpdateError(
+                        id=waybill_id,
+                        waybill_no=self._safe_waybill_no(waybill_id),
+                        message=str(exc.detail),
+                    )
+                )
+            except Exception as exc:
+                self.db.rollback()
+                errors.append(
+                    WaybillBulkUpdateError(
+                        id=waybill_id,
+                        waybill_no=self._safe_waybill_no(waybill_id),
+                        message=str(exc) or "update_failed",
+                    )
+                )
+
+        return WaybillBulkUpdateResult(
+            success_count=len(updated),
+            failed_count=len(errors),
+            updated_waybills=updated,
+            errors=errors,
+        )
+
+    def _safe_waybill_no(self, waybill_id: int) -> str | None:
+        try:
+            waybill = self.repo.get(waybill_id)
+        except Exception:
+            return None
+        return waybill.waybill_no if waybill else None
 
     def get_visible(self, waybill_id: int, current_user: User) -> AirWaybill:
         waybill = self.repo.get(waybill_id)

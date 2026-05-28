@@ -2,7 +2,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.enums import AlertLevel, CarrierQueryMethod, OfficialEventType, QueryStatus, WaybillLifecycleStatus
 from app.schemas.board import BoardSummaryOut
@@ -24,6 +24,7 @@ class WaybillBaseIn(BaseModel):
     destination_port: str | None = Field(default=None, max_length=16)
     carrier_agent_id: int | None = None
     warehouse_no: str | None = Field(default=None, max_length=128)
+    outbound_date: date | None = None
     consignee: str | None = Field(default=None, max_length=255)
     consignee_contact_id: int | None = None
     document_operator_id: int | None = None
@@ -87,6 +88,42 @@ class WaybillBulkImportResult(BaseModel):
     created_waybills: list[WaybillBulkImportCreated]
 
 
+class WaybillBulkUpdateRequest(BaseModel):
+    waybill_ids: list[int] = Field(min_length=1)
+    field: str = Field(max_length=64)
+    value: Any = None
+
+    @field_validator("waybill_ids")
+    @classmethod
+    def unique_waybill_ids(cls, value: list[int]) -> list[int]:
+        seen: set[int] = set()
+        unique: list[int] = []
+        for item in value:
+            if item in seen:
+                continue
+            seen.add(item)
+            unique.append(item)
+        return unique
+
+
+class WaybillBulkUpdateItem(BaseModel):
+    id: int
+    waybill_no: str
+
+
+class WaybillBulkUpdateError(BaseModel):
+    id: int
+    waybill_no: str | None = None
+    message: str
+
+
+class WaybillBulkUpdateResult(BaseModel):
+    success_count: int
+    failed_count: int
+    updated_waybills: list[WaybillBulkUpdateItem]
+    errors: list[WaybillBulkUpdateError]
+
+
 class WaybillPlanOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -110,6 +147,7 @@ class WaybillOut(BaseModel):
     carrier_agent_id: int | None = None
     carrier_agent: CarrierAgentOut | None = None
     warehouse_no: str | None = None
+    outbound_date: date | None = None
     consignee: str | None = None
     consignee_contact_id: int | None = None
     consignee_contact: ConsigneeContactOut | None = None

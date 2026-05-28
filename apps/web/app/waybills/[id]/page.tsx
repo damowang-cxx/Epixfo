@@ -18,7 +18,7 @@ import { WaybillForm } from "@/components/waybills/waybill-form";
 import { WarehouseFileUploadButton } from "@/components/waybills/warehouse-file-upload-button";
 import { useAuth } from "@/components/layout/auth-provider";
 import { apiClient } from "@/lib/client-api";
-import { compact, computeRatio, formatDateTime } from "@/lib/utils";
+import { compact, computeRatio, formatDateTime, formatOutboundDate } from "@/lib/utils";
 import { lifecycleLabels } from "@/lib/constants";
 import { formatPlannedFlightInfo } from "@/lib/planned-flight";
 import { formatWarehouseUploadMessage } from "@/lib/warehouse-upload";
@@ -339,6 +339,7 @@ export default function WaybillDetailPage() {
                 ["目的港", waybill.destination_port],
                 ["航代", waybill.agent],
                 ["入仓号", waybill.warehouse_no],
+                ["出仓日期", formatOutboundDate(waybill.outbound_date)],
                 ["收货人", waybill.consignee],
                 ["指定清关人员", userDisplayName(waybill.customs_staff)],
                 [

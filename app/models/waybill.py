@@ -71,6 +71,7 @@ class WaybillPrebooking(Base, TimestampMixin):
     carrier_agent_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("carrier_agents.id"), nullable=False)
     agent: Mapped[Optional[str]] = mapped_column(String(128))
     planned_flight_date: Mapped[date] = mapped_column(Date, nullable=False)
+    outbound_date: Mapped[Optional[date]] = mapped_column(Date)
     booked_volume: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
 
     waybill_no: Mapped[Optional[str]] = mapped_column(String(64))
@@ -138,6 +139,7 @@ class AirWaybill(Base, TimestampMixin):
     agent: Mapped[Optional[str]] = mapped_column(String(128))
     carrier_agent_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("carrier_agents.id"))
     warehouse_no: Mapped[Optional[str]] = mapped_column(String(128))
+    outbound_date: Mapped[Optional[date]] = mapped_column(Date)
     consignee: Mapped[Optional[str]] = mapped_column(String(255))
     consignee_contact_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("consignee_contacts.id"))
     board_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("waybill_boards.id", ondelete="SET NULL"))

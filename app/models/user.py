@@ -7,7 +7,7 @@ from app.core.platform_patch import patch_platform_wmi
 
 patch_platform_wmi()
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Enum, ForeignKey, Index, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, Enum, ForeignKey, Index, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -46,6 +46,10 @@ class User(Base, TimestampMixin):
         secondary="user_roles",
         back_populates="users",
         viewonly=True,
+    )
+    table_preferences: Mapped[list[UserTablePreference]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
     )
 
 
@@ -90,3 +94,22 @@ class UserRole(Base, CreatedAtMixin):
 
     user: Mapped[User] = relationship(back_populates="role_links", foreign_keys=[user_id])
     role: Mapped[Role] = relationship(back_populates="user_links")
+
+
+class UserTablePreference(Base, TimestampMixin):
+    __tablename__ = "user_table_preferences"
+    __table_args__ = (
+        UniqueConstraint("user_id", "table_key", name="uq_user_table_preference"),
+        Index("idx_user_table_preferences_user_id", "user_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    table_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    column_order: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+
+    user: Mapped[User] = relationship(back_populates="table_preferences")

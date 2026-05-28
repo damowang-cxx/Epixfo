@@ -18,6 +18,7 @@ from app.models import (
     UserPresenceLog,
     UserRefreshToken,
     UserRole,
+    UserTablePreference,
     WarehouseReceipt,
     WaybillCustomsAccessGrant,
     WaybillViewLog,
@@ -172,6 +173,7 @@ class UserService:
 
     def _delete_user_owned_records(self, user_id: int) -> None:
         self.db.execute(delete(UserRole).where(UserRole.user_id == user_id))
+        self.db.execute(delete(UserTablePreference).where(UserTablePreference.user_id == user_id))
         self.db.execute(delete(UserRefreshToken).where(UserRefreshToken.user_id == user_id))
         self.db.execute(delete(UserLoginLog).where(UserLoginLog.user_id == user_id))
         self.db.execute(delete(UserPresenceLog).where(UserPresenceLog.user_id == user_id))

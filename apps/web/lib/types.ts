@@ -23,6 +23,11 @@ export interface PageResponse<T> {
   page_size: number;
 }
 
+export interface TableColumnPreference {
+  table_key: string;
+  column_order: string[];
+}
+
 export interface Me {
   id: number;
   username: string;
@@ -82,6 +87,7 @@ export interface Waybill {
   board_id?: number | null;
   board?: BoardSummary | null;
   warehouse_no?: string | null;
+  outbound_date?: string | null;
   consignee?: string | null;
   document_operator_id?: number | null;
   route_staff_id?: number | null;
@@ -212,6 +218,7 @@ export interface WaybillPrebooking {
   carrier_agent?: CarrierAgent | null;
   agent?: string | null;
   planned_flight_date: string;
+  outbound_date?: string | null;
   booked_volume: string | number;
   waybill_no?: string | null;
   departure_port?: string | null;
@@ -315,6 +322,43 @@ export interface WaybillBulkImportResult {
   skipped_count: number;
   errors: WaybillBulkImportError[];
   created_waybills: WaybillBulkImportCreated[];
+}
+
+export type WaybillBulkUpdateField =
+  | "customs_staff_id"
+  | "outbound_date"
+  | "carrier_agent_id"
+  | "consignee_contact_id"
+  | "departure_port"
+  | "destination_port"
+  | "planned_flight_info"
+  | "planned_route_text"
+  | "warehouse_data_remark"
+  | "customer_remark"
+  | "internal_remark";
+
+export interface WaybillBulkUpdateRequest {
+  waybill_ids: number[];
+  field: WaybillBulkUpdateField;
+  value: string | number | null;
+}
+
+export interface WaybillBulkUpdateItem {
+  id: number;
+  waybill_no: string;
+}
+
+export interface WaybillBulkUpdateError {
+  id: number;
+  waybill_no?: string | null;
+  message: string;
+}
+
+export interface WaybillBulkUpdateResult {
+  success_count: number;
+  failed_count: number;
+  updated_waybills: WaybillBulkUpdateItem[];
+  errors: WaybillBulkUpdateError[];
 }
 
 export interface BoxBatchOperationResult {

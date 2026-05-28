@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -15,13 +16,14 @@ import { Textarea } from "@/components/ui/textarea";
 import { CargoBoxesTable } from "@/components/waybills/cargo-boxes-table";
 import { WarehouseFileUploadButton } from "@/components/waybills/warehouse-file-upload-button";
 import { apiClient } from "@/lib/client-api";
-import { compact } from "@/lib/utils";
+import { compact, formatOutboundDate } from "@/lib/utils";
 import { formatWarehouseUploadMessage } from "@/lib/warehouse-upload";
 import type { CargoBox, CarrierAgent, PageResponse, WarehouseReceipt, Waybill, WaybillPrebooking } from "@/lib/types";
 
 type PrebookingDraft = {
   carrier_agent_id: string;
   planned_flight_date: string;
+  outbound_date: string;
   booked_volume: string;
   internal_remark: string;
 };
@@ -32,6 +34,7 @@ type ConvertDraft = {
   departure_port: string;
   destination_port: string;
   planned_flight_info: string;
+  outbound_date: string;
   planned_route_text: string;
   booked_weight: string;
   booked_volume: string;
@@ -40,13 +43,14 @@ type ConvertDraft = {
 };
 
 function emptyPrebookingDraft(): PrebookingDraft {
-  return { carrier_agent_id: "", planned_flight_date: "", booked_volume: "", internal_remark: "" };
+  return { carrier_agent_id: "", planned_flight_date: "", outbound_date: "", booked_volume: "", internal_remark: "" };
 }
 
 function prebookingDraftFrom(item: WaybillPrebooking): PrebookingDraft {
   return {
     carrier_agent_id: String(item.carrier_agent_id || ""),
     planned_flight_date: item.planned_flight_date || "",
+    outbound_date: item.outbound_date || "",
     booked_volume: item.booked_volume ? String(item.booked_volume) : "",
     internal_remark: item.internal_remark || ""
   };
@@ -59,6 +63,7 @@ function convertDraftFrom(item: WaybillPrebooking): ConvertDraft {
     departure_port: item.departure_port || "",
     destination_port: item.destination_port || "",
     planned_flight_info: item.planned_flight_no ? `${item.planned_flight_no}/${String(new Date(item.planned_flight_date).getDate()).padStart(2, "0")}` : "",
+    outbound_date: item.outbound_date || "",
     planned_route_text: item.planned_route_text || "",
     booked_weight: item.booked_weight ? String(item.booked_weight) : "",
     booked_volume: item.booked_volume ? String(item.booked_volume) : "",
@@ -249,6 +254,7 @@ export default function PrebookingsPage() {
     const payload = {
       carrier_agent_id: Number(draft.carrier_agent_id),
       planned_flight_date: draft.planned_flight_date,
+      outbound_date: draft.outbound_date || null,
       booked_volume: Number(draft.booked_volume),
       internal_remark: textOrUndefined(draft.internal_remark)
     };
@@ -305,6 +311,7 @@ export default function PrebookingsPage() {
       departure_port: textOrUndefined(convertDraft.departure_port),
       destination_port: textOrUndefined(convertDraft.destination_port),
       planned_flight_info: textOrUndefined(convertDraft.planned_flight_info),
+      outbound_date: textOrUndefined(convertDraft.outbound_date),
       planned_route_text: textOrUndefined(convertDraft.planned_route_text),
       booked_weight: numberOrUndefined(convertDraft.booked_weight),
       booked_volume: numberOrUndefined(convertDraft.booked_volume),
@@ -365,6 +372,7 @@ export default function PrebookingsPage() {
                   </div>
                   <div className="mt-1 grid gap-1 text-xs text-slate-600">
                     <span>起飞日期：{item.planned_flight_date}</span>
+                    <span>出仓日期：{formatOutboundDate(item.outbound_date) || "-"}</span>
                     <span>方数：{formatDecimal(item.booked_volume)}</span>
                     <span>航代：{agentName(item.carrier_agent)}</span>
                     <span>入仓号：{item.receipts?.length || 0} 个</span>
@@ -423,6 +431,7 @@ export default function PrebookingsPage() {
                 <div className="rounded-md border border-slate-100 p-3"><div className="text-xs text-slate-500">状态</div><div className="mt-1 font-medium">{statusLabel(selected.status)}</div></div>
                 <div className="rounded-md border border-slate-100 p-3"><div className="text-xs text-slate-500">航代</div><div className="mt-1 font-medium">{agentName(selected.carrier_agent)}</div></div>
                 <div className="rounded-md border border-slate-100 p-3"><div className="text-xs text-slate-500">起飞日期</div><div className="mt-1 font-medium">{selected.planned_flight_date}</div></div>
+                <div className="rounded-md border border-slate-100 p-3"><div className="text-xs text-slate-500">出仓日期</div><div className="mt-1 font-medium">{formatOutboundDate(selected.outbound_date) || "-"}</div></div>
                 <div className="rounded-md border border-slate-100 p-3"><div className="text-xs text-slate-500">方数</div><div className="mt-1 font-medium">{formatDecimal(selected.booked_volume)}</div></div>
                 <div className="rounded-md border border-slate-100 p-3 md:col-span-4"><div className="text-xs text-slate-500">备注</div><div className="mt-1 font-medium">{compact(selected.internal_remark)}</div></div>
               </div>
@@ -512,7 +521,14 @@ export default function PrebookingsPage() {
                 ))}
               </SelectContent>
             </Select>
-            <Input type="date" value={draft.planned_flight_date} onChange={(event) => setDraft((prev) => ({ ...prev, planned_flight_date: event.target.value }))} />
+            <div className="grid gap-1.5">
+              <Label htmlFor="prebooking-planned-flight-date">起飞日期</Label>
+              <Input id="prebooking-planned-flight-date" type="date" value={draft.planned_flight_date} onChange={(event) => setDraft((prev) => ({ ...prev, planned_flight_date: event.target.value }))} />
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="prebooking-outbound-date">出仓日期</Label>
+              <Input id="prebooking-outbound-date" type="date" value={draft.outbound_date} onChange={(event) => setDraft((prev) => ({ ...prev, outbound_date: event.target.value }))} />
+            </div>
             <Input type="number" min="0" step="0.001" placeholder="方数" value={draft.booked_volume} onChange={(event) => setDraft((prev) => ({ ...prev, booked_volume: event.target.value }))} />
             <Textarea rows={3} placeholder="备注" value={draft.internal_remark} onChange={(event) => setDraft((prev) => ({ ...prev, internal_remark: event.target.value }))} />
           </div>
@@ -585,6 +601,10 @@ export default function PrebookingsPage() {
               <Input placeholder="始发港" value={convertDraft.departure_port} onChange={(event) => setConvertDraft((prev) => prev && ({ ...prev, departure_port: event.target.value }))} />
               <Input placeholder="目的港" value={convertDraft.destination_port} onChange={(event) => setConvertDraft((prev) => prev && ({ ...prev, destination_port: event.target.value }))} />
               <Input placeholder="航班信息，例如 QR8943/01" value={convertDraft.planned_flight_info} onChange={(event) => setConvertDraft((prev) => prev && ({ ...prev, planned_flight_info: event.target.value }))} />
+              <div className="grid gap-1.5">
+                <Label htmlFor="prebooking-convert-outbound-date">出仓日期</Label>
+                <Input id="prebooking-convert-outbound-date" type="date" value={convertDraft.outbound_date} onChange={(event) => setConvertDraft((prev) => prev && ({ ...prev, outbound_date: event.target.value }))} />
+              </div>
               <Input placeholder="航程，例如 CAN-DOH-AMS" value={convertDraft.planned_route_text} onChange={(event) => setConvertDraft((prev) => prev && ({ ...prev, planned_route_text: event.target.value }))} />
               <Input type="number" min="0" step="0.001" placeholder="订舱重量" value={convertDraft.booked_weight} onChange={(event) => setConvertDraft((prev) => prev && ({ ...prev, booked_weight: event.target.value }))} />
               <Input type="number" min="0" step="0.001" placeholder="方数" value={convertDraft.booked_volume} onChange={(event) => setConvertDraft((prev) => prev && ({ ...prev, booked_volume: event.target.value }))} />

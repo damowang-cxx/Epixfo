@@ -17,6 +17,7 @@ _MODEL_EXPORTS = {
     "Role": ("app.models.user", "Role"),
     "User": ("app.models.user", "User"),
     "UserRole": ("app.models.user", "UserRole"),
+    "UserTablePreference": ("app.models.user", "UserTablePreference"),
     "UserRefreshToken": ("app.models.auth", "UserRefreshToken"),
     "UserDailyOnlineStats": ("app.models.presence", "UserDailyOnlineStats"),
     "UserLoginLog": ("app.models.presence", "UserLoginLog"),

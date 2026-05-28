@@ -19,6 +19,7 @@ PrebookingStatus = Literal["draft", "converted", "cancelled"]
 class WaybillPrebookingBase(BaseModel):
     carrier_agent_id: int
     planned_flight_date: date
+    outbound_date: date | None = None
     booked_volume: Decimal = Field(gt=0)
     waybill_no: str | None = Field(default=None, max_length=64)
     departure_port: str | None = Field(default=None, max_length=16)
@@ -52,6 +53,7 @@ class WaybillPrebookingCreate(WaybillPrebookingBase):
 class WaybillPrebookingUpdate(BaseModel):
     carrier_agent_id: int | None = None
     planned_flight_date: date | None = None
+    outbound_date: date | None = None
     booked_volume: Decimal | None = Field(default=None, gt=0)
     waybill_no: str | None = Field(default=None, max_length=64)
     departure_port: str | None = Field(default=None, max_length=16)
@@ -92,6 +94,7 @@ class WaybillPrebookingOut(BaseModel):
     carrier_agent: CarrierAgentOut | None = None
     agent: str | None = None
     planned_flight_date: date
+    outbound_date: date | None = None
     booked_volume: Decimal
     waybill_no: str | None = None
     departure_port: str | None = None

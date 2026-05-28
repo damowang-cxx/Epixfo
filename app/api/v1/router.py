@@ -11,6 +11,7 @@ from app.api.v1 import (
     monitor,
     prebookings,
     presence,
+    user_preferences,
     users,
     warehouse_receipts,
     waybills,
@@ -20,6 +21,7 @@ api_router = APIRouter()
 
 api_router.include_router(auth.router)
 api_router.include_router(users.router)
+api_router.include_router(user_preferences.router)
 api_router.include_router(waybills.router)
 api_router.include_router(prebookings.router)
 api_router.include_router(boards.router)

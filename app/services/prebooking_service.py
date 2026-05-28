@@ -23,6 +23,7 @@ from app.utils.pagination import normalize_pagination
 PREBOOKING_FIELDS = {
     "carrier_agent_id",
     "planned_flight_date",
+    "outbound_date",
     "booked_volume",
     "waybill_no",
     "departure_port",
@@ -172,6 +173,7 @@ class PrebookingService:
             carrier_agent=prebooking.carrier_agent,
             agent=prebooking.agent,
             planned_flight_date=prebooking.planned_flight_date,
+            outbound_date=prebooking.outbound_date,
             booked_volume=prebooking.booked_volume,
             waybill_no=prebooking.waybill_no,
             departure_port=prebooking.departure_port,
@@ -219,6 +221,7 @@ class PrebookingService:
             "carrier_agent_id": prebooking.carrier_agent_id,
             "booked_volume": prebooking.booked_volume,
             "planned_flight_date": prebooking.planned_flight_date,
+            "outbound_date": prebooking.outbound_date,
             "waybill_no": prebooking.waybill_no,
             "departure_port": prebooking.departure_port,
             "destination_port": prebooking.destination_port,

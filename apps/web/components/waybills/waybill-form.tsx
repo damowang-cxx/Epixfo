@@ -21,6 +21,7 @@ type FormState = {
   destination_port: string;
   carrier_agent_id: string;
   warehouse_no: string;
+  outbound_date: string;
   consignee_contact_id: string;
   customs_staff_id: string;
   planned_flight_info: string;
@@ -59,6 +60,7 @@ const fields: FieldMeta[] = [
   { key: "departure_port", label: "始发港", requiredOnCreate: true },
   { key: "destination_port", label: "目的港", requiredOnCreate: true },
   { key: "warehouse_no", label: "入仓号" },
+  { key: "outbound_date", label: "出仓日期", type: "date" },
   { key: "planned_flight_info", label: "计划航班信息", requiredOnCreate: true },
   { key: "planned_destination", label: "计划目的港" },
   { key: "planned_route_text", label: "人工计划航程", requiredOnCreate: true },
@@ -94,6 +96,7 @@ function initialState(waybill?: Waybill): FormState {
     destination_port: waybill?.destination_port || "",
     carrier_agent_id: waybill?.carrier_agent_id?.toString() || "",
     warehouse_no: waybill?.warehouse_no || "",
+    outbound_date: waybill?.outbound_date || "",
     consignee_contact_id: waybill?.consignee_contact_id?.toString() || "",
     customs_staff_id: waybill?.customs_staff_id?.toString() || "",
     planned_flight_info: formatPlannedFlightInfo(waybill?.plan),

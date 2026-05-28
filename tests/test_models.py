@@ -11,6 +11,7 @@ def test_core_model_tables_are_registered() -> None:
         "users",
         "roles",
         "user_roles",
+        "user_table_preferences",
         "carriers",
         "carrier_prefix_mappings",
         "carrier_query_configs",
@@ -64,6 +65,21 @@ def test_waybill_table_has_monitoring_columns() -> None:
     assert "customs_staff_id" in waybill_columns
     assert "customs_data_uploaded_at" in waybill_columns
     assert "customs_data_uploaded_by" in waybill_columns
+    assert "outbound_date" in waybill_columns
+
+
+def test_prebooking_table_has_outbound_date_column() -> None:
+    prebooking_columns = Base.metadata.tables["waybill_prebookings"].columns
+
+    assert "outbound_date" in prebooking_columns
+
+
+def test_user_table_preferences_have_account_scoped_columns() -> None:
+    preference_columns = Base.metadata.tables["user_table_preferences"].columns
+
+    assert "user_id" in preference_columns
+    assert "table_key" in preference_columns
+    assert "column_order" in preference_columns
 
 
 def test_waybill_board_table_has_expected_columns() -> None:

@@ -24,6 +24,8 @@ from app.schemas.waybill import (
     WaybillAccessRequest,
     WaybillAssemblyEventOut,
     WaybillBulkImportResult,
+    WaybillBulkUpdateRequest,
+    WaybillBulkUpdateResult,
     WaybillCreate,
     WaybillOfficialFlightSegmentOut,
     WaybillOfficialInfoOut,
@@ -122,6 +124,15 @@ def request_waybill_access(
 ):
     waybill = WaybillService(db).request_customs_access(payload.waybill_no, current_user)
     return _waybill_response(waybill, current_user)
+
+
+@router.patch("/bulk-update", response_model=WaybillBulkUpdateResult)
+def bulk_update_waybills(
+    payload: WaybillBulkUpdateRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return WaybillService(db).bulk_update(payload, current_user)
 
 
 @router.get("/{waybill_id}", response_model=WaybillOut)

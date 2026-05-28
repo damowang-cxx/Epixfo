@@ -8,7 +8,7 @@ from app.models.carrier import Carrier, CarrierAgent, CarrierPrefixMapping, Carr
 from app.models.consignee import Consignee, ConsigneeContact, ConsigneeNotifyParty
 from app.models.presence import UserDailyOnlineStats, UserLoginLog, UserPresenceLog
 from app.models.system import AutoFlightQuerySettings
-from app.models.user import Role, User, UserRole
+from app.models.user import Role, User, UserRole, UserTablePreference
 from app.models.waybill import (
     AirWaybill,
     WaybillAssemblyEvent,
@@ -43,6 +43,7 @@ __all__ = [
     "UserPresenceLog",
     "UserRefreshToken",
     "UserRole",
+    "UserTablePreference",
     "WarehouseReceipt",
     "WaybillAlert",
     "WaybillAssemblyEvent",
