@@ -925,7 +925,7 @@ export default function WaybillsPage() {
             ) : (
               <Link
                 href={`/waybills/${item.id}`}
-                className="text-purple-700 underline-offset-2 hover:text-purple-900 hover:underline"
+                className="inline-flex rounded px-1 py-0.5 font-semibold text-purple-700 underline-offset-2 hover:bg-purple-50 hover:text-purple-900 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-300"
               >
                 {item.waybill_no}
               </Link>

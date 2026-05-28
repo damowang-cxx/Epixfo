@@ -31,6 +31,7 @@ def test_parse_warehouse_xlsx_success_and_calculates_ratio() -> None:
 
     assert len(result.boxes) == 2
     assert result.errors == []
+    assert [(cell.row_number, cell.box_no) for cell in result.barcode_cells] == [(2, "BOX-001"), (3, "BOX-002")]
     assert result.boxes[0].box_no == "BOX-001"
     assert result.boxes[0].warehouse_waybill_no == "WH-AWB-001"
     assert result.boxes[0].quantity == 2
@@ -174,5 +175,6 @@ def test_parse_warehouse_xlsx_only_inherits_from_successfully_parsed_box() -> No
     assert str(result.boxes[0].weight) == "7.000"
     assert str(result.boxes[0].volume) == "0.060"
     assert [item.row_number for item in result.errors] == [2, 3]
+    assert [(cell.row_number, cell.box_no) for cell in result.barcode_cells] == [(2, "BOX-BAD"), (4, "BOX-OK")]
     assert "数量必须是有效数字" in result.errors[0].message
     assert "外箱条码不能为空" in result.errors[1].message

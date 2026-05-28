@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { CalendarClock, CheckCircle2, Edit, RefreshCw } from "lucide-react";
+import { CalendarClock, CheckCircle2, Edit, RefreshCw, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -128,7 +128,9 @@ export default function PrebookingsPage() {
   const loadList = useCallback(() => {
     apiClient.get<PageResponse<WaybillPrebooking>>(`/prebookings?page=${page}&page_size=20`).then((result) => {
       setData(result);
-      if (!selectedId && result.items.length) setSelectedId(result.items[0].id);
+      const selectedStillVisible = selectedId ? result.items.some((item) => item.id === selectedId) : false;
+      if (result.items.length && !selectedStillVisible) setSelectedId(result.items[0].id);
+      if (!result.items.length) setSelectedId(null);
     });
   }, [page, selectedId]);
 
@@ -280,6 +282,40 @@ export default function PrebookingsPage() {
     }
   }
 
+  async function deletePrebooking(item: WaybillPrebooking) {
+    if (!window.confirm(`确认删除预排仓 #${item.id} 吗？已绑定的入仓号会退回未绑定入仓号列表。`)) return;
+    setSaving(true);
+    setMessage("");
+    try {
+      await apiClient.delete<void>(`/prebookings/${item.id}`);
+      const remainingItems = (data?.items || []).filter((row) => row.id !== item.id);
+      setData((prev) =>
+        prev
+          ? {
+              ...prev,
+              items: prev.items.filter((row) => row.id !== item.id),
+              total: Math.max(0, prev.total - 1)
+            }
+          : prev
+      );
+      if (selectedId === item.id) {
+        const nextSelectedId = remainingItems[0]?.id ?? null;
+        setSelectedId(nextSelectedId);
+        if (!nextSelectedId) {
+          setSelected(null);
+          setBoxes([]);
+        }
+      }
+      loadList();
+      loadUnboundReceipts();
+      setMessage(`预排仓 #${item.id} 已删除。`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "删除预排仓失败。");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function bindReceipt() {
     if (!selected || !targetReceiptId) return;
     setSaving(true);
@@ -356,28 +392,40 @@ export default function PrebookingsPage() {
           {(data?.items || []).length ? (
             <div className="space-y-2">
               {(data?.items || []).map((item) => (
-                <button
+                <div
                   key={item.id}
-                  type="button"
                   className={`w-full rounded-md border px-3 py-2 text-left transition ${
                     selectedId === item.id ? "border-purple-300 bg-purple-50" : "border-slate-200 bg-white hover:bg-slate-50"
                   }`}
-                  onClick={() => setSelectedId(item.id)}
                 >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-semibold text-slate-900">预排仓 #{item.id}</span>
-                    <Badge variant={item.status === "converted" ? "green" : item.status === "cancelled" ? "gray" : "amber"}>
-                      {statusLabel(item.status)}
-                    </Badge>
+                  <button type="button" className="w-full text-left" onClick={() => setSelectedId(item.id)}>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-slate-900">预排仓 #{item.id}</span>
+                      <Badge variant={item.status === "converted" ? "green" : item.status === "cancelled" ? "gray" : "amber"}>
+                        {statusLabel(item.status)}
+                      </Badge>
+                    </div>
+                    <div className="mt-1 grid gap-1 text-xs text-slate-600">
+                      <span>起飞日期：{item.planned_flight_date}</span>
+                      <span>出仓日期：{formatOutboundDate(item.outbound_date) || "-"}</span>
+                      <span>方数：{formatDecimal(item.booked_volume)}</span>
+                      <span>航代：{agentName(item.carrier_agent)}</span>
+                      <span>入仓号：{item.receipts?.length || 0} 个</span>
+                    </div>
+                  </button>
+                  <div className="mt-2 flex justify-end">
+                    <Button
+                      type="button"
+                      variant="danger"
+                      size="sm"
+                      disabled={saving || item.status === "converted"}
+                      onClick={() => void deletePrebooking(item)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      删除
+                    </Button>
                   </div>
-                  <div className="mt-1 grid gap-1 text-xs text-slate-600">
-                    <span>起飞日期：{item.planned_flight_date}</span>
-                    <span>出仓日期：{formatOutboundDate(item.outbound_date) || "-"}</span>
-                    <span>方数：{formatDecimal(item.booked_volume)}</span>
-                    <span>航代：{agentName(item.carrier_agent)}</span>
-                    <span>入仓号：{item.receipts?.length || 0} 个</span>
-                  </div>
-                </button>
+                </div>
               ))}
               <div className="flex items-center justify-between pt-2 text-sm text-slate-600">
                 <span>共 {data?.total || 0} 条</span>

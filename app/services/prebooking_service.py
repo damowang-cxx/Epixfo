@@ -77,6 +77,8 @@ class PrebookingService:
         query = self.base_query()
         if status:
             query = query.where(WaybillPrebooking.status == status)
+        else:
+            query = query.where(WaybillPrebooking.status != "converted")
         query = query.order_by(
             (WaybillPrebooking.status != "draft").asc(),
             WaybillPrebooking.planned_flight_date.asc(),
@@ -128,6 +130,28 @@ class PrebookingService:
         prebooking.updated_by = current_user.id
         self.db.commit()
         return self.get(prebooking.id, current_user)
+
+    def delete(self, prebooking_id: int, current_user: User) -> None:
+        prebooking = self.get(prebooking_id, current_user)
+        if prebooking.status == "converted":
+            raise bad_request("prebooking_already_converted")
+
+        receipts = list(
+            self.db.scalars(select(WarehouseReceipt).where(WarehouseReceipt.prebooking_id == prebooking.id))
+        )
+        for receipt in receipts:
+            receipt.prebooking_id = None
+            receipt.waybill_id = None
+            for box in self.warehouse_files.boxes.list_by_receipt_id(receipt.id):
+                box.current_waybill_id = None
+                box.status = "unbound"
+                box.never_bound_direct_upload = False
+                box.unbound_reason = None
+                box.unbound_remark = None
+            self.warehouse_files._refresh_receipt_totals(receipt)
+
+        self.db.delete(prebooking)
+        self.db.commit()
 
     def convert(self, prebooking_id: int, payload: WaybillCreate, current_user: User):
         prebooking = self.get(prebooking_id, current_user)

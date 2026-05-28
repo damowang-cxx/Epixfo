@@ -20,6 +20,7 @@ import type {
   WarehouseBoxConflict,
   WarehouseChannelReviewIssue,
   WarehouseFileUploadResult,
+  WarehouseUploadIntegrityIssue,
   WarehouseReceipt,
   Waybill
 } from "@/lib/types";
@@ -56,6 +57,7 @@ interface BatchUploadFailure {
   detected_channel?: string | null;
   warnings: string[];
   issues: WarehouseChannelReviewIssue[];
+  integrity_issues: WarehouseUploadIntegrityIssue[];
   conflicts: Array<UploadConflict | WarehouseBoxConflict>;
 }
 
@@ -131,6 +133,18 @@ function parseIssues(value: unknown): WarehouseChannelReviewIssue[] {
   );
 }
 
+function parseIntegrityIssues(value: unknown): WarehouseUploadIntegrityIssue[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (item): item is WarehouseUploadIntegrityIssue =>
+      Boolean(item) &&
+      typeof item === "object" &&
+      typeof (item as WarehouseUploadIntegrityIssue).row_number === "number" &&
+      typeof (item as WarehouseUploadIntegrityIssue).box_no === "string" &&
+      typeof (item as WarehouseUploadIntegrityIssue).message === "string"
+  );
+}
+
 function parseWarnings(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
@@ -145,6 +159,7 @@ function uploadFailureFromError(file: File, error: unknown): BatchUploadFailure 
       detected_channel: typeof detail.detected_channel === "string" ? detail.detected_channel : undefined,
       warnings: parseWarnings(detail.warnings),
       issues: parseIssues(detail.issues),
+      integrity_issues: parseIntegrityIssues(detail.issues),
       conflicts: parseConflicts(error)
     };
   }
@@ -153,6 +168,7 @@ function uploadFailureFromError(file: File, error: unknown): BatchUploadFailure 
     message: error instanceof Error ? error.message : "上传入仓文件失败。",
     warnings: [],
     issues: [],
+    integrity_issues: [],
     conflicts: []
   };
 }
@@ -933,6 +949,26 @@ export default function WarehouseReceiptsPage() {
                                   <TD className="font-medium">{issue.box_no}</TD>
                                   <TD>{issue.prefix}</TD>
                                   <TD>{issue.reason}</TD>
+                                  <TD>{issue.message}</TD>
+                                </TR>
+                              ))}
+                            </TBody>
+                          </Table>
+                        ) : null}
+                        {failure.integrity_issues.length ? (
+                          <Table className="mt-3 bg-white">
+                            <THead>
+                              <TR>
+                                <TH>Excel 行号</TH>
+                                <TH>外箱条码</TH>
+                                <TH>说明</TH>
+                              </TR>
+                            </THead>
+                            <TBody>
+                              {failure.integrity_issues.map((issue) => (
+                                <TR key={`${failure.file_name}-${issue.row_number}-${issue.box_no}`}>
+                                  <TD>{issue.row_number}</TD>
+                                  <TD className="font-medium">{issue.box_no}</TD>
                                   <TD>{issue.message}</TD>
                                 </TR>
                               ))}

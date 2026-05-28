@@ -9,7 +9,7 @@ from openpyxl import Workbook
 
 from app.models import BoxDocument, CarrierAgent, ConsigneeContact, WarehouseReceipt
 from app.schemas.box import BoxCreate
-from app.services.warehouse_file_service import WarehouseFileService
+from app.services.warehouse_file_service import WarehouseFileService, assert_warehouse_upload_integrity, parse_warehouse_xlsx
 
 _ = (CarrierAgent, ConsigneeContact)
 
@@ -174,6 +174,38 @@ def _invalid_xlsx_bytes() -> bytes:
     stream = BytesIO()
     workbook.save(stream)
     return stream.getvalue()
+
+
+def test_upload_integrity_reports_missing_excel_barcode_rows() -> None:
+    parse_result = parse_warehouse_xlsx(
+        "CHECK-IN.xlsx",
+        _xlsx_rows(
+            [
+                ["DHL001", "WH-AWB-001", "Shoes", 1, 10, "40*40*40", 0.064],
+                ["DHL002", "WH-AWB-002", "Bags", 1, 8, "40*40*40", 0.064],
+            ]
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        assert_warehouse_upload_integrity(
+            file_name="CHECK-IN.xlsx",
+            warehouse_no="CHECK-IN",
+            parse_result=parse_result,
+            uploaded_box_nos=["DHL001"],
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail["error_code"] == "warehouse_upload_integrity_failed"
+    assert exc_info.value.detail["expected_count"] == 2
+    assert exc_info.value.detail["uploaded_count"] == 1
+    assert exc_info.value.detail["issues"] == [
+        {
+            "row_number": 3,
+            "box_no": "DHL002",
+            "message": "该外箱条码未成功写入系统，请检查该行是否重复、数据格式是否错误或是否被跳过。",
+        }
+    ]
 
 
 def _unbound_service(tmp_path):

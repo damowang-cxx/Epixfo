@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { ApiError, apiClient } from "@/lib/client-api";
-import type { WarehouseBoxConflict, WarehouseFileUploadResult } from "@/lib/types";
+import type { WarehouseBoxConflict, WarehouseFileUploadResult, WarehouseUploadIntegrityIssue } from "@/lib/types";
 
 function isWarehouseConflictDetail(detail: unknown): detail is {
   error_code: "warehouse_box_conflicts";
@@ -17,6 +17,25 @@ function isWarehouseConflictDetail(detail: unknown): detail is {
     typeof detail === "object" &&
     (detail as { error_code?: unknown }).error_code === "warehouse_box_conflicts" &&
     Array.isArray((detail as { conflicts?: unknown }).conflicts)
+  );
+}
+
+interface WarehouseUploadIntegrityDetail {
+  error_code: "warehouse_upload_integrity_failed";
+  file_name?: string;
+  warehouse_no?: string;
+  expected_count?: number;
+  uploaded_count?: number;
+  message?: string;
+  issues: WarehouseUploadIntegrityIssue[];
+}
+
+function isWarehouseUploadIntegrityDetail(detail: unknown): detail is WarehouseUploadIntegrityDetail {
+  return (
+    Boolean(detail) &&
+    typeof detail === "object" &&
+    (detail as { error_code?: unknown }).error_code === "warehouse_upload_integrity_failed" &&
+    Array.isArray((detail as { issues?: unknown }).issues)
   );
 }
 
@@ -42,6 +61,7 @@ export function WarehouseFileUploadButton({
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [conflicts, setConflicts] = useState<WarehouseBoxConflict[]>([]);
   const [selectedBoxNos, setSelectedBoxNos] = useState<Set<string>>(new Set());
+  const [integrityFailure, setIntegrityFailure] = useState<WarehouseUploadIntegrityDetail | null>(null);
 
   async function upload(file: File, forceMoveBoxNos: string[] = [], skipConflictBoxNos: string[] = []) {
     const formData = new FormData();
@@ -57,12 +77,17 @@ export function WarehouseFileUploadButton({
       setPendingFile(null);
       setConflicts([]);
       setSelectedBoxNos(new Set());
+      setIntegrityFailure(null);
       onUploaded?.(result);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409 && isWarehouseConflictDetail(err.detail)) {
         setPendingFile(file);
         setConflicts(err.detail.conflicts);
         setSelectedBoxNos(new Set(err.detail.conflicts.map((item) => item.box_no)));
+        return;
+      }
+      if (err instanceof ApiError && err.status === 400 && isWarehouseUploadIntegrityDetail(err.detail)) {
+        setIntegrityFailure(err.detail);
         return;
       }
       onError?.(err instanceof Error ? err.message : "入仓文件上传失败");
@@ -164,6 +189,49 @@ export function WarehouseFileUploadButton({
               </Button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={Boolean(integrityFailure)} onOpenChange={(open) => !open && setIntegrityFailure(null)}>
+        <DialogContent className="w-[min(760px,calc(100vw-32px))]">
+          <DialogTitle className="pr-10 text-base font-semibold text-slate-900">入仓文件外箱数量校验失败</DialogTitle>
+          {integrityFailure ? (
+            <div className="mt-3 space-y-3 text-sm text-slate-600">
+              <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-red-800">
+                {integrityFailure.message || "Excel 外箱条码数量与本次成功写入数量不一致。"}
+              </div>
+              <div className="flex flex-wrap gap-3 text-slate-700">
+                <span>文件：{integrityFailure.file_name || "-"}</span>
+                <span>入仓号：{integrityFailure.warehouse_no || "-"}</span>
+                <span>Excel 条码数：{integrityFailure.expected_count ?? "-"}</span>
+                <span>成功写入数：{integrityFailure.uploaded_count ?? "-"}</span>
+              </div>
+              {integrityFailure.issues.length ? (
+                <Table>
+                  <THead>
+                    <TR>
+                      <TH>Excel 行号</TH>
+                      <TH>外箱条码</TH>
+                      <TH>说明</TH>
+                    </TR>
+                  </THead>
+                  <TBody>
+                    {integrityFailure.issues.map((issue) => (
+                      <TR key={`${issue.row_number}-${issue.box_no}`}>
+                        <TD>{issue.row_number}</TD>
+                        <TD className="font-medium text-slate-900">{issue.box_no}</TD>
+                        <TD>{issue.message}</TD>
+                      </TR>
+                    ))}
+                  </TBody>
+                </Table>
+              ) : null}
+              <div className="flex justify-end">
+                <Button type="button" onClick={() => setIntegrityFailure(null)}>
+                  知道了
+                </Button>
+              </div>
+            </div>
+          ) : null}
         </DialogContent>
       </Dialog>
     </>

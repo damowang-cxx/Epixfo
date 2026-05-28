@@ -62,6 +62,12 @@ def update_prebooking(
     return PrebookingService(db).to_out(prebooking)
 
 
+@router.delete("/{prebooking_id}", status_code=204)
+def delete_prebooking(prebooking_id: int, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    PrebookingService(db).delete(prebooking_id, current_user)
+    return Response(status_code=204)
+
+
 @router.post("/{prebooking_id}/convert", response_model=WaybillOut)
 def convert_prebooking(
     prebooking_id: int,

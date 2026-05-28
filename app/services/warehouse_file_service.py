@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_HALF_UP
@@ -33,6 +34,7 @@ from app.schemas.box import (
     WarehouseFileImportError,
     WarehouseFileUploadResult,
     WarehouseReceiptListOut,
+    WarehouseUploadIntegrityIssue,
 )
 from app.services.permission_service import PermissionService
 
@@ -95,6 +97,7 @@ class WarehouseFileParseResult:
     boxes: list[ParsedWarehouseBox]
     skipped_count: int
     errors: list[WarehouseFileImportError]
+    barcode_cells: list[WarehouseUploadIntegrityIssue]
 
 
 @dataclass
@@ -676,6 +679,12 @@ class WarehouseFileService:
         bindable_boxes = [item for item in parse_result.boxes if item.box_no not in skipped_conflict_box_nos]
         if not bindable_boxes:
             raise bad_request("warehouse_file_no_bindable_boxes")
+        assert_warehouse_upload_integrity(
+            file_name=file_name,
+            warehouse_no=warehouse_no,
+            parse_result=parse_result,
+            uploaded_box_nos=[item.box_no for item in bindable_boxes],
+        )
 
         file_hash = hashlib.sha256(content).hexdigest()
         stored_path = self._store_file(file_name, file_hash, content)
@@ -762,6 +771,12 @@ class WarehouseFileService:
                     "conflicts": conflicts,
                 },
             )
+        assert_warehouse_upload_integrity(
+            file_name=file_name,
+            warehouse_no=warehouse_no,
+            parse_result=parse_result,
+            uploaded_box_nos=[item.box_no for item in parse_result.boxes],
+        )
 
         file_hash = hashlib.sha256(content).hexdigest()
         stored_path = self._store_file(file_name, file_hash, content)
@@ -868,6 +883,12 @@ class WarehouseFileService:
                     "conflicts": conflicts,
                 },
             )
+        assert_warehouse_upload_integrity(
+            file_name=file_name,
+            warehouse_no=warehouse_no,
+            parse_result=parse_result,
+            uploaded_box_nos=[item.box_no for item in parse_result.boxes],
+        )
 
         file_hash = hashlib.sha256(content).hexdigest()
         stored_path = self._store_file(file_name, file_hash, content)
@@ -1508,6 +1529,7 @@ def parse_warehouse_xlsx(file_name: str, content: bytes) -> WarehouseFileParseRe
     boxes_by_no: dict[str, ParsedWarehouseBox] = {}
     box_order: list[str] = []
     errors: list[WarehouseFileImportError] = []
+    barcode_cells: list[WarehouseUploadIntegrityIssue] = []
     skipped_count = 0
     normalized_headers = [_clean_text(value) or f"column_{idx + 1}" for idx, value in enumerate(header_values)]
     last_valid_box_no: str | None = None
@@ -1524,6 +1546,14 @@ def parse_warehouse_xlsx(file_name: str, content: bytes) -> WarehouseFileParseRe
         }
         try:
             raw_box_no = _optional_text(values, column_map["outer_barcode"])
+            if raw_box_no:
+                barcode_cells.append(
+                    WarehouseUploadIntegrityIssue(
+                        row_number=row_number,
+                        box_no=raw_box_no,
+                        message="",
+                    )
+                )
             box_no = raw_box_no or last_valid_box_no
             if not box_no:
                 raise ValueError("外箱条码不能为空")
@@ -1588,7 +1618,58 @@ def parse_warehouse_xlsx(file_name: str, content: bytes) -> WarehouseFileParseRe
             else Decimal("0.000")
         )
 
-    return WarehouseFileParseResult(boxes=[boxes_by_no[box_no] for box_no in box_order], skipped_count=skipped_count, errors=errors)
+    return WarehouseFileParseResult(
+        boxes=[boxes_by_no[box_no] for box_no in box_order],
+        skipped_count=skipped_count,
+        errors=errors,
+        barcode_cells=barcode_cells,
+    )
+
+
+def warehouse_upload_integrity_issues(
+    parse_result: WarehouseFileParseResult,
+    uploaded_box_nos: list[str],
+) -> list[WarehouseUploadIntegrityIssue]:
+    uploaded_counter = Counter(uploaded_box_nos)
+    issues: list[WarehouseUploadIntegrityIssue] = []
+    for cell in parse_result.barcode_cells:
+        if uploaded_counter[cell.box_no] > 0:
+            uploaded_counter[cell.box_no] -= 1
+            continue
+        issues.append(
+            WarehouseUploadIntegrityIssue(
+                row_number=cell.row_number,
+                box_no=cell.box_no,
+                message="该外箱条码未成功写入系统，请检查该行是否重复、数据格式是否错误或是否被跳过。",
+            )
+        )
+    return issues
+
+
+def assert_warehouse_upload_integrity(
+    *,
+    file_name: str,
+    warehouse_no: str,
+    parse_result: WarehouseFileParseResult,
+    uploaded_box_nos: list[str],
+) -> None:
+    issues = warehouse_upload_integrity_issues(parse_result, uploaded_box_nos)
+    expected_count = len(parse_result.barcode_cells)
+    uploaded_count = len(uploaded_box_nos)
+    if expected_count == uploaded_count and not issues:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail={
+            "error_code": "warehouse_upload_integrity_failed",
+            "message": "入仓文件外箱数量校验失败，请检查未成功上传的外箱行。",
+            "file_name": file_name,
+            "warehouse_no": warehouse_no,
+            "expected_count": expected_count,
+            "uploaded_count": uploaded_count,
+            "issues": [item.model_dump() for item in issues],
+        },
+    )
 
 
 def review_warehouse_file_channels(

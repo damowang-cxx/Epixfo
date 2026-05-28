@@ -288,6 +288,12 @@ export interface WarehouseChannelReviewIssue {
   message: string;
 }
 
+export interface WarehouseUploadIntegrityIssue {
+  row_number: number;
+  box_no: string;
+  message: string;
+}
+
 export interface WarehouseChannelReview {
   detected_channel: "europe" | "uk" | "unknown" | "mixed";
   warnings: string[];
@@ -303,6 +309,7 @@ export interface WarehouseFileUploadResult {
   conflicts: WarehouseBoxConflict[];
   channel_review?: WarehouseChannelReview | null;
   channel_tags: string[];
+  integrity_issues: WarehouseUploadIntegrityIssue[];
 }
 
 export interface WaybillBulkImportError {
