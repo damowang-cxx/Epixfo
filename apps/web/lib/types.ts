@@ -361,6 +361,54 @@ export interface WaybillBulkUpdateResult {
   errors: WaybillBulkUpdateError[];
 }
 
+export type WaybillInlineUpdateField =
+  | "waybill_no"
+  | "consignee_contact_id"
+  | "booked_volume"
+  | "booked_weight"
+  | "density"
+  | "quotation"
+  | "include_tc"
+  | "customs_staff_id"
+  | "carrier_agent_id"
+  | "outbound_date"
+  | "planned_flight_no"
+  | "planned_flight_date";
+
+export type WaybillInlineUpdateValue = string | number | boolean | null;
+
+export interface WaybillBulkInlineUpdateRequest {
+  updates: Array<{
+    waybill_id: number;
+    changes: Partial<Record<WaybillInlineUpdateField, WaybillInlineUpdateValue>>;
+  }>;
+}
+
+export interface WaybillBulkInlineUpdateError {
+  waybill_id: number;
+  waybill_no?: string | null;
+  field?: string | null;
+  message: string;
+}
+
+export interface WaybillBulkInlineUpdateResult {
+  success_count: number;
+  failed_count: number;
+  updated_waybills: Waybill[];
+  errors: WaybillBulkInlineUpdateError[];
+}
+
+export interface WaybillBulkDeleteRequest {
+  waybill_ids: number[];
+}
+
+export interface WaybillBulkDeleteResult {
+  success_count: number;
+  failed_count: number;
+  deleted_waybills: WaybillBulkUpdateItem[];
+  errors: WaybillBulkUpdateError[];
+}
+
 export interface BoxBatchOperationResult {
   updated_count: number;
   boxes: CargoBox[];

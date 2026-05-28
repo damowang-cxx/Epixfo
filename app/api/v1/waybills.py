@@ -23,7 +23,11 @@ from app.schemas.waybill import (
     ManualStatusRequest,
     WaybillAccessRequest,
     WaybillAssemblyEventOut,
+    WaybillBulkDeleteRequest,
+    WaybillBulkDeleteResult,
     WaybillBulkImportResult,
+    WaybillBulkInlineUpdateRequest,
+    WaybillBulkInlineUpdateResult,
     WaybillBulkUpdateRequest,
     WaybillBulkUpdateResult,
     WaybillCreate,
@@ -133,6 +137,31 @@ def bulk_update_waybills(
     db: Session = Depends(get_db),
 ):
     return WaybillService(db).bulk_update(payload, current_user)
+
+
+@router.patch("/bulk-inline-update", response_model=WaybillBulkInlineUpdateResult)
+def bulk_inline_update_waybills(
+    payload: WaybillBulkInlineUpdateRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    updated, errors = WaybillService(db).bulk_inline_update(payload, current_user)
+    items = [_waybill_response(item, current_user) for item in updated]
+    return WaybillBulkInlineUpdateResult(
+        success_count=len(items),
+        failed_count=len(errors),
+        updated_waybills=items,
+        errors=errors,
+    )
+
+
+@router.post("/bulk-delete", response_model=WaybillBulkDeleteResult)
+def bulk_delete_waybills(
+    payload: WaybillBulkDeleteRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return WaybillService(db).bulk_delete(payload, current_user)
 
 
 @router.get("/{waybill_id}", response_model=WaybillOut)

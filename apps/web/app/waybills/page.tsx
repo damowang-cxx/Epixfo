@@ -3,7 +3,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Download, Pencil, Plus, RotateCcw, Search, Trash2, Upload } from "lucide-react";
+import { Check, Download, Pencil, Plus, RotateCcw, Search, Trash2, Upload } from "lucide-react";
 import { AlertLevelBadge, LifecycleBadge, LIFECYCLE_VARIANT, type LifecycleBadgeVariant } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -13,14 +13,11 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
-import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/components/layout/auth-provider";
-import { WarehouseFileUploadButton } from "@/components/waybills/warehouse-file-upload-button";
 import { apiClient } from "@/lib/client-api";
 import { LIFECYCLE_ORDER, lifecycleLabels } from "@/lib/constants";
 import { formatPlannedFlightInfo } from "@/lib/planned-flight";
 import { cn, compact, formatDateTime, formatOutboundDate } from "@/lib/utils";
-import { formatWarehouseUploadMessage } from "@/lib/warehouse-upload";
 import type {
   CarrierAgent,
   Consignee,
@@ -29,11 +26,13 @@ import type {
   PageResponse,
   TableColumnPreference,
   User,
+  WaybillBulkDeleteRequest,
+  WaybillBulkDeleteResult,
   WaybillBulkImportResult,
-  WaybillBulkUpdateField,
-  WaybillBulkUpdateRequest,
-  WaybillBulkUpdateResult,
-  WarehouseFileUploadResult,
+  WaybillBulkInlineUpdateRequest,
+  WaybillBulkInlineUpdateResult,
+  WaybillInlineUpdateField,
+  WaybillInlineUpdateValue,
   Waybill
 } from "@/lib/types";
 
@@ -49,25 +48,30 @@ interface StatusCount {
 
 const BULK_CLEAR_VALUE = "__clear__";
 
-type BulkUpdateFieldKind = "select" | "date" | "text" | "textarea";
+type BulkUpdateFieldKind = "select" | "date" | "text" | "number" | "boolean";
+type InlineDraftChanges = Partial<Record<WaybillInlineUpdateField, WaybillInlineUpdateValue>>;
+type DraftChanges = Record<number, InlineDraftChanges>;
+type CellErrorField = WaybillInlineUpdateField | "_row" | "_delete";
+type CellErrors = Record<number, Partial<Record<CellErrorField, string>>>;
 
 const BULK_UPDATE_FIELDS: Array<{
-  key: WaybillBulkUpdateField;
+  key: WaybillInlineUpdateField;
   label: string;
   kind: BulkUpdateFieldKind;
   placeholder?: string;
 }> = [
-  { key: "customs_staff_id", label: "指定清关人员", kind: "select" },
-  { key: "outbound_date", label: "出仓日期", kind: "date" },
-  { key: "carrier_agent_id", label: "航代", kind: "select" },
+  { key: "waybill_no", label: "提单号", kind: "text" },
   { key: "consignee_contact_id", label: "收件人", kind: "select" },
-  { key: "departure_port", label: "始发港", kind: "text" },
-  { key: "destination_port", label: "目的港", kind: "text" },
-  { key: "planned_flight_info", label: "计划航班信息", kind: "text", placeholder: "QR8943/01" },
-  { key: "planned_route_text", label: "人工计划航程", kind: "text" },
-  { key: "warehouse_data_remark", label: "入仓数据备注", kind: "textarea" },
-  { key: "customer_remark", label: "客户备注", kind: "textarea" },
-  { key: "internal_remark", label: "内部备注", kind: "textarea" }
+  { key: "booked_volume", label: "订舱方数", kind: "number" },
+  { key: "booked_weight", label: "订舱重量", kind: "number" },
+  { key: "density", label: "密度", kind: "number" },
+  { key: "quotation", label: "报价", kind: "text" },
+  { key: "include_tc", label: "含T", kind: "boolean" },
+  { key: "customs_staff_id", label: "指定清关人员", kind: "select" },
+  { key: "carrier_agent_id", label: "航代", kind: "select" },
+  { key: "outbound_date", label: "出仓日期", kind: "date" },
+  { key: "planned_flight_no", label: "计划航班号", kind: "text" },
+  { key: "planned_flight_date", label: "约定航班起飞日期", kind: "date" }
 ];
 
 const WAYBILL_TABLE_KEY = "waybills:list";
@@ -76,6 +80,10 @@ const DEFAULT_WAYBILL_COLUMN_ORDER = [
   "waybill_no",
   "consignee",
   "booked_volume",
+  "booked_weight",
+  "density",
+  "quotation",
+  "include_tc",
   "customs_staff",
   "customs_data",
   "agent",
@@ -96,6 +104,10 @@ const WAYBILL_COLUMN_LABELS: Record<WaybillColumnKey, string> = {
   waybill_no: "提单号",
   consignee: "收件人",
   booked_volume: "订舱方数/板总方数",
+  booked_weight: "订舱重量",
+  density: "密度",
+  quotation: "报价",
+  include_tc: "含T",
   customs_staff: "指定清关人员",
   customs_data: "清关资料",
   agent: "航代",
@@ -208,7 +220,6 @@ function StatusCard({
 export default function WaybillsPage() {
   const { user, hasRole } = useAuth();
   const router = useRouter();
-  const canDeleteWaybills = hasRole("admin") || hasRole("route_staff");
   const canBulkEditWaybills = hasRole("admin") || hasRole("route_staff");
   const canRequestCustomsAccess = hasRole("customs_staff") && !hasRole("admin") && !hasRole("route_staff");
   const [data, setData] = useState<PageResponse<Waybill> | null>(null);
@@ -222,7 +233,6 @@ export default function WaybillsPage() {
   const [message, setMessage] = useState("");
   const [columnOrder, setColumnOrder] = useState<WaybillColumnKey[]>(() => normalizeWaybillColumnOrder());
   const [draggingColumn, setDraggingColumn] = useState<WaybillColumnKey | null>(null);
-  const [deletingWaybillId, setDeletingWaybillId] = useState<number | null>(null);
   const [accessWaybillNo, setAccessWaybillNo] = useState("");
   const [requestingAccess, setRequestingAccess] = useState(false);
   const bulkImportInputRef = useRef<HTMLInputElement>(null);
@@ -230,12 +240,17 @@ export default function WaybillsPage() {
   const [uploadingBulkImport, setUploadingBulkImport] = useState(false);
   const [bulkImportResult, setBulkImportResult] = useState<WaybillBulkImportResult | null>(null);
   const [bulkImportError, setBulkImportError] = useState("");
+  const [editMode, setEditMode] = useState(false);
+  const [draftChanges, setDraftChanges] = useState<DraftChanges>({});
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<number[]>([]);
+  const [cellErrors, setCellErrors] = useState<CellErrors>({});
+  const [savingInlineChanges, setSavingInlineChanges] = useState(false);
   const [selectedWaybillIds, setSelectedWaybillIds] = useState<number[]>([]);
   const [bulkEditOpen, setBulkEditOpen] = useState(false);
-  const [bulkEditField, setBulkEditField] = useState<WaybillBulkUpdateField>("outbound_date");
+  const [bulkEditField, setBulkEditField] = useState<WaybillInlineUpdateField>("outbound_date");
   const [bulkEditValue, setBulkEditValue] = useState("");
   const [bulkEditSaving, setBulkEditSaving] = useState(false);
-  const [bulkEditResult, setBulkEditResult] = useState<WaybillBulkUpdateResult | null>(null);
+  const [bulkEditResult, setBulkEditResult] = useState<{ success_count: number } | null>(null);
   const [agents, setAgents] = useState<CarrierAgent[]>([]);
   const [consignees, setConsignees] = useState<Consignee[]>([]);
   const [contacts, setContacts] = useState<ConsigneeContact[]>([]);
@@ -319,6 +334,8 @@ export default function WaybillsPage() {
   const totalCount = useMemo(() => Object.values(counts).reduce((a, b) => a + b, 0), [counts]);
   const currentPageIds = useMemo(() => (data?.items || []).map((item) => item.id), [data?.items]);
   const selectedIdSet = useMemo(() => new Set(selectedWaybillIds), [selectedWaybillIds]);
+  const pendingDeleteIdSet = useMemo(() => new Set(pendingDeleteIds), [pendingDeleteIds]);
+  const hasPendingListChanges = Object.keys(draftChanges).length > 0 || pendingDeleteIds.length > 0;
   const selectedWaybills = useMemo(
     () => (data?.items || []).filter((item) => selectedIdSet.has(item.id)),
     [data?.items, selectedIdSet]
@@ -356,13 +373,13 @@ export default function WaybillsPage() {
   }, [data?.items]);
 
   function applyFilters() {
-    setSelectedWaybillIds([]);
+    if (!confirmAndDiscardEditChanges()) return;
     setPage(1);
     load();
   }
 
   function selectStatus(status: LifecycleStatus | "all") {
-    setSelectedWaybillIds([]);
+    if (!confirmAndDiscardEditChanges()) return;
     setLifecycleStatus(status);
     setPage(1);
   }
@@ -402,15 +419,123 @@ export default function WaybillsPage() {
   }
 
   function openBulkEditDialog() {
-    if (selectedWaybillIds.length === 0) return;
+    if (!editMode || selectedWaybillIds.length === 0) return;
     setBulkEditValue("");
     setBulkEditResult(null);
     setBulkEditOpen(true);
   }
 
-  function normalizeBulkEditValue(): string | number | null {
+  function normalizeInlineValue(field: WaybillInlineUpdateField, rawValue: string | number | boolean | null): WaybillInlineUpdateValue {
+    if (field === "include_tc") return Boolean(rawValue);
+    if (typeof rawValue === "string") {
+      const trimmed = rawValue.trim();
+      return trimmed === "" ? null : trimmed;
+    }
+    return rawValue;
+  }
+
+  function getBaseInlineValue(item: Waybill, field: WaybillInlineUpdateField): WaybillInlineUpdateValue {
+    if (field === "planned_flight_no") return item.plan?.planned_flight_no || null;
+    if (field === "planned_flight_date") return item.plan?.planned_flight_date || null;
+    if (field === "consignee_contact_id") return item.consignee_contact_id ?? null;
+    if (field === "carrier_agent_id") return item.carrier_agent_id ?? null;
+    if (field === "customs_staff_id") return item.customs_staff_id ?? null;
+    return item[field] as WaybillInlineUpdateValue;
+  }
+
+  function getDraftValue(item: Waybill, field: WaybillInlineUpdateField): WaybillInlineUpdateValue {
+    const draft = draftChanges[item.id]?.[field];
+    return draft !== undefined ? draft : getBaseInlineValue(item, field);
+  }
+
+  function valuesEqual(left: WaybillInlineUpdateValue, right: WaybillInlineUpdateValue) {
+    return String(left ?? "") === String(right ?? "");
+  }
+
+  function clearCellError(ids: number[], field: CellErrorField) {
+    setCellErrors((prev) => {
+      const next = { ...prev };
+      for (const id of ids) {
+        if (!next[id]) continue;
+        const row = { ...next[id] };
+        delete row[field];
+        delete row._row;
+        next[id] = row;
+      }
+      return next;
+    });
+  }
+
+  function stageDraftChange(item: Waybill, field: WaybillInlineUpdateField, value: WaybillInlineUpdateValue, syncBoard = false) {
+    const normalizedValue = normalizeInlineValue(field, value);
+    const targetItems =
+      syncBoard && item.board_id
+        ? (data?.items || []).filter((row) => row.board_id === item.board_id)
+        : [item];
+    const targetIds = targetItems.map((row) => row.id);
+    setDraftChanges((prev) => {
+      const next: DraftChanges = { ...prev };
+      for (const row of targetItems) {
+        const baseValue = getBaseInlineValue(row, field);
+        const rowDraft = { ...(next[row.id] || {}) };
+        if (valuesEqual(baseValue, normalizedValue)) {
+          delete rowDraft[field];
+        } else {
+          rowDraft[field] = normalizedValue;
+        }
+        if (Object.keys(rowDraft).length === 0) {
+          delete next[row.id];
+        } else {
+          next[row.id] = rowDraft;
+        }
+      }
+      return next;
+    });
+    clearCellError(targetIds, field);
+  }
+
+  function discardEditChanges() {
+    setDraftChanges({});
+    setPendingDeleteIds([]);
+    setCellErrors({});
+    setSelectedWaybillIds([]);
+    setBulkEditResult(null);
+    setMessage("");
+  }
+
+  function confirmAndDiscardEditChanges() {
+    if (hasPendingListChanges && !window.confirm("确认放弃当前未保存的修改吗？")) return false;
+    discardEditChanges();
+    return true;
+  }
+
+  function enterEditMode() {
+    setEditMode(true);
+    setMessage("");
+  }
+
+  function cancelEditMode() {
+    if (!confirmAndDiscardEditChanges()) return;
+    setEditMode(false);
+  }
+
+  function togglePendingDelete(item: Waybill) {
+    setPendingDeleteIds((prev) => (prev.includes(item.id) ? prev.filter((id) => id !== item.id) : [...prev, item.id]));
+    clearCellError([item.id], "_delete");
+  }
+
+  function stageSelectedForDelete() {
+    if (selectedWaybillIds.length === 0) return;
+    setPendingDeleteIds((prev) => Array.from(new Set([...prev, ...selectedWaybillIds])));
+    setSelectedWaybillIds([]);
+  }
+
+  function normalizeBulkEditValue(): WaybillInlineUpdateValue {
     if (selectedBulkField.kind === "select") {
       return bulkEditValue === "" || bulkEditValue === BULK_CLEAR_VALUE ? null : Number(bulkEditValue);
+    }
+    if (selectedBulkField.kind === "boolean") {
+      return bulkEditValue === "true";
     }
     if (selectedBulkField.kind === "date") {
       return bulkEditValue || null;
@@ -419,96 +544,27 @@ export default function WaybillsPage() {
     return trimmed === "" ? null : trimmed;
   }
 
-  function applyBulkUpdateToLocalRow(item: Waybill, field: WaybillBulkUpdateField, value: string | number | null): Waybill {
-    if (field === "carrier_agent_id") {
-      const agent = typeof value === "number" ? agents.find((row) => row.id === value) : undefined;
-      return {
-        ...item,
-        carrier_agent_id: agent?.id ?? null,
-        carrier_agent: agent ?? null,
-        agent: agent?.agent_name ?? null
-      };
-    }
-    if (field === "consignee_contact_id") {
-      const contact = typeof value === "number" ? contacts.find((row) => row.id === value) : undefined;
-      const company = contact ? consigneeNameById.get(contact.consignee_id) : null;
-      return {
-        ...item,
-        consignee_contact_id: contact?.id ?? null,
-        consignee_contact: contact ?? null,
-        consignee: contact ? compact(company ? `${company} ${contact.name}` : contact.name) : null
-      };
-    }
-    if (field === "customs_staff_id") {
-      const customsUser = typeof value === "number" ? users.find((row) => row.id === value) : undefined;
-      return {
-        ...item,
-        customs_staff_id: customsUser?.id ?? null,
-        customs_staff: customsUser
-          ? {
-              id: customsUser.id,
-              username: customsUser.username,
-              display_name: customsUser.display_name,
-              is_active: customsUser.is_active
-            }
-          : null
-      };
-    }
-    if (field === "planned_route_text") {
-      return {
-        ...item,
-        plan: item.plan ? { ...item.plan, planned_route_text: value as string | null } : item.plan
-      };
-    }
-    if (field === "planned_flight_info") {
-      return item;
-    }
-    return { ...item, [field]: value } as Waybill;
-  }
-
   async function submitBulkEdit() {
-    if (selectedWaybillIds.length === 0 || bulkEditSaving) return;
+    if (!editMode || selectedWaybillIds.length === 0 || bulkEditSaving) return;
     const value = normalizeBulkEditValue();
-    const payload: WaybillBulkUpdateRequest = {
-      waybill_ids: selectedWaybillIds,
-      field: bulkEditField,
-      value
-    };
     setBulkEditSaving(true);
     setBulkEditResult(null);
-    setMessage("");
     try {
-      const result = await apiClient.patch<WaybillBulkUpdateResult>("/waybills/bulk-update", payload);
-      setBulkEditResult(result);
-      const updatedIds = new Set(result.updated_waybills.map((item) => item.id));
-      if (updatedIds.size > 0) {
-        setData((prev) =>
-          prev
-            ? {
-                ...prev,
-                items: prev.items.map((item) =>
-                  updatedIds.has(item.id) ? applyBulkUpdateToLocalRow(item, bulkEditField, value) : item
-                )
-              }
-            : prev
-        );
-        setSelectedWaybillIds((prev) => prev.filter((id) => !updatedIds.has(id)));
-        load();
-        loadCounts();
+      const selectedRows = (data?.items || []).filter((item) => selectedIdSet.has(item.id));
+      const affectedIds = new Set<number>();
+      for (const item of selectedRows) {
+        const syncBoard = (bulkEditField === "consignee_contact_id" || bulkEditField === "booked_volume") && Boolean(item.board_id);
+        const targets = syncBoard ? (data?.items || []).filter((row) => row.board_id === item.board_id) : [item];
+        targets.forEach((row) => affectedIds.add(row.id));
+        stageDraftChange(item, bulkEditField, value, syncBoard);
       }
-      setMessage(`批量编辑完成：成功 ${result.success_count} 票，失败 ${result.failed_count} 票。`);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "批量编辑失败。");
+      setBulkEditResult({ success_count: affectedIds.size });
+      setMessage(`已应用到草稿：${affectedIds.size} 票。点击“确认修改”后才会保存。`);
+      setBulkEditOpen(false);
     } finally {
       setBulkEditSaving(false);
     }
   }
-
-  const handleUploadSuccess = useCallback((result: WarehouseFileUploadResult) => {
-    setMessage(formatWarehouseUploadMessage(result));
-    load();
-    loadCounts();
-  }, [load, loadCounts]);
 
   async function uploadWaybillImportFile(file: File | null | undefined) {
     if (!file) return;
@@ -534,33 +590,93 @@ export default function WaybillsPage() {
     }
   }
 
-  async function deleteWaybill(item: Waybill) {
-    if (!window.confirm(`确认删除提单 ${item.waybill_no} 吗？删除后不可恢复，关联的入仓箱号会转为未绑定。`)) return;
-    setDeletingWaybillId(item.id);
+  function buildInlineUpdatePayload(): WaybillBulkInlineUpdateRequest {
+    const updates = Object.entries(draftChanges)
+      .map(([id, changes]) => ({
+        waybill_id: Number(id),
+        changes
+      }))
+      .filter((item) => !pendingDeleteIdSet.has(item.waybill_id) && Object.keys(item.changes).length > 0);
+    return { updates };
+  }
+
+  async function submitInlineChanges() {
+    if (!hasPendingListChanges || savingInlineChanges) return;
+    setSavingInlineChanges(true);
     setMessage("");
+    setCellErrors({});
+    const updatePayload = buildInlineUpdatePayload();
+    const deletePayload: WaybillBulkDeleteRequest = { waybill_ids: pendingDeleteIds };
     try {
-      await apiClient.delete<void>(`/waybills/${item.id}`);
-      const shouldMoveToPreviousPage = (data?.items.length || 0) <= 1 && page > 1;
+      const [updateResult, deleteResult] = await Promise.all([
+        updatePayload.updates.length > 0
+          ? apiClient.patch<WaybillBulkInlineUpdateResult>("/waybills/bulk-inline-update", updatePayload)
+          : Promise.resolve<WaybillBulkInlineUpdateResult>({
+              success_count: 0,
+              failed_count: 0,
+              updated_waybills: [],
+              errors: []
+            }),
+        deletePayload.waybill_ids.length > 0
+          ? apiClient.post<WaybillBulkDeleteResult>("/waybills/bulk-delete", deletePayload)
+          : Promise.resolve<WaybillBulkDeleteResult>({
+              success_count: 0,
+              failed_count: 0,
+              deleted_waybills: [],
+              errors: []
+            })
+      ]);
+      const updatedMap = new Map(updateResult.updated_waybills.map((item) => [item.id, item]));
+      const deletedIds = new Set(deleteResult.deleted_waybills.map((item) => item.id));
       setData((prev) =>
         prev
           ? {
               ...prev,
-              items: prev.items.filter((row) => row.id !== item.id),
-              total: Math.max(0, prev.total - 1)
+              items: prev.items
+                .filter((item) => !deletedIds.has(item.id))
+                .map((item) => updatedMap.get(item.id) || item),
+              total: Math.max(0, prev.total - deletedIds.size)
             }
           : prev
       );
-      setMessage(`提单 ${item.waybill_no} 已删除。`);
-      if (shouldMoveToPreviousPage) {
-        setPage((prev) => Math.max(1, prev - 1));
+      setDraftChanges((prev) => {
+        const next = { ...prev };
+        updateResult.updated_waybills.forEach((item) => delete next[item.id]);
+        deletedIds.forEach((id) => delete next[id]);
+        return next;
+      });
+      setPendingDeleteIds((prev) => prev.filter((id) => !deletedIds.has(id)));
+      setSelectedWaybillIds((prev) => prev.filter((id) => !deletedIds.has(id)));
+      const nextErrors: CellErrors = {};
+      updateResult.errors.forEach((item) => {
+        const field = (item.field as CellErrorField | undefined) || "_row";
+        nextErrors[item.waybill_id] = {
+          ...(nextErrors[item.waybill_id] || {}),
+          [field]: item.message
+        };
+      });
+      deleteResult.errors.forEach((item) => {
+        nextErrors[item.id] = {
+          ...(nextErrors[item.id] || {}),
+          _delete: item.message
+        };
+      });
+      setCellErrors(nextErrors);
+      const failedCount = updateResult.failed_count + deleteResult.failed_count;
+      const successCount = updateResult.success_count + deleteResult.success_count;
+      if (failedCount === 0) {
+        discardEditChanges();
+        setEditMode(false);
+        setMessage(`确认修改完成：成功 ${successCount} 项。`);
       } else {
-        load();
+        setMessage(`确认修改完成：成功 ${successCount} 项，失败 ${failedCount} 项。失败项已保留在编辑态。`);
       }
       loadCounts();
+      load();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "删除提单失败。");
+      setMessage(error instanceof Error ? error.message : "确认修改失败。");
     } finally {
-      setDeletingWaybillId(null);
+      setSavingInlineChanges(false);
     }
   }
 
@@ -655,20 +771,25 @@ export default function WaybillsPage() {
       );
     }
 
-    if (selectedBulkField.kind === "textarea") {
+    if (selectedBulkField.kind === "boolean") {
       return (
-        <Textarea
-          id={fieldId}
-          value={bulkEditValue}
-          placeholder="留空保存为清空"
-          onChange={(event) => setBulkEditValue(event.target.value)}
-        />
+        <Select value={bulkEditValue || "false"} onValueChange={setBulkEditValue}>
+          <SelectTrigger id={fieldId}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="true">含T</SelectItem>
+            <SelectItem value="false">不含T</SelectItem>
+          </SelectContent>
+        </Select>
       );
     }
 
     return (
       <Input
         id={fieldId}
+        type={selectedBulkField.kind === "number" ? "number" : "text"}
+        step={selectedBulkField.kind === "number" ? "0.001" : undefined}
         value={bulkEditValue}
         placeholder={selectedBulkField.placeholder || "留空保存为清空"}
         onChange={(event) => setBulkEditValue(event.target.value)}
@@ -676,19 +797,139 @@ export default function WaybillsPage() {
     );
   }
 
-  const columnDefinitions = useMemo<Record<WaybillColumnKey, WaybillTableColumn>>(
-    () => ({
+  function getCellError(item: Waybill, field: CellErrorField) {
+    return cellErrors[item.id]?.[field];
+  }
+
+  function renderCellError(item: Waybill, field: CellErrorField) {
+    const error = getCellError(item, field);
+    return error ? <div className="mt-1 text-xs text-red-600">{error}</div> : null;
+  }
+
+  function renderInlineText(item: Waybill, field: WaybillInlineUpdateField, options?: { type?: "text" | "number" | "date"; syncBoard?: boolean }) {
+    const value = getDraftValue(item, field);
+    return (
+      <div className="min-w-32">
+        <Input
+          type={options?.type || "text"}
+          step={options?.type === "number" ? "0.001" : undefined}
+          value={String(value ?? "")}
+          disabled={pendingDeleteIdSet.has(item.id)}
+          onChange={(event) => stageDraftChange(item, field, event.target.value, options?.syncBoard)}
+        />
+        {renderCellError(item, field)}
+      </div>
+    );
+  }
+
+  function renderCarrierAgentSelect(item: Waybill) {
+    const value = getDraftValue(item, "carrier_agent_id");
+    return (
+      <div className="min-w-44">
+        <Select
+          value={value == null ? BULK_CLEAR_VALUE : String(value)}
+          disabled={pendingDeleteIdSet.has(item.id)}
+          onValueChange={(nextValue) =>
+            stageDraftChange(item, "carrier_agent_id", nextValue === BULK_CLEAR_VALUE ? null : Number(nextValue))
+          }
+        >
+          <SelectTrigger>
+            <SelectValue placeholder="选择航代" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={BULK_CLEAR_VALUE}>清空</SelectItem>
+            {enabledAgents.map((agent) => (
+              <SelectItem key={agent.id} value={String(agent.id)}>
+                [{agent.carrier_code}] {agent.agent_name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {renderCellError(item, "carrier_agent_id")}
+      </div>
+    );
+  }
+
+  function renderContactSelect(item: Waybill, syncBoard = false) {
+    const value = getDraftValue(item, "consignee_contact_id");
+    return (
+      <div className="min-w-56">
+        <Select
+          value={value == null ? BULK_CLEAR_VALUE : String(value)}
+          disabled={pendingDeleteIdSet.has(item.id)}
+          onValueChange={(nextValue) =>
+            stageDraftChange(item, "consignee_contact_id", nextValue === BULK_CLEAR_VALUE ? null : Number(nextValue), syncBoard)
+          }
+        >
+          <SelectTrigger>
+            <SelectValue placeholder="选择收件人" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={BULK_CLEAR_VALUE}>清空</SelectItem>
+            {enabledContacts.map((contact) => {
+              const company = consigneeNameById.get(contact.consignee_id) || "?";
+              const addr = (contact.address || "").split("\n")[0].slice(0, 30);
+              return (
+                <SelectItem key={contact.id} value={String(contact.id)}>
+                  [{company}] {contact.name} {addr ? `- ${addr}` : ""}
+                </SelectItem>
+              );
+            })}
+          </SelectContent>
+        </Select>
+        {renderCellError(item, "consignee_contact_id")}
+      </div>
+    );
+  }
+
+  function renderCustomsStaffSelect(item: Waybill) {
+    const value = getDraftValue(item, "customs_staff_id");
+    return (
+      <div className="min-w-44">
+        <Select
+          value={value == null ? BULK_CLEAR_VALUE : String(value)}
+          disabled={pendingDeleteIdSet.has(item.id)}
+          onValueChange={(nextValue) =>
+            stageDraftChange(item, "customs_staff_id", nextValue === BULK_CLEAR_VALUE ? null : Number(nextValue))
+          }
+        >
+          <SelectTrigger>
+            <SelectValue placeholder="选择清关人员" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={BULK_CLEAR_VALUE}>清空</SelectItem>
+            {enabledCustomsUsers.map((customsUser) => (
+              <SelectItem key={customsUser.id} value={String(customsUser.id)}>
+                {customsUser.display_name || customsUser.username}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {renderCellError(item, "customs_staff_id")}
+      </div>
+    );
+  }
+
+  const columnDefinitions: Record<WaybillColumnKey, WaybillTableColumn> = {
       waybill_no: {
         key: "waybill_no",
         label: WAYBILL_COLUMN_LABELS.waybill_no,
         render: ({ item }) => (
           <TD className="font-medium">
-            <Link
-              href={`/waybills/${item.id}`}
-              className="text-purple-700 underline-offset-2 hover:text-purple-900 hover:underline"
-            >
-              {item.waybill_no}
-            </Link>
+            {editMode ? (
+              <>
+                {renderInlineText(item, "waybill_no")}
+                {renderCellError(item, "_row")}
+                {renderCellError(item, "_delete")}
+              </>
+            ) : (
+              <Link
+                href={`/waybills/${item.id}`}
+                className="text-purple-700 underline-offset-2 hover:text-purple-900 hover:underline"
+              >
+                {item.waybill_no}
+              </Link>
+            )}
           </TD>
         )
       },
@@ -698,7 +939,7 @@ export default function WaybillsPage() {
         render: ({ item, boardSpan, shouldRenderBoardCells }) =>
           shouldRenderBoardCells ? (
             <TD rowSpan={boardSpan} className="align-middle">
-              {item.board ? compact(item.board.consignee_text) : compact(item.consignee)}
+              {editMode ? renderContactSelect(item, Boolean(item.board_id)) : item.board ? compact(item.board.consignee_text) : compact(item.consignee)}
             </TD>
           ) : null
       },
@@ -708,14 +949,49 @@ export default function WaybillsPage() {
         render: ({ item, boardSpan, shouldRenderBoardCells }) =>
           shouldRenderBoardCells ? (
             <TD rowSpan={boardSpan} className="align-middle">
-              {item.board ? compact(item.board.total_booked_volume) : compact(item.booked_volume)}
+              {editMode ? renderInlineText(item, "booked_volume", { type: "number", syncBoard: Boolean(item.board_id) }) : item.board ? compact(item.board.total_booked_volume) : compact(item.booked_volume)}
             </TD>
           ) : null
+      },
+      booked_weight: {
+        key: "booked_weight",
+        label: WAYBILL_COLUMN_LABELS.booked_weight,
+        render: ({ item }) => <TD>{editMode ? renderInlineText(item, "booked_weight", { type: "number" }) : compact(item.booked_weight)}</TD>
+      },
+      density: {
+        key: "density",
+        label: WAYBILL_COLUMN_LABELS.density,
+        render: ({ item }) => <TD>{editMode ? renderInlineText(item, "density", { type: "number" }) : compact(item.density)}</TD>
+      },
+      quotation: {
+        key: "quotation",
+        label: WAYBILL_COLUMN_LABELS.quotation,
+        render: ({ item }) => <TD>{editMode ? renderInlineText(item, "quotation") : compact(item.quotation)}</TD>
+      },
+      include_tc: {
+        key: "include_tc",
+        label: WAYBILL_COLUMN_LABELS.include_tc,
+        render: ({ item }) => (
+          <TD>
+            {editMode ? (
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-slate-300"
+                checked={Boolean(getDraftValue(item, "include_tc"))}
+                disabled={pendingDeleteIdSet.has(item.id)}
+                onChange={(event) => stageDraftChange(item, "include_tc", event.target.checked)}
+                aria-label={`设置提单 ${item.waybill_no} 是否含T`}
+              />
+            ) : item.include_tc ? (
+              <Check className="h-4 w-4 text-emerald-600" aria-label="含T" />
+            ) : null}
+          </TD>
+        )
       },
       customs_staff: {
         key: "customs_staff",
         label: WAYBILL_COLUMN_LABELS.customs_staff,
-        render: ({ item }) => <TD>{compact(userDisplayName(item.customs_staff))}</TD>
+        render: ({ item }) => <TD>{editMode ? renderCustomsStaffSelect(item) : compact(userDisplayName(item.customs_staff))}</TD>
       },
       customs_data: {
         key: "customs_data",
@@ -733,7 +1009,7 @@ export default function WaybillsPage() {
       agent: {
         key: "agent",
         label: WAYBILL_COLUMN_LABELS.agent,
-        render: ({ item }) => <TD>{compact(item.agent)}</TD>
+        render: ({ item }) => <TD>{editMode ? renderCarrierAgentSelect(item) : compact(item.agent)}</TD>
       },
       warehouse: {
         key: "warehouse",
@@ -741,14 +1017,7 @@ export default function WaybillsPage() {
         render: ({ item }) => (
           <TD>
             <div className="flex min-w-40 flex-col items-start gap-1">
-              {item.warehouse_no ? <span className="font-medium text-slate-800">{item.warehouse_no}</span> : null}
-              <WarehouseFileUploadButton
-                waybillId={item.id}
-                label={item.warehouse_no ? "上传新入仓文件" : "上传入仓文件"}
-                variant={item.warehouse_no ? "ghost" : "secondary"}
-                onUploaded={handleUploadSuccess}
-                onError={setMessage}
-              />
+              {item.warehouse_no ? <span className="font-medium text-slate-800">{item.warehouse_no}</span> : <span className="text-slate-400">-</span>}
             </div>
           </TD>
         )
@@ -756,7 +1025,7 @@ export default function WaybillsPage() {
       outbound_date: {
         key: "outbound_date",
         label: WAYBILL_COLUMN_LABELS.outbound_date,
-        render: ({ item }) => <TD>{compact(formatOutboundDate(item.outbound_date))}</TD>
+        render: ({ item }) => <TD>{editMode ? renderInlineText(item, "outbound_date", { type: "date" }) : compact(formatOutboundDate(item.outbound_date))}</TD>
       },
       departure_port: {
         key: "departure_port",
@@ -771,12 +1040,12 @@ export default function WaybillsPage() {
       planned_flight: {
         key: "planned_flight",
         label: WAYBILL_COLUMN_LABELS.planned_flight,
-        render: ({ item }) => <TD>{compact(formatPlannedFlightInfo(item.plan))}</TD>
+        render: ({ item }) => <TD>{editMode ? renderInlineText(item, "planned_flight_no") : compact(formatPlannedFlightInfo(item.plan))}</TD>
       },
       planned_flight_date: {
         key: "planned_flight_date",
         label: WAYBILL_COLUMN_LABELS.planned_flight_date,
-        render: ({ item }) => <TD>{compact(item.plan?.planned_flight_date)}</TD>
+        render: ({ item }) => <TD>{editMode ? renderInlineText(item, "planned_flight_date", { type: "date" }) : compact(item.plan?.planned_flight_date)}</TD>
       },
       official_estimated_flight_date: {
         key: "official_estimated_flight_date",
@@ -801,14 +1070,9 @@ export default function WaybillsPage() {
           </TD>
         )
       }
-    }),
-    [handleUploadSuccess]
-  );
+    };
 
-  const orderedColumns = useMemo(
-    () => columnOrder.map((key) => columnDefinitions[key]),
-    [columnDefinitions, columnOrder]
-  );
+  const orderedColumns = columnOrder.map((key) => columnDefinitions[key]);
 
   return (
     <>
@@ -923,7 +1187,7 @@ export default function WaybillsPage() {
           <Select
             value={lifecycleStatus}
             onValueChange={(value) => {
-              setSelectedWaybillIds([]);
+              if (!confirmAndDiscardEditChanges()) return;
               setLifecycleStatus(value as LifecycleStatus | "all");
             }}
           >
@@ -940,12 +1204,25 @@ export default function WaybillsPage() {
         </div>
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-2">
-            {canBulkEditWaybills && selectedWaybillIds.length > 0 ? (
+            {editMode && canBulkEditWaybills ? (
               <>
-                <span className="text-sm text-slate-600">已选 {selectedWaybillIds.length} 票</span>
-                <Button type="button" size="sm" onClick={openBulkEditDialog}>
+                <span className="text-sm text-slate-600">
+                  已选 {selectedWaybillIds.length} 票
+                  {pendingDeleteIds.length > 0 ? `，待删除 ${pendingDeleteIds.length} 票` : ""}
+                </span>
+                <Button type="button" size="sm" disabled={selectedWaybillIds.length === 0} onClick={openBulkEditDialog}>
                   <Pencil className="h-4 w-4" />
                   批量编辑
+                </Button>
+                <Button type="button" variant="ghost" size="sm" disabled={selectedWaybillIds.length === 0} onClick={stageSelectedForDelete}>
+                  <Trash2 className="h-4 w-4 text-red-600" />
+                  批量删除
+                </Button>
+                <Button type="button" size="sm" disabled={!hasPendingListChanges || savingInlineChanges} onClick={() => void submitInlineChanges()}>
+                  {savingInlineChanges ? "保存中..." : "确认修改"}
+                </Button>
+                <Button type="button" variant="secondary" size="sm" onClick={cancelEditMode}>
+                  取消修改
                 </Button>
                 <Button type="button" variant="ghost" size="sm" onClick={() => setSelectedWaybillIds([])}>
                   取消选择
@@ -953,15 +1230,23 @@ export default function WaybillsPage() {
               </>
             ) : null}
           </div>
-          <Button type="button" variant="secondary" size="sm" onClick={resetColumnOrder}>
-            <RotateCcw className="h-4 w-4" />
-            恢复默认列顺序
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            {canBulkEditWaybills && !editMode ? (
+              <Button type="button" variant="secondary" size="sm" onClick={enterEditMode}>
+                <Pencil className="h-4 w-4" />
+                编辑
+              </Button>
+            ) : null}
+            <Button type="button" variant="secondary" size="sm" onClick={resetColumnOrder}>
+              <RotateCcw className="h-4 w-4" />
+              恢复默认列顺序
+            </Button>
+          </div>
         </div>
         <Table>
           <THead>
             <TR>
-              {canBulkEditWaybills ? (
+              {editMode && canBulkEditWaybills ? (
                 <TH className="w-10">
                   <input
                     type="checkbox"
@@ -999,22 +1284,24 @@ export default function WaybillsPage() {
                   {column.label}
                 </TH>
               ))}
-              <TH>操作</TH>
+              {editMode && canBulkEditWaybills ? <TH>操作</TH> : null}
             </TR>
           </THead>
           <TBody>
             {(data?.items || []).map((item, index) => {
               const boardSpan = boardRowSpans.get(index) || 0;
               const shouldRenderBoardCells = !item.board_id || boardSpan > 0;
+              const isPendingDelete = pendingDeleteIdSet.has(item.id);
               return (
               <TR
                 key={item.id}
                 className={cn(
                   item.lifecycle_status === "picked_up" &&
-                    "[&_td]:text-slate-400 [&_td_*]:text-slate-400"
+                    "[&_td]:text-slate-400 [&_td_*]:text-slate-400",
+                  isPendingDelete && "[&_td]:bg-red-50 [&_td]:text-slate-400 [&_td_*]:text-slate-400"
                 )}
               >
-                {canBulkEditWaybills ? (
+                {editMode && canBulkEditWaybills ? (
                   <TD>
                     <input
                       type="checkbox"
@@ -1030,29 +1317,22 @@ export default function WaybillsPage() {
                     {column.render({ item, boardSpan, shouldRenderBoardCells })}
                   </Fragment>
                 ))}
-                <TD>
-                  <div className="flex flex-wrap gap-1">
-                    <Button asChild variant="ghost" size="sm">
-                      <Link href={`/waybills/${item.id}/edit`}>
-                        <Pencil className="h-4 w-4" />
-                        编辑
-                      </Link>
-                    </Button>
-                    {canDeleteWaybills ? (
+                {editMode && canBulkEditWaybills ? (
+                  <TD>
+                    <div className="flex flex-wrap gap-1">
                       <Button
                         type="button"
                         variant="ghost"
                         size="sm"
-                        disabled={deletingWaybillId === item.id}
-                        onClick={() => void deleteWaybill(item)}
-                        aria-label={`删除提单 ${item.waybill_no}`}
+                        onClick={() => togglePendingDelete(item)}
+                        aria-label={`${isPendingDelete ? "取消删除" : "删除"}提单 ${item.waybill_no}`}
                       >
                         <Trash2 className="h-4 w-4 text-red-600" />
-                        删除
+                        {isPendingDelete ? "取消删除" : "删除"}
                       </Button>
-                    ) : null}
-                  </div>
-                </TD>
+                    </div>
+                  </TD>
+                ) : null}
               </TR>
               );
             })}
@@ -1066,7 +1346,7 @@ export default function WaybillsPage() {
               size="sm"
               disabled={page <= 1}
               onClick={() => {
-                setSelectedWaybillIds([]);
+                if (!confirmAndDiscardEditChanges()) return;
                 setPage((prev) => prev - 1);
               }}
             >
@@ -1077,7 +1357,7 @@ export default function WaybillsPage() {
               size="sm"
               disabled={!data || page * data.page_size >= data.total}
               onClick={() => {
-                setSelectedWaybillIds([]);
+                if (!confirmAndDiscardEditChanges()) return;
                 setPage((prev) => prev + 1);
               }}
             >
@@ -1104,7 +1384,7 @@ export default function WaybillsPage() {
                 <Select
                   value={bulkEditField}
                   onValueChange={(value) => {
-                    setBulkEditField(value as WaybillBulkUpdateField);
+                    setBulkEditField(value as WaybillInlineUpdateField);
                     setBulkEditValue("");
                     setBulkEditResult(null);
                   }}
@@ -1131,7 +1411,7 @@ export default function WaybillsPage() {
                   取消
                 </Button>
                 <Button type="button" disabled={bulkEditSaving || selectedWaybillIds.length === 0} onClick={() => void submitBulkEdit()}>
-                  {bulkEditSaving ? "保存中..." : "确认保存"}
+                  {bulkEditSaving ? "应用中..." : "应用到草稿"}
                 </Button>
               </div>
             </section>
@@ -1171,33 +1451,9 @@ export default function WaybillsPage() {
               {bulkEditResult ? (
                 <div className="rounded-md border border-slate-200">
                   <div className="border-b border-slate-200 px-3 py-2 text-sm font-medium text-slate-800">
-                    保存结果：成功 {bulkEditResult.success_count} 票，失败 {bulkEditResult.failed_count} 票
+                    已应用到草稿：{bulkEditResult.success_count} 票
                   </div>
-                  <div className="max-h-48 overflow-auto">
-                    <Table>
-                      <THead>
-                        <TR>
-                          <TH>提单号</TH>
-                          <TH>原因</TH>
-                        </TR>
-                      </THead>
-                      <TBody>
-                        {bulkEditResult.errors.map((item) => (
-                          <TR key={item.id}>
-                            <TD>{item.waybill_no || item.id}</TD>
-                            <TD className="text-red-700">{item.message}</TD>
-                          </TR>
-                        ))}
-                        {bulkEditResult.errors.length === 0 ? (
-                          <TR>
-                            <TD colSpan={2} className="py-6 text-center text-emerald-700">
-                              全部保存成功
-                            </TD>
-                          </TR>
-                        ) : null}
-                      </TBody>
-                    </Table>
-                  </div>
+                  <div className="px-3 py-3 text-sm text-slate-600">批量编辑只修改当前草稿，点击列表上方“确认修改”后才会写入系统。</div>
                 </div>
               ) : null}
             </section>

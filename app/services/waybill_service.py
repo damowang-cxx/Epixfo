@@ -17,6 +17,10 @@ from app.models.enums import AlertLevel, UserRoleCode, WaybillLifecycleStatus
 from app.repositories.waybill_repository import WaybillRepository
 from app.schemas.waybill import (
     ManualStatusRequest,
+    WaybillBulkDeleteRequest,
+    WaybillBulkDeleteResult,
+    WaybillBulkInlineUpdateError,
+    WaybillBulkInlineUpdateRequest,
     WaybillBulkUpdateError,
     WaybillBulkUpdateItem,
     WaybillBulkUpdateRequest,
@@ -50,6 +54,20 @@ WAYBILL_BULK_UPDATE_FIELDS = {
     "warehouse_data_remark",
     "customer_remark",
     "internal_remark",
+}
+WAYBILL_INLINE_UPDATE_FIELDS = {
+    "waybill_no",
+    "consignee_contact_id",
+    "booked_volume",
+    "booked_weight",
+    "density",
+    "quotation",
+    "include_tc",
+    "customs_staff_id",
+    "carrier_agent_id",
+    "outbound_date",
+    "planned_flight_no",
+    "planned_flight_date",
 }
 
 
@@ -121,6 +139,8 @@ class WaybillService:
             raise bad_request("Voided waybill cannot be updated")
         data = payload.model_dump(exclude_unset=True)
         plan_data = self._plan_data_from_update_data(data)
+        if "waybill_no" in data:
+            self._apply_waybill_no_update(waybill, data.pop("waybill_no"))
         if "carrier_agent_id" in data:
             agent_snapshot = self._resolve_agent_snapshot(data.pop("carrier_agent_id"), waybill.carrier_code)
             if agent_snapshot is None:
@@ -155,6 +175,22 @@ class WaybillService:
         waybill.updated_by = current_user.id
         self.db.commit()
         return self.repo.get(waybill.id) or waybill
+
+    def _apply_waybill_no_update(self, waybill: AirWaybill, value: str | None) -> None:
+        if value is None or not str(value).strip():
+            raise bad_request("invalid_waybill_no")
+        waybill_no = normalize_waybill_no(str(value))
+        if not validate_waybill_no(waybill_no):
+            raise bad_request("invalid_waybill_no")
+        if waybill_no == waybill.waybill_no:
+            return
+        existing = self.repo.get_by_no(waybill_no)
+        if existing and existing.id != waybill.id:
+            raise bad_request("waybill_no_already_exists")
+        prefix, carrier_code, _adapter_code = self.carriers.identify_waybill(waybill_no)
+        waybill.waybill_no = waybill_no
+        waybill.carrier_prefix = prefix
+        waybill.carrier_code = carrier_code
 
     def bulk_update(self, payload: WaybillBulkUpdateRequest, current_user: User) -> WaybillBulkUpdateResult:
         PermissionService.assert_waybill_write(current_user)
@@ -200,6 +236,99 @@ class WaybillService:
             success_count=len(updated),
             failed_count=len(errors),
             updated_waybills=updated,
+            errors=errors,
+        )
+
+    def bulk_inline_update(
+        self,
+        payload: WaybillBulkInlineUpdateRequest,
+        current_user: User,
+    ) -> tuple[list[AirWaybill], list[WaybillBulkInlineUpdateError]]:
+        PermissionService.assert_waybill_write(current_user)
+        updated: list[AirWaybill] = []
+        errors: list[WaybillBulkInlineUpdateError] = []
+
+        for item in payload.updates:
+            invalid_fields = [field for field in item.changes if field not in WAYBILL_INLINE_UPDATE_FIELDS]
+            if invalid_fields:
+                errors.append(
+                    WaybillBulkInlineUpdateError(
+                        waybill_id=item.waybill_id,
+                        waybill_no=self._safe_waybill_no(item.waybill_id),
+                        field=invalid_fields[0],
+                        message="invalid_inline_update_field",
+                    )
+                )
+                continue
+            try:
+                update_payload = WaybillUpdate.model_validate(item.changes)
+                updated.append(self.update(item.waybill_id, update_payload, current_user))
+            except ValidationError as exc:
+                self.db.rollback()
+                first_error = exc.errors()[0] if exc.errors() else {}
+                loc = first_error.get("loc") or []
+                errors.append(
+                    WaybillBulkInlineUpdateError(
+                        waybill_id=item.waybill_id,
+                        waybill_no=self._safe_waybill_no(item.waybill_id),
+                        field=str(loc[0]) if loc else None,
+                        message=str(first_error.get("msg") or "invalid_value"),
+                    )
+                )
+            except HTTPException as exc:
+                self.db.rollback()
+                errors.append(
+                    WaybillBulkInlineUpdateError(
+                        waybill_id=item.waybill_id,
+                        waybill_no=self._safe_waybill_no(item.waybill_id),
+                        message=str(exc.detail),
+                    )
+                )
+            except Exception as exc:
+                self.db.rollback()
+                errors.append(
+                    WaybillBulkInlineUpdateError(
+                        waybill_id=item.waybill_id,
+                        waybill_no=self._safe_waybill_no(item.waybill_id),
+                        message=str(exc) or "update_failed",
+                    )
+                )
+
+        return updated, errors
+
+    def bulk_delete(self, payload: WaybillBulkDeleteRequest, current_user: User) -> WaybillBulkDeleteResult:
+        PermissionService.assert_waybill_write(current_user)
+        deleted: list[WaybillBulkUpdateItem] = []
+        errors: list[WaybillBulkUpdateError] = []
+
+        for waybill_id in payload.waybill_ids:
+            waybill_no = self._safe_waybill_no(waybill_id)
+            try:
+                self.delete(waybill_id, current_user)
+                deleted.append(WaybillBulkUpdateItem(id=waybill_id, waybill_no=waybill_no or str(waybill_id)))
+            except HTTPException as exc:
+                self.db.rollback()
+                errors.append(
+                    WaybillBulkUpdateError(
+                        id=waybill_id,
+                        waybill_no=waybill_no,
+                        message=str(exc.detail),
+                    )
+                )
+            except Exception as exc:
+                self.db.rollback()
+                errors.append(
+                    WaybillBulkUpdateError(
+                        id=waybill_id,
+                        waybill_no=waybill_no,
+                        message=str(exc) or "delete_failed",
+                    )
+                )
+
+        return WaybillBulkDeleteResult(
+            success_count=len(deleted),
+            failed_count=len(errors),
+            deleted_waybills=deleted,
             errors=errors,
         )
 

@@ -53,7 +53,7 @@ class WaybillCreate(WaybillBaseIn, WaybillPlanIn):
 
 
 class WaybillUpdate(WaybillBaseIn, WaybillPlanIn):
-    pass
+    waybill_no: str | None = Field(default=None, max_length=64)
 
 
 class ManualStatusRequest(BaseModel):
@@ -124,6 +124,29 @@ class WaybillBulkUpdateResult(BaseModel):
     errors: list[WaybillBulkUpdateError]
 
 
+class WaybillBulkDeleteRequest(BaseModel):
+    waybill_ids: list[int] = Field(min_length=1)
+
+    @field_validator("waybill_ids")
+    @classmethod
+    def unique_waybill_ids(cls, value: list[int]) -> list[int]:
+        seen: set[int] = set()
+        unique: list[int] = []
+        for item in value:
+            if item in seen:
+                continue
+            seen.add(item)
+            unique.append(item)
+        return unique
+
+
+class WaybillBulkDeleteResult(BaseModel):
+    success_count: int
+    failed_count: int
+    deleted_waybills: list[WaybillBulkUpdateItem]
+    errors: list[WaybillBulkUpdateError]
+
+
 class WaybillPlanOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -187,6 +210,29 @@ class WaybillOut(BaseModel):
     official_estimated_flight_date: date | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class WaybillBulkInlineUpdateItem(BaseModel):
+    waybill_id: int
+    changes: dict[str, Any]
+
+
+class WaybillBulkInlineUpdateRequest(BaseModel):
+    updates: list[WaybillBulkInlineUpdateItem] = Field(min_length=1)
+
+
+class WaybillBulkInlineUpdateError(BaseModel):
+    waybill_id: int
+    waybill_no: str | None = None
+    field: str | None = None
+    message: str
+
+
+class WaybillBulkInlineUpdateResult(BaseModel):
+    success_count: int
+    failed_count: int
+    updated_waybills: list[WaybillOut]
+    errors: list[WaybillBulkInlineUpdateError]
 
 
 class WaybillOfficialInfoOut(BaseModel):
