@@ -10,7 +10,7 @@ from app.core.platform_patch import patch_platform_wmi
 patch_platform_wmi()
 
 from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font
+from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.worksheet import Worksheet
 from sqlalchemy.orm import Session
 
@@ -20,6 +20,8 @@ from app.utils.planned_flight import extract_planned_flight_no
 
 
 DECIMAL_001 = Decimal("0.001")
+SUMMARY_FILL = PatternFill(fill_type="solid", fgColor="FFF2CC")
+GENERAL_CARGO_FILL = PatternFill(fill_type="solid", fgColor="FFF2CC")
 MONTH_CODES = ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
 
 
@@ -43,10 +45,18 @@ class CustomsExportService:
         headers = ["外箱条码", "提单号码", "品名", "数量", "重量", "收货体积信息", "收货重量/方"]
         sheet.append(headers)
         self._style_header(sheet, len(headers))
+        total_weight = Decimal("0.000")
+        total_volume = Decimal("0.000")
 
-        for box in boxes:
+        ordered_boxes = [box for box in boxes if not getattr(box, "is_general_cargo", False)]
+        ordered_boxes.extend(box for box in boxes if getattr(box, "is_general_cargo", False))
+
+        for box in ordered_boxes:
+            is_general_cargo = bool(getattr(box, "is_general_cargo", False))
             items = list(box.items or [])
             if not items:
+                total_weight += _to_decimal(box.weight) or Decimal("0.000")
+                total_volume += _to_decimal(box.volume) or Decimal("0.000")
                 sheet.append(
                     [
                         box.box_no,
@@ -58,10 +68,14 @@ class CustomsExportService:
                         _format_decimal_3(box.weight_volume_ratio),
                     ]
                 )
+                if is_general_cargo:
+                    self._highlight_general_cargo_row(sheet)
                 continue
 
+            total_volume += _to_decimal(box.volume) or Decimal("0.000")
             for index, item in enumerate(items):
                 is_first = index == 0
+                total_weight += _to_decimal(item.weight) or Decimal("0.000")
                 sheet.append(
                     [
                         box.box_no if is_first else "",
@@ -73,8 +87,40 @@ class CustomsExportService:
                         _format_decimal_3(box.weight_volume_ratio) if is_first else "",
                     ]
                 )
+                if is_general_cargo:
+                    self._highlight_general_cargo_row(sheet)
 
+        self._append_inbound_summary_row(sheet, total_weight, total_volume)
         self._finish_table(sheet, widths=[18, 20, 28, 10, 12, 16, 16])
+
+    @staticmethod
+    def _highlight_general_cargo_row(sheet: Worksheet) -> None:
+        for cell in sheet[sheet.max_row][:7]:
+            cell.fill = GENERAL_CARGO_FILL
+
+    @staticmethod
+    def _append_inbound_summary_row(sheet: Worksheet, total_weight: Decimal, total_volume: Decimal) -> None:
+        total_weight = total_weight.quantize(DECIMAL_001)
+        total_volume = total_volume.quantize(DECIMAL_001)
+        total_density = (
+            (total_weight / total_volume).quantize(DECIMAL_001)
+            if total_volume > 0
+            else Decimal("0.000")
+        )
+        sheet.append(
+            [
+                "",
+                "",
+                "",
+                "合计",
+                _format_decimal_trim(total_weight),
+                _format_decimal_3(total_volume),
+                _format_decimal_3(total_density),
+            ]
+        )
+        for cell in sheet[sheet.max_row][3:7]:
+            cell.fill = SUMMARY_FILL
+            cell.font = Font(bold=True)
 
     def _write_waybill_sheet(self, sheet: Worksheet, waybill: AirWaybill) -> None:
         rows: list[tuple[str, str]] = [

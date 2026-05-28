@@ -77,6 +77,10 @@ def test_customs_export_includes_two_sheets_and_single_box_row() -> None:
         "0.080",
         "168.750",
     ]
+    assert [cell.value for cell in inbound[3]][3:7] == ["合计", "13.5", "0.080", "168.750"]
+    for cell in inbound[3][3:7]:
+        assert cell.fill.fill_type == "solid"
+        assert cell.fill.fgColor.rgb.endswith("FFF2CC")
 
     waybill_sheet = workbook["提单资料"]
     rows = {row[0].value: row[1].value for row in waybill_sheet.iter_rows(min_row=1, max_col=2)}
@@ -109,6 +113,47 @@ def test_customs_export_expands_multi_item_box_with_blank_repeated_box_fields() 
 
     assert [cell.value for cell in inbound[2]] == ["DHLAE57698", "CP147989086DE", "衣服", 1, "0.59", "0.150", "11.800"]
     assert [cell.value for cell in inbound[3]] == [None, "CP147905449DE", "鞋", 1, "0.59", None, None]
+    assert [cell.value for cell in inbound[4]][3:7] == ["合计", "1.18", "0.150", "7.867"]
+
+
+def test_customs_export_moves_general_cargo_below_regular_rows_and_highlights() -> None:
+    general_box = SimpleNamespace(
+        box_no="BOX-GENERAL",
+        warehouse_waybill_no="WH-GENERAL-1",
+        goods_name="GENERAL GOODS",
+        quantity=2,
+        weight=Decimal("5.000"),
+        volume=Decimal("0.200"),
+        weight_volume_ratio=Decimal("25.000"),
+        is_general_cargo=True,
+        items=[
+            SimpleNamespace(warehouse_waybill_no="WH-GENERAL-1", goods_name="GENERAL A", quantity=1, weight=Decimal("2.000")),
+            SimpleNamespace(warehouse_waybill_no="WH-GENERAL-2", goods_name="GENERAL B", quantity=1, weight=Decimal("3.000")),
+        ],
+    )
+    regular_box = SimpleNamespace(
+        box_no="BOX-REGULAR",
+        warehouse_waybill_no="WH-REGULAR-1",
+        goods_name="REGULAR GOODS",
+        quantity=1,
+        weight=Decimal("10.000"),
+        volume=Decimal("0.100"),
+        weight_volume_ratio=Decimal("100.000"),
+        is_general_cargo=False,
+        items=[],
+    )
+
+    workbook = _load_export(_make_service([general_box, regular_box]).build_waybill_export(_make_waybill()))
+    inbound = workbook.active
+
+    assert inbound[2][0].value == "BOX-REGULAR"
+    assert inbound[3][0].value == "BOX-GENERAL"
+    assert inbound[4][0].value is None
+    for row_number in (3, 4):
+        for cell in inbound[row_number][:7]:
+            assert cell.fill.fill_type == "solid"
+            assert cell.fill.fgColor.rgb.endswith("FFF2CC")
+    assert [cell.value for cell in inbound[5]][4:7] == ["15", "0.300", "50.000"]
 
 
 def test_customs_export_outputs_notify_party_only_when_different() -> None:
