@@ -69,7 +69,7 @@ class CustomsExportService:
                         box.quantity,
                         _format_decimal_trim(box.weight),
                         _format_box_volume_info(box),
-                        _format_decimal_3(box.weight_volume_ratio),
+                        _format_decimal_3(box.volume),
                     ]
                 )
                 if is_general_cargo:
@@ -88,7 +88,7 @@ class CustomsExportService:
                         item.quantity,
                         _format_decimal_trim(item.weight),
                         _format_box_volume_info(box) if is_first else "",
-                        _format_decimal_3(box.weight_volume_ratio) if is_first else "",
+                        _format_decimal_3(box.volume) if is_first else "",
                     ]
                 )
                 if is_general_cargo:
@@ -118,8 +118,8 @@ class CustomsExportService:
                 "",
                 "合计",
                 _format_decimal_trim(total_weight),
-                _format_decimal_3(total_volume),
                 _format_decimal_3(total_density),
+                _format_decimal_3(total_volume),
             ]
         )
         for cell in sheet[sheet.max_row][3:7]:

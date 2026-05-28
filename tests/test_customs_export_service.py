@@ -76,9 +76,9 @@ def test_customs_export_includes_two_sheets_and_single_box_row() -> None:
         10,
         "13.5",
         "50*40*40",
-        "168.750",
+        "0.080",
     ]
-    assert [cell.value for cell in inbound[3]][3:7] == ["合计", "13.5", "0.080", "168.750"]
+    assert [cell.value for cell in inbound[3]][3:7] == ["合计", "13.5", "168.750", "0.080"]
     for cell in inbound[3][3:7]:
         assert cell.fill.fill_type == "solid"
         assert cell.fill.fgColor.rgb.endswith("FFF2CC")
@@ -112,9 +112,9 @@ def test_customs_export_expands_multi_item_box_with_blank_repeated_box_fields() 
     workbook = _load_export(_make_service([box]).build_waybill_export(_make_waybill()))
     inbound = workbook["入仓数据"]
 
-    assert [cell.value for cell in inbound[2]] == ["DHLAE57698", "CP147989086DE", "衣服", 1, "0.59", "0.150", "11.800"]
+    assert [cell.value for cell in inbound[2]] == ["DHLAE57698", "CP147989086DE", "衣服", 1, "0.59", "0.150", "0.150"]
     assert [cell.value for cell in inbound[3]] == [None, "CP147905449DE", "鞋", 1, "0.59", None, None]
-    assert [cell.value for cell in inbound[4]][3:7] == ["合计", "1.18", "0.150", "7.867"]
+    assert [cell.value for cell in inbound[4]][3:7] == ["合计", "1.18", "7.867", "0.150"]
 
 
 def test_customs_export_moves_general_cargo_below_regular_rows_and_highlights() -> None:
@@ -154,7 +154,7 @@ def test_customs_export_moves_general_cargo_below_regular_rows_and_highlights() 
         for cell in inbound[row_number][:7]:
             assert cell.fill.fill_type == "solid"
             assert cell.fill.fgColor.rgb.endswith("FFF2CC")
-    assert [cell.value for cell in inbound[5]][4:7] == ["15", "0.300", "50.000"]
+    assert [cell.value for cell in inbound[5]][4:7] == ["15", "50.000", "0.300"]
 
 
 def test_customs_export_uses_calculated_dimensions_without_cbm_suffix() -> None:
@@ -179,7 +179,9 @@ def test_customs_export_uses_calculated_dimensions_without_cbm_suffix() -> None:
     inbound = workbook.active
 
     assert inbound[2][5].value == "49.15*39.32*39.32"
-    assert inbound[3][5].value == "0.076"
+    assert inbound[2][6].value == "0.076"
+    assert inbound[3][5].value == "118.421"
+    assert inbound[3][6].value == "0.076"
 
 
 def test_customs_export_outputs_notify_party_only_when_different() -> None:
