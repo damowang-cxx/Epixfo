@@ -1,20 +1,23 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Archive, ChevronDown, ChevronRight, MoveRight, RefreshCw, Trash2, Upload } from "lucide-react";
+import { Archive, Calculator, ChevronDown, ChevronRight, GripVertical, MoveRight, Pencil, RefreshCw, Trash2, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Input } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import { formatCalculatedVolumeInfo } from "@/lib/box-volume";
 import { ApiError, apiClient } from "@/lib/client-api";
 import { compact, formatDateTime } from "@/lib/utils";
 import type {
   BoxBatchOperationResult,
+  BoxVolumeRecalculationResult,
   CargoBox,
   PageResponse,
   WarehouseBoxConflict,
@@ -44,6 +47,7 @@ interface UploadConflict {
 interface BatchUploadSuccess {
   file_name: string;
   warehouse_no: string;
+  uploaded_at: string;
   success_count: number;
   detected_channel?: string | null;
   warnings: string[];
@@ -64,6 +68,22 @@ interface BatchUploadFailure {
 interface BatchUploadResult {
   successes: BatchUploadSuccess[];
   failures: BatchUploadFailure[];
+}
+
+interface VolumeErrorDialog {
+  message: string;
+  details: { label: string; value: string }[];
+}
+
+interface BoxEditDraft {
+  box_no: string;
+  warehouse_waybill_no: string;
+  goods_name: string;
+  quantity: string;
+  weight: string;
+  volume: string;
+  weight_volume_ratio: string;
+  is_general_cargo: boolean;
 }
 
 const CHANNEL_LABELS: Record<string, string> = {
@@ -87,6 +107,76 @@ function formatDecimal(value?: string | number | null) {
   const num = Number(value);
   if (!Number.isFinite(num)) return compact(value);
   return num.toFixed(3).replace(/\.?0+$/, "");
+}
+
+function conflictTitle(conflict?: CargoBox["box_conflict"] | null) {
+  if (!conflict) return "";
+  const receiptName = conflict.source_file_name || conflict.warehouse_no || "-";
+  if (conflict.waybill_no) {
+    return `与提单 ${conflict.waybill_no} 的入仓号文件 ${receiptName} 冲突`;
+  }
+  return `与入仓号文件 ${receiptName} 冲突`;
+}
+
+function ConflictWaybillBadge({ conflict }: { conflict?: CargoBox["box_conflict"] | null }) {
+  if (!conflict) return null;
+  return (
+    <span title={conflictTitle(conflict)}>
+      <Badge variant="amber">冲突运单</Badge>
+    </span>
+  );
+}
+
+function nullableText(value: string) {
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
+function nullableNumber(value: string) {
+  const trimmed = value.trim();
+  return trimmed ? Number(trimmed) : null;
+}
+
+function nullableDecimalText(value: string) {
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
+function boxEditDraftFrom(item: CargoBox): BoxEditDraft {
+  return {
+    box_no: item.box_no || "",
+    warehouse_waybill_no: item.warehouse_waybill_no ? String(item.warehouse_waybill_no) : "",
+    goods_name: item.goods_name ? String(item.goods_name) : "",
+    quantity: item.quantity === null || item.quantity === undefined ? "" : String(item.quantity),
+    weight: item.weight === null || item.weight === undefined ? "" : String(item.weight),
+    volume: item.volume === null || item.volume === undefined ? "" : String(item.volume),
+    weight_volume_ratio: item.weight_volume_ratio === null || item.weight_volume_ratio === undefined ? "" : String(item.weight_volume_ratio),
+    is_general_cargo: Boolean(item.is_general_cargo)
+  };
+}
+
+function volumeCalculationError(error: unknown): VolumeErrorDialog {
+  const fallback = error instanceof Error ? error.message : "方数计算失败。";
+  if (!(error instanceof ApiError) || !error.detail || typeof error.detail !== "object") {
+    return { message: fallback, details: [] };
+  }
+
+  const detail = error.detail as Record<string, unknown>;
+  const details = [
+    ["错误码", detail.error_code],
+    ["目标方数(CBM)", detail.target_volume],
+    ["原始总方数(CBM)", detail.original_total_volume],
+    ["一箱多件固定方数(CBM)", detail.fixed_total_volume],
+    ["可调整方数(CBM)", detail.adjustable_total_volume],
+    ["当前总方数(CBM)", detail.total_volume]
+  ]
+    .filter((item): item is [string, string | number] => item[1] !== undefined && item[1] !== null && item[1] !== "")
+    .map(([label, value]) => ({ label, value: String(value) }));
+
+  return {
+    message: typeof detail.message === "string" && detail.message ? detail.message : fallback,
+    details
+  };
 }
 
 function receiptLabel(item: WarehouseReceipt) {
@@ -197,11 +287,19 @@ export default function WarehouseReceiptsPage() {
   const [unboundRemark, setUnboundRemark] = useState("");
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [receiptOrderSaving, setReceiptOrderSaving] = useState(false);
+  const [receiptSortDragId, setReceiptSortDragId] = useState<number | null>(null);
   const [receiptOptionsLoading, setReceiptOptionsLoading] = useState(false);
   const [receiptOptionsError, setReceiptOptionsError] = useState("");
   const [rightPanelMode, setRightPanelMode] = useState<RightPanelMode>("scatter");
   const [message, setMessage] = useState("");
   const [batchUploadResult, setBatchUploadResult] = useState<BatchUploadResult | null>(null);
+  const [volumeReceipt, setVolumeReceipt] = useState<WarehouseReceipt | null>(null);
+  const [targetVolumeDraft, setTargetVolumeDraft] = useState("");
+  const [targetVolumeError, setTargetVolumeError] = useState("");
+  const [volumeError, setVolumeError] = useState<VolumeErrorDialog | null>(null);
+  const [editingReceiptBox, setEditingReceiptBox] = useState<{ receiptId: number; box: CargoBox } | null>(null);
+  const [boxEditDraft, setBoxEditDraft] = useState<BoxEditDraft | null>(null);
 
   const selectedTransferIds = transferSource === "receipt" ? selectedReceiptBoxIds : selectedScatterIds;
   const targetReceiptGroups = useMemo(() => {
@@ -300,6 +398,68 @@ export default function WarehouseReceiptsPage() {
 
   const scatterBoxIds = useMemo(() => (scatterData?.items || []).map((item) => item.id), [scatterData?.items]);
 
+  async function persistReceiptOrder(nextOrderedReceipts: WarehouseReceipt[], currentPageIds: Set<number>) {
+    setReceipts((prev) =>
+      prev
+        ? {
+            ...prev,
+            items: nextOrderedReceipts.filter((item) => currentPageIds.has(item.id))
+          }
+        : prev
+    );
+    setAllReceipts((prev) => [
+      ...nextOrderedReceipts,
+      ...prev.filter((item) => item.waybill_id || item.prebooking_id)
+    ]);
+    setReceiptOrderSaving(true);
+    setMessage("");
+    try {
+      await apiClient.put<void>("/warehouse-receipts/unbound/order", {
+        receipt_ids: nextOrderedReceipts.map((item) => item.id)
+      });
+      void loadAllReceipts();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "保存入仓号排序失败。");
+      refreshAll();
+    } finally {
+      setReceiptOrderSaving(false);
+    }
+  }
+
+  function moveUnboundReceiptBefore(dragId: number, targetId: number) {
+    if (dragId === targetId) return;
+    const baseReceipts = unboundReceiptSummaries.length ? unboundReceiptSummaries : receipts?.items || [];
+    const source = baseReceipts.find((item) => item.id === dragId);
+    const target = baseReceipts.find((item) => item.id === targetId);
+    if (!source || !target) return;
+
+    const withoutSource = baseReceipts.filter((item) => item.id !== dragId);
+    const targetIndex = withoutSource.findIndex((item) => item.id === targetId);
+    if (targetIndex < 0) return;
+
+    const nextOrderedReceipts = [
+      ...withoutSource.slice(0, targetIndex),
+      source,
+      ...withoutSource.slice(targetIndex)
+    ];
+    const currentPageIds = new Set((receipts?.items || []).map((item) => item.id));
+    void persistReceiptOrder(nextOrderedReceipts, currentPageIds);
+  }
+
+  function updateBoxEditDraft<K extends keyof BoxEditDraft>(key: K, value: BoxEditDraft[K]) {
+    setBoxEditDraft((prev) => (prev ? { ...prev, [key]: value } : prev));
+  }
+
+  function startReceiptBoxEditing(receiptId: number, box: CargoBox) {
+    setEditingReceiptBox({ receiptId, box });
+    setBoxEditDraft(boxEditDraftFrom(box));
+  }
+
+  function cancelReceiptBoxEditing() {
+    setEditingReceiptBox(null);
+    setBoxEditDraft(null);
+  }
+
   function toggleBoxSelection(
     id: number,
     checked: boolean,
@@ -353,6 +513,7 @@ export default function WarehouseReceiptsPage() {
           successes.push({
             file_name: result.file_name,
             warehouse_no: result.warehouse_no,
+            uploaded_at: result.uploaded_at,
             success_count: result.success_count,
             detected_channel: result.channel_review?.detected_channel,
             warnings: result.channel_review?.warnings || [],
@@ -424,6 +585,94 @@ export default function WarehouseReceiptsPage() {
       refreshAll();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "删除入仓号失败。");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function openVolumeCalculation(receipt: WarehouseReceipt) {
+    const currentVolume = Number(receipt.total_volume);
+    setVolumeReceipt(receipt);
+    setTargetVolumeDraft(Number.isFinite(currentVolume) && currentVolume > 0 ? currentVolume.toFixed(3).replace(/\.?0+$/, "") : "");
+    setTargetVolumeError("");
+  }
+
+  async function recalculateReceiptVolumes() {
+    if (!volumeReceipt) return;
+    const targetVolume = Number(targetVolumeDraft);
+    if (!Number.isFinite(targetVolume) || targetVolume <= 0) {
+      setTargetVolumeError("请输入大于 0 的目标方数。");
+      return;
+    }
+
+    setSaving(true);
+    setMessage("");
+    try {
+      const result = await apiClient.post<BoxVolumeRecalculationResult>(
+        `/warehouse-receipts/${volumeReceipt.id}/boxes/recalculate-volume`,
+        { target_volume: targetVolume }
+      );
+      setBoxesByReceipt((prev) => ({ ...prev, [volumeReceipt.id]: result.boxes }));
+      setVolumeReceipt(null);
+      loadReceipts();
+      void loadAllReceipts();
+      setMessage(
+        result.adjusted
+          ? `入仓号 ${volumeReceipt.warehouse_no} 方数已按目标 ${formatDecimal(result.target_volume)} CBM 等比调整：${formatDecimal(result.old_total_volume)} → ${formatDecimal(result.new_total_volume)}。一箱多件固定 ${formatDecimal(result.fixed_total_volume)} CBM，调整一箱一件 ${result.adjusted_box_count} 个。`
+          : `入仓号 ${volumeReceipt.warehouse_no} 当前总方数已等于目标 ${formatDecimal(result.target_volume)} CBM，无需调整。`
+      );
+    } catch (error) {
+      setVolumeReceipt(null);
+      setVolumeError(volumeCalculationError(error));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveReceiptBoxEdit() {
+    if (!editingReceiptBox || !boxEditDraft) return;
+    const nextBoxNo = boxEditDraft.box_no.trim();
+    if (!nextBoxNo) {
+      setMessage("外箱条码不能为空。");
+      return;
+    }
+
+    setSaving(true);
+    setMessage("");
+    try {
+      const ratioDraft = boxEditDraft.weight_volume_ratio.trim();
+      const originalRatio =
+        editingReceiptBox.box.weight_volume_ratio === null || editingReceiptBox.box.weight_volume_ratio === undefined
+          ? ""
+          : String(editingReceiptBox.box.weight_volume_ratio).trim();
+      const payload: Record<string, unknown> = {
+        box_no: nextBoxNo,
+        warehouse_waybill_no: nullableText(boxEditDraft.warehouse_waybill_no),
+        goods_name: nullableText(boxEditDraft.goods_name),
+        quantity: nullableNumber(boxEditDraft.quantity),
+        weight: nullableDecimalText(boxEditDraft.weight),
+        volume: nullableDecimalText(boxEditDraft.volume),
+        is_general_cargo: boxEditDraft.is_general_cargo
+      };
+      if (ratioDraft !== originalRatio) {
+        payload.weight_volume_ratio = nullableDecimalText(boxEditDraft.weight_volume_ratio);
+      }
+      const updated = await apiClient.patch<CargoBox>(
+        `/warehouse-receipts/${editingReceiptBox.receiptId}/boxes/${editingReceiptBox.box.id}`,
+        payload
+      );
+      setBoxesByReceipt((prev) => ({
+        ...prev,
+        [editingReceiptBox.receiptId]: (prev[editingReceiptBox.receiptId] || []).map((box) =>
+          box.id === updated.id ? updated : box
+        )
+      }));
+      cancelReceiptBoxEditing();
+      setMessage("箱号数据已更新。");
+      loadReceipts();
+      void loadAllReceipts();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "箱号数据更新失败。");
     } finally {
       setSaving(false);
     }
@@ -563,29 +812,75 @@ export default function WarehouseReceiptsPage() {
                 const expanded = expandedReceiptId === receipt.id;
                 const boxes = boxesByReceipt[receipt.id] || [];
                 return (
-                  <div key={receipt.id} className="rounded-md border border-slate-200">
+                  <div
+                    key={receipt.id}
+                    className="rounded-md border border-slate-200"
+                    onDragOver={(event) => {
+                      if (receiptSortDragId !== null) {
+                        event.preventDefault();
+                        event.dataTransfer.dropEffect = "move";
+                      }
+                    }}
+                    onDrop={(event) => {
+                      if (receiptSortDragId !== null) {
+                        event.preventDefault();
+                        moveUnboundReceiptBefore(receiptSortDragId, receipt.id);
+                        setReceiptSortDragId(null);
+                      }
+                    }}
+                  >
                     <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 bg-slate-50 px-3 py-2">
-                      <button
-                        type="button"
-                        className="flex min-w-0 items-center gap-2 text-left"
-                        onClick={() => toggleReceiptExpanded(receipt.id)}
-                      >
-                        {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                        <span className="font-semibold text-slate-900">{receipt.warehouse_no}</span>
-                        <Badge>{receipt.box_count ?? 0} 箱</Badge>
-                        {channelTags(receipt.channel_tags).map((tag) => (
-                          <Badge key={tag} variant="amber">
-                            {tag}
-                          </Badge>
-                        ))}
-                      </button>
+                      <div className="flex min-w-0 items-center gap-1">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 cursor-grab text-slate-400 active:cursor-grabbing"
+                          draggable
+                          disabled={receiptOrderSaving}
+                          aria-label="拖动排序入仓号"
+                          onDragStart={(event) => {
+                            event.stopPropagation();
+                            setReceiptSortDragId(receipt.id);
+                            event.dataTransfer.effectAllowed = "move";
+                            event.dataTransfer.setData("text/plain", String(receipt.id));
+                          }}
+                          onDragEnd={() => setReceiptSortDragId(null)}
+                        >
+                          <GripVertical className="h-4 w-4" />
+                        </Button>
+                        <button
+                          type="button"
+                          className="flex min-w-0 items-center gap-2 text-left"
+                          onClick={() => toggleReceiptExpanded(receipt.id)}
+                        >
+                          {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                          <span className="font-semibold text-slate-900">{receipt.warehouse_no}</span>
+                          <Badge>{receipt.box_count ?? 0} 箱</Badge>
+                          {channelTags(receipt.channel_tags).map((tag) => (
+                            <Badge key={tag} variant="amber">
+                              {tag}
+                            </Badge>
+                          ))}
+                        </button>
+                      </div>
                       <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
                         <span>重量 {formatDecimal(receipt.total_weight)}</span>
                         <span>方数 {formatDecimal(receipt.total_volume)}</span>
-                        <span>{formatDateTime(receipt.updated_at)}</span>
+                        <span>上传 {formatDateTime(receipt.uploaded_at)}</span>
                         <Button type="button" variant="secondary" size="sm" onClick={() => setBindReceiptId(receipt.id)}>
                           <Archive className="h-4 w-4" />
                           整体绑定提单
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          disabled={saving || (receipt.box_count ?? 0) <= 0}
+                          onClick={() => openVolumeCalculation(receipt)}
+                        >
+                          <Calculator className="h-4 w-4" />
+                          方数计算
                         </Button>
                         <Button type="button" variant="ghost" size="sm" disabled={saving} onClick={() => void deleteReceipt(receipt)}>
                           <Trash2 className="h-4 w-4 text-red-600" />
@@ -593,8 +888,9 @@ export default function WarehouseReceiptsPage() {
                         </Button>
                       </div>
                     </div>
-                    <div className="grid gap-2 px-3 py-2 text-xs text-slate-500 md:grid-cols-4">
+                    <div className="grid gap-2 px-3 py-2 text-xs text-slate-500 md:grid-cols-5">
                       <span>来源文件：{receipt.source_file_name || "-"}</span>
+                      <span>上传时间：{formatDateTime(receipt.uploaded_at)}</span>
                       <span>总数量：{compact(receipt.total_quantity)}</span>
                       <span>重量/方：{formatDecimal(receipt.weight_volume_ratio)}</span>
                       <span>标记：{channelTags(receipt.channel_tags).join(" / ") || "-"}</span>
@@ -620,13 +916,14 @@ export default function WarehouseReceiptsPage() {
                                   <TH>品名</TH>
                                   <TH>数量</TH>
                                   <TH>重量</TH>
-                                  <TH>方数</TH>
+                                  <TH>收货体积信息</TH>
                                   <TH>重量/方</TH>
+                                  <TH>操作</TH>
                                 </TR>
                               </THead>
                               <TBody>
                                 {boxes.map((box) => (
-                                  <TR key={box.id}>
+                                  <TR key={box.id} className={box.is_general_cargo ? "bg-amber-50 hover:bg-amber-100" : undefined}>
                                     <TD>
                                       <input
                                         type="checkbox"
@@ -644,14 +941,30 @@ export default function WarehouseReceiptsPage() {
                                         }
                                       />
                                     </TD>
-                                    <TD className="font-medium">{box.box_no}</TD>
+                                    <TD className="font-medium">
+                                      <span>{box.box_no}</span>
+                                      {box.is_general_cargo ? (
+                                        <span className="ml-1 rounded bg-amber-200 px-1.5 py-0.5 text-xs font-semibold text-amber-900">普货</span>
+                                      ) : null}
+                                    </TD>
                                     <TD>{box.items?.length || 0}</TD>
-                                    <TD>{compact(box.warehouse_waybill_no)}</TD>
+                                    <TD>
+                                      <div className="flex flex-wrap items-center gap-1">
+                                        <span>{compact(box.warehouse_waybill_no)}</span>
+                                        <ConflictWaybillBadge conflict={box.box_conflict} />
+                                      </div>
+                                    </TD>
                                     <TD>{compact(box.goods_name)}</TD>
                                     <TD>{compact(box.quantity)}</TD>
                                     <TD>{formatDecimal(box.weight)}</TD>
-                                    <TD>{formatDecimal(box.volume)}</TD>
+                                    <TD>{formatCalculatedVolumeInfo(box)}</TD>
                                     <TD>{formatDecimal(box.weight_volume_ratio)}</TD>
+                                    <TD>
+                                      <Button type="button" variant="ghost" size="sm" disabled={saving} onClick={() => startReceiptBoxEditing(receipt.id, box)}>
+                                        <Pencil className="h-4 w-4" />
+                                        编辑
+                                      </Button>
+                                    </TD>
                                   </TR>
                                 ))}
                               </TBody>
@@ -806,10 +1119,11 @@ export default function WarehouseReceiptsPage() {
                 {receiptOptionsError ? <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-4 text-sm text-rose-600">{receiptOptionsError}</div> : null}
                 {!receiptOptionsLoading && !receiptOptionsError && unboundReceiptSummaries.length ? (
                   <div className="max-h-[680px] overflow-auto">
-                    <Table className="min-w-[680px]">
+                    <Table className="min-w-[760px]">
                       <THead>
                         <TR>
                           <TH>入仓号文件名</TH>
+                          <TH>上传时间</TH>
                           <TH>箱数</TH>
                           <TH>渠道标签</TH>
                           <TH>件数</TH>
@@ -828,6 +1142,7 @@ export default function WarehouseReceiptsPage() {
                                   {fileName}
                                 </span>
                               </TD>
+                              <TD>{formatDateTime(receipt.uploaded_at)}</TD>
                               <TD>{receipt.box_count ?? 0}</TD>
                               <TD>
                                 {tags.length ? (
@@ -886,6 +1201,7 @@ export default function WarehouseReceiptsPage() {
                         <TR>
                           <TH>文件名</TH>
                           <TH>入仓号</TH>
+                          <TH>上传时间</TH>
                           <TH>箱数</TH>
                           <TH>渠道</TH>
                           <TH>标记</TH>
@@ -897,6 +1213,7 @@ export default function WarehouseReceiptsPage() {
                           <TR key={`${item.file_name}-${item.warehouse_no}`}>
                             <TD>{item.file_name}</TD>
                             <TD className="font-medium">{item.warehouse_no}</TD>
+                            <TD>{formatDateTime(item.uploaded_at)}</TD>
                             <TD>{item.success_count}</TD>
                             <TD>{channelLabel(item.detected_channel)}</TD>
                             <TD>
@@ -1009,6 +1326,129 @@ export default function WarehouseReceiptsPage() {
           </div>
         </DialogContent>
       </Dialog>
+      <Dialog open={Boolean(editingReceiptBox && boxEditDraft)} onOpenChange={(open) => !open && cancelReceiptBoxEditing()}>
+        <DialogContent className="w-[min(720px,calc(100vw-32px))]">
+          <DialogTitle className="pr-10 text-base font-semibold text-slate-900">编辑箱号数据</DialogTitle>
+          {boxEditDraft ? (
+            <div className="mt-3 space-y-4">
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="space-y-1 text-sm">
+                  <span className="text-slate-700">外箱条码</span>
+                  <Input value={boxEditDraft.box_no} onChange={(event) => updateBoxEditDraft("box_no", event.target.value)} />
+                </label>
+                <label className="space-y-1 text-sm">
+                  <span className="text-slate-700">仓库文件提单号</span>
+                  <Input value={boxEditDraft.warehouse_waybill_no} onChange={(event) => updateBoxEditDraft("warehouse_waybill_no", event.target.value)} />
+                </label>
+                <label className="space-y-1 text-sm md:col-span-2">
+                  <span className="text-slate-700">品名</span>
+                  <Input value={boxEditDraft.goods_name} onChange={(event) => updateBoxEditDraft("goods_name", event.target.value)} />
+                </label>
+                <label className="space-y-1 text-sm">
+                  <span className="text-slate-700">数量</span>
+                  <Input type="number" min="0" step="1" value={boxEditDraft.quantity} onChange={(event) => updateBoxEditDraft("quantity", event.target.value)} />
+                </label>
+                <label className="space-y-1 text-sm">
+                  <span className="text-slate-700">重量</span>
+                  <Input type="number" min="0" step="0.001" value={boxEditDraft.weight} onChange={(event) => updateBoxEditDraft("weight", event.target.value)} />
+                </label>
+                <label className="space-y-1 text-sm">
+                  <span className="text-slate-700">方数(CBM)</span>
+                  <Input type="number" min="0" step="0.001" value={boxEditDraft.volume} onChange={(event) => updateBoxEditDraft("volume", event.target.value)} />
+                </label>
+                <label className="space-y-1 text-sm">
+                  <span className="text-slate-700">重量/方</span>
+                  <Input type="number" min="0" step="0.001" value={boxEditDraft.weight_volume_ratio} onChange={(event) => updateBoxEditDraft("weight_volume_ratio", event.target.value)} />
+                </label>
+              </div>
+              <label className="flex items-center gap-2 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={boxEditDraft.is_general_cargo}
+                  onChange={(event) => updateBoxEditDraft("is_general_cargo", event.target.checked)}
+                />
+                普货
+              </label>
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="secondary" disabled={saving} onClick={cancelReceiptBoxEditing}>
+                  取消
+                </Button>
+                <Button type="button" disabled={saving} onClick={() => void saveReceiptBoxEdit()}>
+                  保存
+                </Button>
+              </div>
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
+      <Dialog open={volumeReceipt !== null} onOpenChange={(open) => !open && setVolumeReceipt(null)}>
+        <DialogContent className="w-[min(520px,calc(100vw-32px))]">
+          <DialogTitle className="pr-10 text-base font-semibold text-slate-900">方数计算</DialogTitle>
+          <div className="mt-3 space-y-4 text-sm">
+            <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-slate-700">
+              <div>入仓号：<span className="font-medium text-slate-900">{volumeReceipt?.warehouse_no}</span></div>
+              <div>当前方数：<span className="font-medium text-slate-900">{formatDecimal(volumeReceipt?.total_volume)} CBM</span></div>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-700" htmlFor="unbound-target-volume">
+                目标总方数(CBM)
+              </label>
+              <Input
+                id="unbound-target-volume"
+                type="number"
+                min="0.001"
+                step="0.001"
+                value={targetVolumeDraft}
+                onChange={(event) => {
+                  setTargetVolumeDraft(event.target.value);
+                  setTargetVolumeError("");
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void recalculateReceiptVolumes();
+                  }
+                }}
+              />
+              {targetVolumeError ? <div className="text-xs text-red-600">{targetVolumeError}</div> : null}
+            </div>
+            <div className="text-xs text-slate-500">系统只会等比调整一箱一件的箱号；一箱多件箱号保持原始方数不变。</div>
+          </div>
+          <div className="mt-5 flex justify-end gap-2">
+            <Button type="button" variant="secondary" disabled={saving} onClick={() => setVolumeReceipt(null)}>
+              取消
+            </Button>
+            <Button type="button" disabled={saving} onClick={() => void recalculateReceiptVolumes()}>
+              确认计算
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={Boolean(volumeError)} onOpenChange={(open) => !open && setVolumeError(null)}>
+        <DialogContent>
+          <DialogTitle className="pr-10 text-base font-semibold text-slate-900">方数计算失败</DialogTitle>
+          <div className="mt-3 space-y-3">
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              {volumeError?.message || "方数计算失败。"}
+            </div>
+            {volumeError?.details.length ? (
+              <div className="rounded-md border border-slate-200">
+                {volumeError.details.map((item) => (
+                  <div key={item.label} className="grid grid-cols-[150px_1fr] border-b border-slate-100 px-3 py-2 text-sm last:border-b-0">
+                    <span className="text-slate-500">{item.label}</span>
+                    <span className="font-medium text-slate-900">{item.value}</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+          <div className="mt-4 flex justify-end">
+            <Button type="button" onClick={() => setVolumeError(null)}>
+              知道了
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       <Dialog open={bindReceiptId !== null} onOpenChange={(open) => !open && setBindReceiptId(null)}>
         <DialogContent className="w-[min(560px,calc(100vw-32px))]">
           <DialogTitle className="pr-10 text-base font-semibold text-slate-900">整体绑定入仓号</DialogTitle>
@@ -1090,6 +1530,9 @@ export default function WarehouseReceiptsPage() {
                                   <span className="block truncate font-medium">{receiptLabel(item)}</span>
                                   <span className={`block text-xs ${selected ? "text-slate-200" : "text-slate-500"}`}>
                                     箱数 {item.box_count ?? 0} / 重量 {formatDecimal(item.total_weight)} / 方数 {formatDecimal(item.total_volume)}
+                                  </span>
+                                  <span className={`block text-xs ${selected ? "text-slate-200" : "text-slate-500"}`}>
+                                    上传 {formatDateTime(item.uploaded_at)}
                                   </span>
                                 </span>
                                 {tags.length ? (

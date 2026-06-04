@@ -167,6 +167,7 @@ class PrebookingService:
         for receipt in receipts:
             receipt.prebooking_id = None
             receipt.waybill_id = waybill.id
+            receipt.display_order = None
             for box in self.warehouse_files.boxes.list_by_receipt_id(receipt.id):
                 box.current_waybill_id = waybill.id
                 box.status = "bound"

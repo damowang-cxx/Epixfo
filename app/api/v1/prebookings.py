@@ -108,7 +108,14 @@ def update_prebooking_box(
         prebooking,
         box_id,
         current_user,
+        fields_set=payload.model_fields_set,
         box_no=payload.box_no,
+        warehouse_waybill_no=payload.warehouse_waybill_no,
+        goods_name=payload.goods_name,
+        quantity=payload.quantity,
+        weight=payload.weight,
+        volume=payload.volume,
+        weight_volume_ratio=payload.weight_volume_ratio,
         is_general_cargo=payload.is_general_cargo,
     )
 

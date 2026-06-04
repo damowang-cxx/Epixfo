@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 from app.core.platform_patch import patch_platform_wmi
 
@@ -12,6 +12,14 @@ from sqlalchemy.orm import Session, selectinload
 from app.models import AirWaybill, Box, BoxDocument, BoxItem, WarehouseReceipt, WaybillPrebooking
 
 
+def box_detail_options():
+    return (
+        selectinload(Box.document),
+        selectinload(Box.warehouse_receipt).selectinload(WarehouseReceipt.source_document),
+        selectinload(Box.items),
+    )
+
+
 class BoxRepository:
     def __init__(self, db: Session):
         self.db = db
@@ -21,7 +29,7 @@ class BoxRepository:
             self.db.scalars(
                 select(Box)
                 .join(WarehouseReceipt, WarehouseReceipt.id == Box.warehouse_receipt_id)
-                .options(selectinload(Box.document), selectinload(Box.warehouse_receipt), selectinload(Box.items))
+                .options(*box_detail_options())
                 .where(WarehouseReceipt.waybill_id == waybill_id)
                 .order_by(WarehouseReceipt.id, Box.source_row_number, Box.id)
             )
@@ -32,7 +40,7 @@ class BoxRepository:
             self.db.scalars(
                 select(Box)
                 .join(WarehouseReceipt, WarehouseReceipt.id == Box.warehouse_receipt_id)
-                .options(selectinload(Box.document), selectinload(Box.warehouse_receipt), selectinload(Box.items))
+                .options(*box_detail_options())
                 .where(WarehouseReceipt.prebooking_id == prebooking_id)
                 .order_by(WarehouseReceipt.id, Box.source_row_number, Box.id)
             )
@@ -42,7 +50,7 @@ class BoxRepository:
         return self.db.scalar(
             select(Box)
             .join(WarehouseReceipt, WarehouseReceipt.id == Box.warehouse_receipt_id)
-            .options(selectinload(Box.document), selectinload(Box.warehouse_receipt), selectinload(Box.items))
+            .options(*box_detail_options())
             .where(WarehouseReceipt.waybill_id == waybill_id, Box.id == box_id)
         )
 
@@ -50,7 +58,7 @@ class BoxRepository:
         return self.db.scalar(
             select(Box)
             .join(WarehouseReceipt, WarehouseReceipt.id == Box.warehouse_receipt_id)
-            .options(selectinload(Box.document), selectinload(Box.warehouse_receipt), selectinload(Box.items))
+            .options(*box_detail_options())
             .where(WarehouseReceipt.prebooking_id == prebooking_id, Box.id == box_id)
         )
 
@@ -72,7 +80,7 @@ class BoxRepository:
     def get_by_id(self, box_id: int) -> Box | None:
         return self.db.scalar(
             select(Box)
-            .options(selectinload(Box.document), selectinload(Box.warehouse_receipt), selectinload(Box.items))
+            .options(*box_detail_options())
             .where(Box.id == box_id)
         )
 
@@ -82,7 +90,7 @@ class BoxRepository:
         return list(
             self.db.scalars(
                 select(Box)
-                .options(selectinload(Box.document), selectinload(Box.warehouse_receipt), selectinload(Box.items))
+                .options(*box_detail_options())
                 .where(Box.id.in_(box_ids))
                 .order_by(Box.box_no)
             )
@@ -91,7 +99,7 @@ class BoxRepository:
     def get_by_box_no(self, box_no: str) -> Box | None:
         return self.db.scalar(
             select(Box)
-            .options(selectinload(Box.document), selectinload(Box.warehouse_receipt), selectinload(Box.items))
+            .options(*box_detail_options())
             .where(Box.box_no == box_no)
         )
 
@@ -101,7 +109,7 @@ class BoxRepository:
         return list(
             self.db.scalars(
                 select(Box)
-                .options(selectinload(Box.document), selectinload(Box.warehouse_receipt), selectinload(Box.items))
+                .options(*box_detail_options())
                 .where(Box.box_no.in_(box_nos))
             )
         )
@@ -125,7 +133,9 @@ class BoxRepository:
         page: int,
         page_size: int,
         unbound_only: bool = False,
-    ) -> tuple[list[tuple[WarehouseReceipt, str | None, int | None, str | None, date | None, str | None, int]], int]:
+    ) -> tuple[list[tuple[WarehouseReceipt, str | None, int | None, str | None, date | None, str | None, datetime | None, int]], int]:
+        uploaded_at_sort = func.coalesce(BoxDocument.uploaded_at, WarehouseReceipt.created_at)
+        file_name_sort = func.coalesce(BoxDocument.file_name, WarehouseReceipt.warehouse_no)
         stmt = (
             select(
                 WarehouseReceipt,
@@ -134,6 +144,7 @@ class BoxRepository:
                 WaybillPrebooking.status.label("prebooking_status"),
                 WaybillPrebooking.planned_flight_date.label("prebooking_planned_flight_date"),
                 BoxDocument.file_name,
+                BoxDocument.uploaded_at,
                 func.count(Box.id).label("box_count"),
             )
             .outerjoin(AirWaybill, AirWaybill.id == WarehouseReceipt.waybill_id)
@@ -147,21 +158,46 @@ class BoxRepository:
                 WaybillPrebooking.status,
                 WaybillPrebooking.planned_flight_date,
                 BoxDocument.file_name,
+                BoxDocument.uploaded_at,
             )
-            .order_by(WarehouseReceipt.updated_at.desc(), WarehouseReceipt.id.desc())
+            .order_by(
+                WarehouseReceipt.display_order.is_(None).asc(),
+                WarehouseReceipt.display_order.asc(),
+                uploaded_at_sort.asc(),
+                file_name_sort.asc(),
+                WarehouseReceipt.id.asc(),
+            )
         )
         if unbound_only:
             stmt = stmt.where(WarehouseReceipt.waybill_id.is_(None), WarehouseReceipt.prebooking_id.is_(None))
         total_stmt = select(func.count()).select_from(stmt.order_by(None).subquery())
         total = int(self.db.scalar(total_stmt) or 0)
         rows = self.db.execute(stmt.offset((page - 1) * page_size).limit(page_size)).all()
-        return [(row[0], row[1], row[2], row[3], row[4], row[5], int(row[6] or 0)) for row in rows], total
+        return [(row[0], row[1], row[2], row[3], row[4], row[5], row[6], int(row[7] or 0)) for row in rows], total
+
+    def list_unbound_receipt_models_ordered(self) -> list[WarehouseReceipt]:
+        uploaded_at_sort = func.coalesce(BoxDocument.uploaded_at, WarehouseReceipt.created_at)
+        file_name_sort = func.coalesce(BoxDocument.file_name, WarehouseReceipt.warehouse_no)
+        return list(
+            self.db.scalars(
+                select(WarehouseReceipt)
+                .outerjoin(BoxDocument, BoxDocument.id == WarehouseReceipt.source_document_id)
+                .where(WarehouseReceipt.waybill_id.is_(None), WarehouseReceipt.prebooking_id.is_(None))
+                .order_by(
+                    WarehouseReceipt.display_order.is_(None).asc(),
+                    WarehouseReceipt.display_order.asc(),
+                    uploaded_at_sort.asc(),
+                    file_name_sort.asc(),
+                    WarehouseReceipt.id.asc(),
+                )
+            )
+        )
 
     def list_by_receipt_id(self, receipt_id: int) -> list[Box]:
         return list(
             self.db.scalars(
                 select(Box)
-                .options(selectinload(Box.document), selectinload(Box.warehouse_receipt), selectinload(Box.items))
+                .options(*box_detail_options())
                 .where(Box.warehouse_receipt_id == receipt_id)
                 .order_by(Box.source_row_number, Box.id)
             )

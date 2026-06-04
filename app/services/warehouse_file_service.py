@@ -8,7 +8,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_HALF_UP
 from io import BytesIO
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import HTTPException, status
 
@@ -52,6 +52,8 @@ OPTIONAL_COLUMNS = {
 }
 
 DECIMAL_001 = Decimal("0.001")
+BOX_NO_MAX_LENGTH = 128
+BOX_CONFLICT_RAW_KEY = "box_conflict"
 UNBOUND_REASONS = {"customs_inspection", "other"}
 EUROPE_CHANNEL_PREFIXES = {"UPS", "DHL", "DPD", "FED", "CTT", "FRE", "ITE", "NLE"}
 UK_CHANNEL_PREFIXES = {"KDP", "KTK", "DPD"}
@@ -70,7 +72,7 @@ DIMENSION_VOLUME_PATTERN = re.compile(
 class ParsedWarehouseBoxItem:
     warehouse_waybill_no: str | None
     goods_name: str | None
-    quantity: int
+    quantity: int | None
     weight: Decimal
     source_row_number: int
     raw_data: dict[str, Any]
@@ -81,7 +83,7 @@ class ParsedWarehouseBox:
     box_no: str
     warehouse_waybill_no: str | None
     goods_name: str | None
-    quantity: int
+    quantity: int | None
     weight: Decimal
     original_volume_info: str | None
     original_weight_volume_ratio: str | None
@@ -151,6 +153,34 @@ class WarehouseFileService:
             raise bad_request("warehouse_receipt_not_found")
         return self.boxes.list_by_receipt_id(receipt_id)
 
+    def reorder_unbound_receipts(self, receipt_ids: list[int], current_user: User) -> None:
+        PermissionService.assert_waybill_write(current_user)
+        ordered_receipts = self.boxes.list_unbound_receipt_models_ordered()
+        receipts_by_id = {item.id: item for item in ordered_receipts}
+        seen: set[int] = set()
+        requested_ids: list[int] = []
+        for receipt_id in receipt_ids:
+            if receipt_id in seen:
+                continue
+            seen.add(receipt_id)
+            requested_ids.append(receipt_id)
+
+        invalid_ids = [receipt_id for receipt_id in requested_ids if receipt_id not in receipts_by_id]
+        if invalid_ids:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error_code": "warehouse_receipt_order_invalid_receipts",
+                    "message": "排序中包含不存在或已绑定的入仓号。",
+                    "receipt_ids": invalid_ids,
+                },
+            )
+
+        ordered_ids = [*requested_ids, *[item.id for item in ordered_receipts if item.id not in seen]]
+        for index, receipt_id in enumerate(ordered_ids, start=1):
+            receipts_by_id[receipt_id].display_order = index
+        self.db.commit()
+
     def get_receipt_summary(self, receipt_id: int) -> WarehouseReceiptListOut:
         receipt = self.boxes.get_receipt_by_id(receipt_id)
         if receipt is None:
@@ -169,6 +199,7 @@ class WarehouseFileService:
             prebooking.status if prebooking else None,
             prebooking.planned_flight_date if prebooking else None,
             document.file_name if document else None,
+            document.uploaded_at if document else None,
             box_count,
         )
 
@@ -176,25 +207,102 @@ class WarehouseFileService:
         """向后兼容：旧调用方仍可只改 box_no。"""
         return self.update_box(waybill_id, box_id, current_user, box_no=box_no)
 
-    def update_box(
+    def _clean_optional_text(self, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+    def _quantize_decimal(self, value: Decimal | None) -> Decimal | None:
+        if value is None:
+            return None
+        return value.quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
+
+    def _recompute_weight_volume_ratio(self, box: Box) -> Decimal | None:
+        if box.weight is None and box.volume is None:
+            return None
+        if box.weight is not None and box.volume is not None and box.volume > 0:
+            return (box.weight / box.volume).quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
+        return Decimal("0.000")
+
+    def _sync_single_item_after_box_update(self, box: Box, fields: set[str]) -> None:
+        item_fields = {"warehouse_waybill_no", "goods_name", "quantity", "weight"}
+        if not fields.intersection(item_fields):
+            return
+
+        if len(box.items) == 1:
+            item = box.items[0]
+            if "warehouse_waybill_no" in fields:
+                item.warehouse_waybill_no = box.warehouse_waybill_no
+            if "goods_name" in fields:
+                item.goods_name = box.goods_name
+            if "quantity" in fields:
+                item.quantity = box.quantity
+            if "weight" in fields:
+                item.weight = box.weight
+            item.raw_data = {**(item.raw_data or {}), "manual_edit": True}
+            return
+
+        if box.items:
+            return
+
+        has_item_data = any(
+            value not in (None, "")
+            for value in (box.warehouse_waybill_no, box.goods_name, box.quantity, box.weight)
+        )
+        if not has_item_data:
+            return
+
+        box.items.append(
+            BoxItem(
+                box_id=box.id,
+                document_id=box.document_id,
+                warehouse_waybill_no=box.warehouse_waybill_no,
+                goods_name=box.goods_name,
+                quantity=box.quantity,
+                weight=box.weight,
+                raw_data={"source": "manual_edit"},
+            )
+        )
+
+    def _refresh_receipt_channel_tags(self, receipt: WarehouseReceipt | None) -> None:
+        if receipt is None:
+            return
+        receipt.channel_tags = compute_warehouse_receipt_channel_tags(
+            [box.box_no for box in self.boxes.list_by_receipt_id(receipt.id)]
+        )
+
+    def _apply_box_update(
         self,
-        waybill_id: int,
-        box_id: int,
+        box: Box,
         current_user: User,
         *,
+        fields_set: set[str] | None = None,
         box_no: str | None = None,
+        warehouse_waybill_no: str | None = None,
+        goods_name: str | None = None,
+        quantity: int | None = None,
+        weight: Decimal | None = None,
+        volume: Decimal | None = None,
+        weight_volume_ratio: Decimal | None = None,
         is_general_cargo: bool | None = None,
-    ) -> Box:
-        """部分更新：仅设置传入的非 None 字段。"""
-        PermissionService.assert_waybill_write(current_user)
-        if self.waybills.get(waybill_id) is None:
-            raise bad_request("waybill_not_found")
-        box = self.boxes.get_by_waybill(waybill_id, box_id)
-        if box is None:
-            raise bad_request("box_not_found")
+    ) -> None:
+        supplied_values = {
+            "box_no": box_no,
+            "warehouse_waybill_no": warehouse_waybill_no,
+            "goods_name": goods_name,
+            "quantity": quantity,
+            "weight": weight,
+            "volume": volume,
+            "weight_volume_ratio": weight_volume_ratio,
+            "is_general_cargo": is_general_cargo,
+        }
+        fields = set(fields_set or [])
+        if not fields:
+            fields = {field for field, value in supplied_values.items() if value is not None}
 
-        if box_no is not None:
-            cleaned_box_no = box_no.strip()
+        if "box_no" in fields:
+            cleaned_box_no = (box_no or "").strip()
             if not cleaned_box_no:
                 raise bad_request("box_no_required")
             existing = self.boxes.get_by_box_no(cleaned_box_no)
@@ -202,10 +310,70 @@ class WarehouseFileService:
                 raise bad_request("box_no_exists")
             box.box_no = cleaned_box_no
 
-        if is_general_cargo is not None:
-            box.is_general_cargo = is_general_cargo
+        if "warehouse_waybill_no" in fields:
+            box.warehouse_waybill_no = self._clean_optional_text(warehouse_waybill_no)
+        if "goods_name" in fields:
+            box.goods_name = self._clean_optional_text(goods_name)
+        if "quantity" in fields:
+            box.quantity = quantity
+        if "weight" in fields:
+            box.weight = self._quantize_decimal(weight)
+        if "volume" in fields:
+            box.volume = self._quantize_decimal(volume)
+        if "weight_volume_ratio" in fields:
+            box.weight_volume_ratio = self._quantize_decimal(weight_volume_ratio)
+        elif "weight" in fields or "volume" in fields:
+            box.weight_volume_ratio = self._recompute_weight_volume_ratio(box)
+        if "is_general_cargo" in fields:
+            box.is_general_cargo = bool(is_general_cargo)
 
+        self._sync_single_item_after_box_update(box, fields)
+        box.raw_data = {
+            **(box.raw_data or {}),
+            "manual_edit": True,
+            "manual_edit_updated_by": current_user.id,
+            "manual_edit_updated_at": datetime.now(UTC).isoformat(),
+        }
+
+    def update_box(
+        self,
+        waybill_id: int,
+        box_id: int,
+        current_user: User,
+        *,
+        fields_set: set[str] | None = None,
+        box_no: str | None = None,
+        warehouse_waybill_no: str | None = None,
+        goods_name: str | None = None,
+        quantity: int | None = None,
+        weight: Decimal | None = None,
+        volume: Decimal | None = None,
+        weight_volume_ratio: Decimal | None = None,
+        is_general_cargo: bool | None = None,
+    ) -> Box:
+        """部分更新：传入字段可被清空，未传字段保持不变。"""
+        PermissionService.assert_waybill_write(current_user)
+        if self.waybills.get(waybill_id) is None:
+            raise bad_request("waybill_not_found")
+        box = self.boxes.get_by_waybill(waybill_id, box_id)
+        if box is None:
+            raise bad_request("box_not_found")
+
+        self._apply_box_update(
+            box,
+            current_user,
+            fields_set=fields_set,
+            box_no=box_no,
+            warehouse_waybill_no=warehouse_waybill_no,
+            goods_name=goods_name,
+            quantity=quantity,
+            weight=weight,
+            volume=volume,
+            weight_volume_ratio=weight_volume_ratio,
+            is_general_cargo=is_general_cargo,
+        )
         self._refresh_receipt_totals(box.warehouse_receipt)
+        self._refresh_receipt_channel_tags(box.warehouse_receipt)
         self.db.commit()
         self.db.refresh(box)
         return box
@@ -216,7 +384,14 @@ class WarehouseFileService:
         box_id: int,
         current_user: User,
         *,
+        fields_set: set[str] | None = None,
         box_no: str | None = None,
+        warehouse_waybill_no: str | None = None,
+        goods_name: str | None = None,
+        quantity: int | None = None,
+        weight: Decimal | None = None,
+        volume: Decimal | None = None,
+        weight_volume_ratio: Decimal | None = None,
         is_general_cargo: bool | None = None,
     ) -> Box:
         PermissionService.assert_waybill_write(current_user)
@@ -226,19 +401,66 @@ class WarehouseFileService:
         if box is None:
             raise bad_request("box_not_found")
 
-        if box_no is not None:
-            cleaned_box_no = box_no.strip()
-            if not cleaned_box_no:
-                raise bad_request("box_no_required")
-            existing = self.boxes.get_by_box_no(cleaned_box_no)
-            if existing is not None and existing.id != box.id:
-                raise bad_request("box_no_exists")
-            box.box_no = cleaned_box_no
-
-        if is_general_cargo is not None:
-            box.is_general_cargo = is_general_cargo
-
+        self._apply_box_update(
+            box,
+            current_user,
+            fields_set=fields_set,
+            box_no=box_no,
+            warehouse_waybill_no=warehouse_waybill_no,
+            goods_name=goods_name,
+            quantity=quantity,
+            weight=weight,
+            volume=volume,
+            weight_volume_ratio=weight_volume_ratio,
+            is_general_cargo=is_general_cargo,
+        )
         self._refresh_receipt_totals(box.warehouse_receipt)
+        self._refresh_receipt_channel_tags(box.warehouse_receipt)
+        self.db.commit()
+        self.db.refresh(box)
+        return box
+
+    def update_unbound_receipt_box(
+        self,
+        receipt_id: int,
+        box_id: int,
+        current_user: User,
+        *,
+        fields_set: set[str] | None = None,
+        box_no: str | None = None,
+        warehouse_waybill_no: str | None = None,
+        goods_name: str | None = None,
+        quantity: int | None = None,
+        weight: Decimal | None = None,
+        volume: Decimal | None = None,
+        weight_volume_ratio: Decimal | None = None,
+        is_general_cargo: bool | None = None,
+    ) -> Box:
+        PermissionService.assert_waybill_write(current_user)
+        receipt = self.boxes.get_receipt_by_id(receipt_id)
+        if receipt is None:
+            raise bad_request("warehouse_receipt_not_found")
+        if receipt.waybill_id is not None or receipt.prebooking_id is not None:
+            raise bad_request("warehouse_receipt_not_unbound")
+        box = self.boxes.get_by_id(box_id)
+        if box is None or box.warehouse_receipt_id != receipt.id:
+            raise bad_request("box_not_found")
+
+        self._apply_box_update(
+            box,
+            current_user,
+            fields_set=fields_set,
+            box_no=box_no,
+            warehouse_waybill_no=warehouse_waybill_no,
+            goods_name=goods_name,
+            quantity=quantity,
+            weight=weight,
+            volume=volume,
+            weight_volume_ratio=weight_volume_ratio,
+            is_general_cargo=is_general_cargo,
+        )
+        self._refresh_receipt_totals(receipt)
+        self._refresh_receipt_channel_tags(receipt)
         self.db.commit()
         self.db.refresh(box)
         return box
@@ -402,9 +624,6 @@ class WarehouseFileService:
         waybill = self.waybills.get(waybill_id)
         if waybill is None:
             raise bad_request("waybill_not_found")
-        target_volume = target_volume.quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
-        if target_volume <= 0:
-            raise bad_request("target_volume_required")
 
         if warehouse_receipt_id is not None:
             receipt = self.boxes.get_receipt_by_id(warehouse_receipt_id)
@@ -413,108 +632,10 @@ class WarehouseFileService:
             boxes = self.boxes.list_by_receipt_id(warehouse_receipt_id)
         else:
             boxes = self.boxes.list_by_waybill(waybill_id)
-        if not boxes:
-            raise bad_request("warehouse_boxes_required")
-
-        old_total_volume = sum((item.volume or Decimal("0.000") for item in boxes), Decimal("0.000")).quantize(
-            DECIMAL_001,
-            rounding=ROUND_HALF_UP,
-        )
-        total_weight = sum((item.weight or Decimal("0.000") for item in boxes), Decimal("0.000")).quantize(
-            DECIMAL_001,
-            rounding=ROUND_HALF_UP,
-        )
-        base_volumes = {box.id: _box_original_volume(box) for box in boxes}
-        original_total_volume = sum(base_volumes.values(), Decimal("0.000")).quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
-        if original_total_volume <= 0:
-            raise bad_request("warehouse_volume_required")
-
-        fixed_boxes = [box for box in boxes if len(box.items or []) > 1]
-        adjustable_boxes = [box for box in boxes if len(box.items or []) <= 1]
-        fixed_total_volume = sum((base_volumes[box.id] for box in fixed_boxes), Decimal("0.000")).quantize(
-            DECIMAL_001,
-            rounding=ROUND_HALF_UP,
-        )
-        adjustable_base_total = sum((base_volumes[box.id] for box in adjustable_boxes), Decimal("0.000")).quantize(
-            DECIMAL_001,
-            rounding=ROUND_HALF_UP,
-        )
-        adjustable_target_volume = (target_volume - fixed_total_volume).quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
-        if adjustable_target_volume < 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "error_code": "target_volume_less_than_fixed_boxes",
-                    "message": "目标方数小于一箱多件箱号的原始固定方数，无法只调整一箱一件箱号。",
-                    "target_volume": str(target_volume),
-                    "fixed_total_volume": str(fixed_total_volume),
-                    "original_total_volume": str(original_total_volume),
-                },
-            )
-        if adjustable_target_volume > 0 and adjustable_base_total <= 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "error_code": "warehouse_adjustable_volume_required",
-                    "message": "没有可用于等比调整的一箱一件箱号。",
-                    "target_volume": str(target_volume),
-                    "fixed_total_volume": str(fixed_total_volume),
-                    "adjustable_total_volume": str(adjustable_base_total),
-                },
-            )
-
-        scaled_volumes = _scale_box_base_volumes_to_target(adjustable_boxes, base_volumes, adjustable_target_volume)
-        ratio = adjustable_target_volume / adjustable_base_total if adjustable_base_total > 0 else Decimal("0.000")
-        adjustable_box_ids = {box.id for box in adjustable_boxes}
-        recalculated_at = datetime.now(UTC).isoformat()
-        touched_receipt_ids = {box.warehouse_receipt_id for box in boxes if box.warehouse_receipt_id is not None}
-        for box in boxes:
-            old_volume = box.volume or Decimal("0.000")
-            new_volume = scaled_volumes.get(box.id, base_volumes[box.id])
-            box.volume = new_volume
-            box.weight_volume_ratio = (
-                ((box.weight or Decimal("0.000")) / new_volume).quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
-                if new_volume > 0
-                else Decimal("0.000")
-            )
-            raw_data = dict(box.raw_data or {})
-            raw_data["volume_recalculation"] = {
-                "source": "target_volume_fit",
-                "base_volume": str(base_volumes[box.id]),
-                "old_volume": str(old_volume.quantize(DECIMAL_001, rounding=ROUND_HALF_UP)),
-                "new_volume": str(new_volume),
-                "calculated_volume_info": _calculated_volume_info(box, new_volume),
-                "old_total_volume": str(old_total_volume),
-                "original_total_volume": str(original_total_volume),
-                "target_volume": str(target_volume),
-                "fixed_total_volume": str(fixed_total_volume),
-                "adjustable_target_volume": str(adjustable_target_volume),
-                "ratio": str(ratio.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)),
-                "adjustable": box.id in adjustable_box_ids,
-                "recalculated_at": recalculated_at,
-            }
-            box.raw_data = raw_data
-
-        for receipt_id in touched_receipt_ids:
-            self._refresh_receipt_totals(self.boxes.get_receipt_by_id(receipt_id))
-        self.db.commit()
-        updated_boxes = self.boxes.list_by_waybill(waybill_id)
-        new_total_volume = sum((item.volume or Decimal("0.000") for item in updated_boxes), Decimal("0.000")).quantize(
-            DECIMAL_001,
-            rounding=ROUND_HALF_UP,
-        )
-        return BoxVolumeRecalculationResult(
+        return self._recalculate_box_volume_set(
+            boxes=boxes,
             target_volume=target_volume,
-            total_weight=total_weight,
-            original_total_volume=original_total_volume,
-            old_total_volume=old_total_volume,
-            fixed_total_volume=fixed_total_volume,
-            adjustable_total_volume=adjustable_base_total,
-            new_total_volume=new_total_volume,
-            adjusted=new_total_volume != old_total_volume,
-            adjusted_box_count=len(adjustable_boxes),
-            fixed_box_count=len(fixed_boxes),
-            boxes=updated_boxes,
+            result_boxes_loader=lambda: self.boxes.list_by_waybill(waybill_id),
         )
 
     def recalculate_prebooking_box_volumes(
@@ -527,9 +648,6 @@ class WarehouseFileService:
         PermissionService.assert_waybill_write(current_user)
         if prebooking.status != "draft":
             raise bad_request("prebooking_not_editable")
-        target_volume = target_volume.quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
-        if target_volume <= 0:
-            raise bad_request("target_volume_required")
 
         if warehouse_receipt_id is not None:
             receipt = self.boxes.get_receipt_by_id(warehouse_receipt_id)
@@ -538,6 +656,40 @@ class WarehouseFileService:
             boxes = self.boxes.list_by_receipt_id(warehouse_receipt_id)
         else:
             boxes = self.boxes.list_by_prebooking(prebooking.id)
+        return self._recalculate_box_volume_set(
+            boxes=boxes,
+            target_volume=target_volume,
+            result_boxes_loader=lambda: self.boxes.list_by_prebooking(prebooking.id),
+        )
+
+    def recalculate_unbound_receipt_box_volumes(
+        self,
+        receipt_id: int,
+        target_volume: Decimal,
+        current_user: User,
+    ) -> BoxVolumeRecalculationResult:
+        PermissionService.assert_waybill_write(current_user)
+        receipt = self.boxes.get_receipt_by_id(receipt_id)
+        if receipt is None:
+            raise bad_request("warehouse_receipt_not_found")
+        if receipt.waybill_id is not None or receipt.prebooking_id is not None:
+            raise bad_request("warehouse_receipt_not_unbound")
+        return self._recalculate_box_volume_set(
+            boxes=self.boxes.list_by_receipt_id(receipt_id),
+            target_volume=target_volume,
+            result_boxes_loader=lambda: self.boxes.list_by_receipt_id(receipt_id),
+        )
+
+    def _recalculate_box_volume_set(
+        self,
+        *,
+        boxes: list[Box],
+        target_volume: Decimal,
+        result_boxes_loader: Callable[[], list[Box]],
+    ) -> BoxVolumeRecalculationResult:
+        target_volume = target_volume.quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
+        if target_volume <= 0:
+            raise bad_request("target_volume_required")
         if not boxes:
             raise bad_request("warehouse_boxes_required")
 
@@ -623,7 +775,7 @@ class WarehouseFileService:
         for receipt_id in touched_receipt_ids:
             self._refresh_receipt_totals(self.boxes.get_receipt_by_id(receipt_id))
         self.db.commit()
-        updated_boxes = self.boxes.list_by_prebooking(prebooking.id)
+        updated_boxes = result_boxes_loader()
         new_total_volume = sum((item.volume or Decimal("0.000") for item in updated_boxes), Decimal("0.000")).quantize(
             DECIMAL_001,
             rounding=ROUND_HALF_UP,
@@ -664,20 +816,7 @@ class WarehouseFileService:
         if not warehouse_no:
             raise bad_request("warehouse_no_required")
 
-        forced_box_nos = {item.strip() for item in force_move_box_nos or [] if item and item.strip()}
         skipped_conflict_box_nos = {item.strip() for item in skip_conflict_box_nos or [] if item and item.strip()}
-        conflicts = self._upload_conflicts(parse_result.boxes, waybill, warehouse_no, forced_box_nos)
-        conflicts = [item for item in conflicts if item.box_no not in skipped_conflict_box_nos]
-        if conflicts:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "error_code": "warehouse_box_conflicts",
-                    "message": "部分外箱条码已绑定到其他提单入仓号",
-                    "conflicts": [item.model_dump() for item in conflicts],
-                },
-            )
-
         bindable_boxes = [item for item in parse_result.boxes if item.box_no not in skipped_conflict_box_nos]
         if not bindable_boxes:
             raise bad_request("warehouse_file_no_bindable_boxes")
@@ -686,6 +825,16 @@ class WarehouseFileService:
             warehouse_no=warehouse_no,
             parse_result=parse_result,
             uploaded_box_nos=[item.box_no for item in bindable_boxes],
+        )
+        target_receipt = self.boxes.get_receipt_by_warehouse_no(warehouse_no)
+        if target_receipt is not None and target_receipt.waybill_id not in (None, waybill.id):
+            raise bad_request("warehouse_receipt_bound_to_other_waybill")
+        if target_receipt is not None and target_receipt.prebooking_id is not None:
+            raise bad_request("warehouse_receipt_bound_to_prebooking")
+        self._apply_conflict_box_renames(
+            bindable_boxes,
+            target_receipt=target_receipt,
+            target_warehouse_no=warehouse_no,
         )
 
         file_hash = hashlib.sha256(content).hexdigest()
@@ -698,6 +847,7 @@ class WarehouseFileService:
                 file_hash=file_hash,
                 bound_waybill_id=waybill_id,
                 uploaded_by=current_user.id,
+                uploaded_at=datetime.now(UTC),
             )
         )
 
@@ -716,6 +866,7 @@ class WarehouseFileService:
             file_name=file_name,
             warehouse_no=warehouse_no,
             document_id=document.id,
+            uploaded_at=document.uploaded_at,
             success_count=len(bindable_boxes),
             skipped_count=parse_result.skipped_count,
             errors=parse_result.errors,
@@ -741,7 +892,6 @@ class WarehouseFileService:
         if not warehouse_no:
             raise bad_request("warehouse_no_required")
 
-        parsed_by_no = {item.box_no: item for item in parse_result.boxes}
         receipt = self.boxes.get_receipt_by_warehouse_no(warehouse_no)
         if receipt is not None and receipt.waybill_id is not None:
             raise bad_request("warehouse_receipt_bound_to_waybill")
@@ -750,34 +900,16 @@ class WarehouseFileService:
         if receipt is not None and receipt.prebooking_id not in (None, prebooking.id):
             raise bad_request("warehouse_receipt_bound_to_other_prebooking")
 
-        existing_by_no = {box.box_no: box for box in self.boxes.list_by_box_nos(list(parsed_by_no))}
-        conflicts = []
-        for box in existing_by_no.values():
-            if box.warehouse_receipt_id is None:
-                continue
-            if receipt is not None and box.warehouse_receipt_id == receipt.id:
-                continue
-            conflicts.append(
-                {
-                    "box_no": box.box_no,
-                    "current_waybill_id": box.current_waybill_id,
-                    "current_warehouse_no": box.warehouse_receipt.warehouse_no if box.warehouse_receipt else None,
-                }
-            )
-        if conflicts:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "error_code": "prebooking_warehouse_box_conflicts",
-                    "message": "部分外箱条码已属于其他入仓号，请先转移后再上传。",
-                    "conflicts": conflicts,
-                },
-            )
         assert_warehouse_upload_integrity(
             file_name=file_name,
             warehouse_no=warehouse_no,
             parse_result=parse_result,
             uploaded_box_nos=[item.box_no for item in parse_result.boxes],
+        )
+        self._apply_conflict_box_renames(
+            parse_result.boxes,
+            target_receipt=receipt,
+            target_warehouse_no=warehouse_no,
         )
 
         file_hash = hashlib.sha256(content).hexdigest()
@@ -789,6 +921,7 @@ class WarehouseFileService:
                 file_hash=file_hash,
                 bound_waybill_id=None,
                 uploaded_by=current_user.id,
+                uploaded_at=datetime.now(UTC),
             )
         )
 
@@ -810,6 +943,7 @@ class WarehouseFileService:
             receipt.prebooking_id = prebooking.id
             receipt.source_document_id = document.id
             receipt.uploaded_by = current_user.id
+            receipt.display_order = None
 
         self._sync_prebooking_receipt_boxes(receipt, document, parse_result.boxes)
         self._refresh_receipt_totals(receipt)
@@ -819,6 +953,7 @@ class WarehouseFileService:
             file_name=file_name,
             warehouse_no=warehouse_no,
             document_id=document.id,
+            uploaded_at=document.uploaded_at,
             success_count=len(parse_result.boxes),
             skipped_count=parse_result.skipped_count,
             errors=parse_result.errors,
@@ -856,40 +991,16 @@ class WarehouseFileService:
         if receipt is not None and receipt.prebooking_id is not None:
             raise bad_request("warehouse_receipt_bound_to_prebooking")
 
-        parsed_by_no = {item.box_no: item for item in parse_result.boxes}
-        existing_by_no = {box.box_no: box for box in self.boxes.list_by_box_nos(list(parsed_by_no))}
-        conflicts = []
-        for box in existing_by_no.values():
-            if box.warehouse_receipt_id is not None and (receipt is None or box.warehouse_receipt_id != receipt.id):
-                conflicts.append(
-                    {
-                        "box_no": box.box_no,
-                        "current_waybill_id": box.current_waybill_id,
-                        "current_warehouse_no": box.warehouse_receipt.warehouse_no if box.warehouse_receipt else None,
-                    }
-                )
-            elif box.current_waybill_id is not None:
-                conflicts.append(
-                    {
-                        "box_no": box.box_no,
-                        "current_waybill_id": box.current_waybill_id,
-                        "current_warehouse_no": box.warehouse_receipt.warehouse_no if box.warehouse_receipt else None,
-                    }
-                )
-        if conflicts:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "error_code": "unbound_upload_box_conflicts",
-                    "message": "部分外箱条码已绑定到提单，请先从原提单转移到未绑定箱号池后再覆盖上传。",
-                    "conflicts": conflicts,
-                },
-            )
         assert_warehouse_upload_integrity(
             file_name=file_name,
             warehouse_no=warehouse_no,
             parse_result=parse_result,
             uploaded_box_nos=[item.box_no for item in parse_result.boxes],
+        )
+        self._apply_conflict_box_renames(
+            parse_result.boxes,
+            target_receipt=receipt,
+            target_warehouse_no=warehouse_no,
         )
 
         file_hash = hashlib.sha256(content).hexdigest()
@@ -901,6 +1012,7 @@ class WarehouseFileService:
                 file_hash=file_hash,
                 bound_waybill_id=None,
                 uploaded_by=current_user.id,
+                uploaded_at=datetime.now(UTC),
             )
         )
 
@@ -935,6 +1047,7 @@ class WarehouseFileService:
             file_name=file_name,
             warehouse_no=warehouse_no,
             document_id=document.id,
+            uploaded_at=document.uploaded_at,
             success_count=len(parse_result.boxes),
             skipped_count=parse_result.skipped_count,
             errors=parse_result.errors,
@@ -964,6 +1077,7 @@ class WarehouseFileService:
 
         receipt.waybill_id = waybill.id
         receipt.prebooking_id = None
+        receipt.display_order = None
         receipt.uploaded_by = receipt.uploaded_by or current_user.id
         for box in self.boxes.list_by_receipt_id(receipt.id):
             box.current_waybill_id = waybill.id
@@ -1001,6 +1115,7 @@ class WarehouseFileService:
             raise bad_request("warehouse_receipt_bound_to_other_prebooking")
 
         receipt.prebooking_id = prebooking.id
+        receipt.display_order = None
         receipt.uploaded_by = receipt.uploaded_by or current_user.id
         for box in self.boxes.list_by_receipt_id(receipt.id):
             box.current_waybill_id = None
@@ -1175,6 +1290,97 @@ class WarehouseFileService:
             )
         return conflicts
 
+    def _apply_conflict_box_renames(
+        self,
+        parsed_boxes: list[ParsedWarehouseBox],
+        *,
+        target_receipt: WarehouseReceipt | None,
+        target_warehouse_no: str,
+    ) -> None:
+        if not parsed_boxes:
+            return
+
+        source_rows = self.boxes.list_conflicting_boxes([item.box_no for item in parsed_boxes], target_warehouse_no)
+        if not source_rows:
+            return
+
+        source_by_box_no: dict[str, tuple[Box, AirWaybill | None, WarehouseReceipt | None]] = {}
+        target_receipt_id = target_receipt.id if target_receipt is not None else None
+        for box, current_waybill, current_receipt in source_rows:
+            box_receipt_id = getattr(box, "warehouse_receipt_id", None)
+            box_waybill_id = getattr(box, "current_waybill_id", None)
+            if box_receipt_id is None and current_receipt is not None:
+                box_receipt_id = current_receipt.id
+            if box_waybill_id is None and current_waybill is not None:
+                box_waybill_id = current_waybill.id
+            if target_receipt_id is not None and box_receipt_id == target_receipt_id:
+                continue
+            if box_receipt_id is None and box_waybill_id is None:
+                continue
+            source_by_box_no.setdefault(box.box_no, (box, current_waybill, current_receipt))
+        if not source_by_box_no:
+            return
+
+        reusable_by_original: dict[str, Box] = {}
+        if target_receipt_id is not None:
+            for box in self.boxes.list_by_receipt_id(target_receipt_id):
+                conflict = _box_conflict_from_raw(box.raw_data)
+                original_box_no = conflict.get("original_box_no") if conflict else None
+                if isinstance(original_box_no, str) and original_box_no:
+                    reusable_by_original.setdefault(original_box_no, box)
+
+        reserved_names = {item.box_no for item in parsed_boxes}
+        for parsed in parsed_boxes:
+            source_row = source_by_box_no.get(parsed.box_no)
+            if source_row is None:
+                continue
+            original_box_no = parsed.box_no
+            reusable = reusable_by_original.get(original_box_no)
+            if reusable is not None:
+                renamed_box_no = reusable.box_no
+                conflict_info = _box_conflict_from_raw(reusable.raw_data) or self._build_box_conflict_info(
+                    original_box_no,
+                    renamed_box_no,
+                    *source_row,
+                )
+            else:
+                renamed_box_no = self._next_conflict_box_no(original_box_no, reserved_names)
+                conflict_info = self._build_box_conflict_info(original_box_no, renamed_box_no, *source_row)
+
+            parsed.box_no = renamed_box_no
+            parsed.raw_data = {**(parsed.raw_data or {}), BOX_CONFLICT_RAW_KEY: conflict_info}
+            for item in parsed.items:
+                item.raw_data = {**(item.raw_data or {}), BOX_CONFLICT_RAW_KEY: conflict_info}
+            reserved_names.add(renamed_box_no)
+
+    def _next_conflict_box_no(self, original_box_no: str, reserved_names: set[str]) -> str:
+        index = 1
+        while True:
+            suffix = f"-DUP{index}"
+            candidate = f"{original_box_no[: BOX_NO_MAX_LENGTH - len(suffix)]}{suffix}"
+            if candidate not in reserved_names and self.boxes.get_by_box_no(candidate) is None:
+                return candidate
+            index += 1
+
+    def _build_box_conflict_info(
+        self,
+        original_box_no: str,
+        renamed_box_no: str,
+        source_box: Box,
+        source_waybill: AirWaybill | None,
+        source_receipt: WarehouseReceipt | None,
+    ) -> dict[str, Any]:
+        source_document = getattr(source_receipt, "source_document", None) if source_receipt is not None else None
+        return {
+            "original_box_no": original_box_no,
+            "renamed_box_no": renamed_box_no,
+            "waybill_id": source_waybill.id if source_waybill else getattr(source_box, "current_waybill_id", None),
+            "waybill_no": source_waybill.waybill_no if source_waybill else None,
+            "warehouse_receipt_id": source_receipt.id if source_receipt else getattr(source_box, "warehouse_receipt_id", None),
+            "warehouse_no": source_receipt.warehouse_no if source_receipt else None,
+            "source_file_name": source_document.file_name if source_document else None,
+        }
+
     def _ensure_receipt(
         self,
         warehouse_no: str,
@@ -1204,6 +1410,7 @@ class WarehouseFileService:
         else:
             receipt.waybill_id = waybill.id
             receipt.prebooking_id = None
+            receipt.display_order = None
             if document is not None:
                 receipt.source_document_id = document.id
                 receipt.uploaded_by = current_user.id
@@ -1457,6 +1664,7 @@ class WarehouseFileService:
         prebooking_status: str | None,
         prebooking_planned_flight_date: date | None,
         source_file_name: str | None,
+        source_uploaded_at: datetime | None,
         box_count: int,
     ) -> WarehouseReceiptListOut:
         prebooking_label = None
@@ -1479,6 +1687,8 @@ class WarehouseFileService:
             weight_volume_ratio=receipt.weight_volume_ratio,
             channel_tags=list(receipt.channel_tags or []),
             box_count=box_count,
+            display_order=receipt.display_order,
+            uploaded_at=source_uploaded_at or receipt.created_at,
             created_at=receipt.created_at,
             updated_at=receipt.updated_at,
         )
@@ -1534,7 +1744,7 @@ def parse_warehouse_xlsx(file_name: str, content: bytes) -> WarehouseFileParseRe
         raise bad_request("warehouse_file_missing_header")
 
     column_map = _build_column_map(header_values)
-    missing = [field for field in REQUIRED_COLUMNS if field not in column_map]
+    missing = [field for field in REQUIRED_COLUMNS if field != "quantity" and field not in column_map]
     if missing:
         raise bad_request(f"warehouse_file_missing_columns:{','.join(missing)}")
 
@@ -1572,7 +1782,7 @@ def parse_warehouse_xlsx(file_name: str, content: bytes) -> WarehouseFileParseRe
             is_continuation_row = raw_box_no is None
             warehouse_waybill_no = _optional_text(values, column_map["warehouse_waybill_no"])
             goods_name = _optional_text(values, column_map["goods_name"])
-            quantity = _parse_quantity(values, column_map["quantity"])
+            quantity = _parse_quantity(values, column_map.get("quantity"))
             weight = _parse_decimal_cell(values, column_map["weight"], "重量")
             original_volume_info = _optional_text(values, column_map["volume"])
             original_weight_volume_ratio = _optional_column_text(values, column_map, "original_weight_volume_ratio")
@@ -1598,7 +1808,7 @@ def parse_warehouse_xlsx(file_name: str, content: bytes) -> WarehouseFileParseRe
                 box_no=box_no,
                 warehouse_waybill_no=warehouse_waybill_no,
                 goods_name=goods_name,
-                quantity=0,
+                quantity=None,
                 weight=Decimal("0.000"),
                 original_volume_info=original_volume_info,
                 original_weight_volume_ratio=original_weight_volume_ratio,
@@ -1612,7 +1822,8 @@ def parse_warehouse_xlsx(file_name: str, content: bytes) -> WarehouseFileParseRe
             box_order.append(box_no)
 
         parsed_box.items.append(item)
-        parsed_box.quantity += quantity
+        if quantity is not None:
+            parsed_box.quantity = (parsed_box.quantity or 0) + quantity
         parsed_box.weight = (parsed_box.weight + weight).quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
         if parsed_box.original_volume_info is None and original_volume_info:
             parsed_box.original_volume_info = original_volume_info
@@ -1969,8 +2180,12 @@ def _optional_column_text(values: list[Any], column_map: dict[str, int], field: 
     return _optional_text(values, index) if index is not None else None
 
 
-def _parse_quantity(values: list[Any], index: int) -> int:
+def _parse_quantity(values: list[Any], index: int | None) -> int | None:
+    if index is None:
+        return None
     raw = _value_at(values, index)
+    if raw is None or _clean_text(raw) == "":
+        return None
     decimal = _to_decimal(raw, "数量")
     if decimal <= 0:
         raise ValueError("数量必须大于 0")
@@ -2031,3 +2246,10 @@ def _raw_json_value(value: Any) -> Any:
     if isinstance(value, Decimal):
         return str(value)
     return value
+
+
+def _box_conflict_from_raw(raw_data: Any) -> dict[str, Any] | None:
+    if not isinstance(raw_data, dict):
+        return None
+    conflict = raw_data.get(BOX_CONFLICT_RAW_KEY)
+    return conflict if isinstance(conflict, dict) else None

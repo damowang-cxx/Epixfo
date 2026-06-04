@@ -33,6 +33,8 @@ class WarehouseReceiptOut(BaseModel):
     total_volume: Decimal | None = None
     weight_volume_ratio: Decimal | None = None
     channel_tags: list[str] = Field(default_factory=list)
+    display_order: int | None = None
+    uploaded_at: datetime
     created_at: datetime
     updated_at: datetime
 
@@ -54,12 +56,29 @@ class WarehouseReceiptListOut(BaseModel):
     weight_volume_ratio: Decimal | None = None
     channel_tags: list[str] = Field(default_factory=list)
     box_count: int
+    display_order: int | None = None
+    uploaded_at: datetime
     created_at: datetime
     updated_at: datetime
 
 
 class WarehouseReceiptBindRequest(BaseModel):
     target_waybill_id: int
+
+
+class WarehouseReceiptOrderRequest(BaseModel):
+    receipt_ids: list[int] = Field(default_factory=list)
+
+    @property
+    def unique_receipt_ids(self) -> list[int]:
+        seen: set[int] = set()
+        result: list[int] = []
+        for receipt_id in self.receipt_ids:
+            if receipt_id in seen:
+                continue
+            seen.add(receipt_id)
+            result.append(receipt_id)
+        return result
 
 
 class WarehouseReceiptBindPrebookingRequest(BaseModel):
@@ -80,6 +99,16 @@ class BoxItemOut(BaseModel):
     raw_data: dict[str, Any]
     created_at: datetime
     updated_at: datetime
+
+
+class BoxConflictInfo(BaseModel):
+    original_box_no: str
+    renamed_box_no: str
+    waybill_id: int | None = None
+    waybill_no: str | None = None
+    warehouse_receipt_id: int | None = None
+    warehouse_no: str | None = None
+    source_file_name: str | None = None
 
 
 class BoxOut(BaseModel):
@@ -105,6 +134,7 @@ class BoxOut(BaseModel):
     unbound_reason: str | None = None
     unbound_remark: str | None = None
     raw_data: dict[str, Any]
+    box_conflict: BoxConflictInfo | None = None
     document: BoxDocumentOut | None = None
     warehouse_receipt: WarehouseReceiptOut | None = None
     items: list[BoxItemOut] = Field(default_factory=list)
@@ -116,6 +146,12 @@ class BoxUpdate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     box_no: str | None = Field(default=None, min_length=1, max_length=128)
+    warehouse_waybill_no: str | None = Field(default=None, max_length=128)
+    goods_name: str | None = None
+    quantity: int | None = Field(default=None, ge=0)
+    weight: Decimal | None = Field(default=None, ge=0)
+    volume: Decimal | None = Field(default=None, ge=0)
+    weight_volume_ratio: Decimal | None = Field(default=None, ge=0)
     is_general_cargo: bool | None = None
 
 
@@ -171,6 +207,7 @@ class WarehouseFileUploadResult(BaseModel):
     file_name: str
     warehouse_no: str
     document_id: int
+    uploaded_at: datetime
     success_count: int
     skipped_count: int
     errors: list[WarehouseFileImportError]

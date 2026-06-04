@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
-import { Calculator, Check, ChevronDown, ChevronRight, ListChecks, Pencil, Plus, Tag, Trash2, X } from "lucide-react";
+import { Calculator, ChevronDown, ChevronRight, ListChecks, Pencil, Plus, Tag, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import { formatCalculatedVolumeInfo, formatCbm } from "@/lib/box-volume";
 import { ApiError, apiClient } from "@/lib/client-api";
 import { cn, compact } from "@/lib/utils";
 import type { BoxBatchOperationResult, BoxVolumeRecalculationResult, CargoBox, PageResponse, Waybill } from "@/lib/types";
@@ -21,6 +22,10 @@ type NewBoxDraft = {
   weight: string;
   volume: string;
   is_general_cargo: boolean;
+};
+
+type BoxEditDraft = NewBoxDraft & {
+  weight_volume_ratio: string;
 };
 
 type TransferTargetType = "waybill" | "unbound";
@@ -50,6 +55,19 @@ function emptyNewBoxDraft(): NewBoxDraft {
   };
 }
 
+function boxEditDraftFrom(item: CargoBox): BoxEditDraft {
+  return {
+    box_no: item.box_no || "",
+    warehouse_waybill_no: item.warehouse_waybill_no ? String(item.warehouse_waybill_no) : "",
+    goods_name: item.goods_name ? String(item.goods_name) : "",
+    quantity: item.quantity === null || item.quantity === undefined ? "" : String(item.quantity),
+    weight: item.weight === null || item.weight === undefined ? "" : String(item.weight),
+    volume: item.volume === null || item.volume === undefined ? "" : String(item.volume),
+    weight_volume_ratio: item.weight_volume_ratio === null || item.weight_volume_ratio === undefined ? "" : String(item.weight_volume_ratio),
+    is_general_cargo: Boolean(item.is_general_cargo)
+  };
+}
+
 function formatDecimal(value?: string | number | null) {
   if (value === null || value === undefined || value === "") return "-";
   const num = Number(value);
@@ -57,42 +75,25 @@ function formatDecimal(value?: string | number | null) {
   return num.toFixed(3).replace(/\.?0+$/, "");
 }
 
-function formatCbm(value?: string | number | null) {
-  return formatDecimal(value);
+function conflictTitle(conflict?: CargoBox["box_conflict"] | null) {
+  if (!conflict) return "";
+  const receiptName = conflict.source_file_name || conflict.warehouse_no || "-";
+  if (conflict.waybill_no) {
+    return `与提单 ${conflict.waybill_no} 的入仓号文件 ${receiptName} 冲突`;
+  }
+  return `与入仓号文件 ${receiptName} 冲突`;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function parseDimensions(value?: string | null) {
-  if (!value) return null;
-  const match = value.replace(/,/g, "").match(/(\d+(?:\.\d+)?)\s*(?:\*|x|X|×)\s*(\d+(?:\.\d+)?)\s*(?:\*|x|X|×)\s*(\d+(?:\.\d+)?)/);
-  if (!match) return null;
-  const dimensions = match.slice(1, 4).map(Number);
-  return dimensions.every((item) => Number.isFinite(item) && item > 0) ? dimensions : null;
-}
-
-function formatDimension(value: number) {
-  const rounded = Math.round(value * 100) / 100;
-  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2).replace(/\.?0+$/, "");
-}
-
-function formatCalculatedVolumeInfo(item: CargoBox) {
-  const recalculation = isRecord(item.raw_data?.volume_recalculation) ? item.raw_data.volume_recalculation : null;
-  const storedInfo = recalculation?.calculated_volume_info;
-  if (typeof storedInfo === "string" && storedInfo.trim()) return storedInfo.trim();
-
-  const dimensions = parseDimensions(item.original_volume_info);
-  const volume = Number(item.volume);
-  if (!dimensions || !Number.isFinite(volume) || volume <= 0) return formatCbm(item.volume);
-
-  const originalVolume = (dimensions[0] * dimensions[1] * dimensions[2]) / 1_000_000;
-  if (!Number.isFinite(originalVolume) || originalVolume <= 0) return formatCbm(item.volume);
-
-  const scale = Math.cbrt(volume / originalVolume);
-  const dimensionText = dimensions.map((value) => formatDimension(value * scale)).join("*");
-  return `${dimensionText}(${formatCbm(item.volume)})`;
+function ConflictWaybillBadge({ conflict }: { conflict?: CargoBox["box_conflict"] | null }) {
+  if (!conflict) return null;
+  return (
+    <span
+      className="inline-flex rounded bg-violet-100 px-1.5 py-0.5 text-xs font-semibold text-violet-700"
+      title={conflictTitle(conflict)}
+    >
+      冲突运单
+    </span>
+  );
 }
 
 function optionalText(value: string) {
@@ -103,6 +104,21 @@ function optionalText(value: string) {
 function optionalNumber(value: string) {
   const trimmed = value.trim();
   return trimmed ? Number(trimmed) : undefined;
+}
+
+function nullableText(value: string) {
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
+function nullableNumber(value: string) {
+  const trimmed = value.trim();
+  return trimmed ? Number(trimmed) : null;
+}
+
+function nullableDecimalText(value: string) {
+  const trimmed = value.trim();
+  return trimmed || null;
 }
 
 function parseBatchSelectText(value: string) {
@@ -189,7 +205,7 @@ export function CargoBoxesTable({
   onMessage
 }: CargoBoxesTableProps) {
   const [editingBoxId, setEditingBoxId] = useState<number | null>(null);
-  const [boxNoDraft, setBoxNoDraft] = useState("");
+  const [boxEditDraft, setBoxEditDraft] = useState<BoxEditDraft | null>(null);
   const [newBoxOpen, setNewBoxOpen] = useState(false);
   const [newBoxDraft, setNewBoxDraft] = useState<NewBoxDraft>(() => emptyNewBoxDraft());
   const [saving, setSaving] = useState(false);
@@ -225,6 +241,7 @@ export function CargoBoxesTable({
   );
   const boxIds = useMemo(() => boxes.map((item) => item.id), [boxes]);
   const boxByNo = useMemo(() => new Map(boxes.map((item) => [item.box_no, item])), [boxes]);
+  const editingBox = useMemo(() => boxes.find((item) => item.id === editingBoxId) || null, [boxes, editingBoxId]);
   const batchSelectDraft = useMemo(() => parseBatchSelectText(batchSelectText), [batchSelectText]);
   const warehouseTotals = useMemo(
     () =>
@@ -253,14 +270,18 @@ export function CargoBoxesTable({
     setNewBoxDraft((prev) => ({ ...prev, [key]: value }));
   }
 
+  function updateBoxEditDraft<K extends keyof BoxEditDraft>(key: K, value: BoxEditDraft[K]) {
+    setBoxEditDraft((prev) => (prev ? { ...prev, [key]: value } : prev));
+  }
+
   function startEditing(item: CargoBox) {
     setEditingBoxId(item.id);
-    setBoxNoDraft(item.box_no);
+    setBoxEditDraft(boxEditDraftFrom(item));
   }
 
   function cancelEditing() {
     setEditingBoxId(null);
-    setBoxNoDraft("");
+    setBoxEditDraft(null);
   }
 
   function cancelNewBox() {
@@ -355,9 +376,9 @@ export function CargoBoxesTable({
     }
   }
 
-  async function saveBoxNo(item: CargoBox) {
-    if (!apiBasePath) return;
-    const nextBoxNo = boxNoDraft.trim();
+  async function saveBoxEdit() {
+    if (!apiBasePath || !editingBox || !boxEditDraft) return;
+    const nextBoxNo = boxEditDraft.box_no.trim();
     if (!nextBoxNo) {
       onError?.("外箱条码不能为空。");
       return;
@@ -365,13 +386,26 @@ export function CargoBoxesTable({
 
     try {
       setSaving(true);
-      const updated = await apiClient.patch<CargoBox>(`${apiBasePath}/boxes/${item.id}`, {
-        box_no: nextBoxNo
-      });
+      const ratioDraft = boxEditDraft.weight_volume_ratio.trim();
+      const originalRatio = editingBox.weight_volume_ratio === null || editingBox.weight_volume_ratio === undefined ? "" : String(editingBox.weight_volume_ratio).trim();
+      const payload: Record<string, unknown> = {
+        box_no: nextBoxNo,
+        warehouse_waybill_no: nullableText(boxEditDraft.warehouse_waybill_no),
+        goods_name: nullableText(boxEditDraft.goods_name),
+        quantity: nullableNumber(boxEditDraft.quantity),
+        weight: nullableDecimalText(boxEditDraft.weight),
+        volume: nullableDecimalText(boxEditDraft.volume),
+        is_general_cargo: boxEditDraft.is_general_cargo
+      };
+      if (ratioDraft !== originalRatio) {
+        payload.weight_volume_ratio = nullableDecimalText(boxEditDraft.weight_volume_ratio);
+      }
+      const updated = await apiClient.patch<CargoBox>(`${apiBasePath}/boxes/${editingBox.id}`, payload);
       onBoxUpdated?.(updated);
+      onChanged?.();
       cancelEditing();
     } catch (error) {
-      onError?.(error instanceof Error ? error.message : "外箱条码更新失败。");
+      onError?.(error instanceof Error ? error.message : "箱号数据更新失败。");
     } finally {
       setSaving(false);
     }
@@ -638,38 +672,23 @@ export function CargoBoxesTable({
                       </TD>
                     )}
                     <TD className="min-w-64 font-medium">
-                      {editingBoxId === item.id ? (
-                        <div className="flex items-center gap-1">
-                          <Input
-                            className="h-8 min-w-32"
-                            value={boxNoDraft}
-                            onChange={(event) => setBoxNoDraft(event.target.value)}
-                            onKeyDown={(event) => {
-                              if (event.key === "Enter") void saveBoxNo(item);
-                              if (event.key === "Escape") cancelEditing();
-                            }}
-                          />
-                          <Button type="button" size="icon" variant="ghost" disabled={saving} onClick={() => void saveBoxNo(item)} aria-label="保存外箱条码">
-                            <Check className="h-4 w-4" />
-                          </Button>
-                          <Button type="button" size="icon" variant="ghost" disabled={saving} onClick={cancelEditing} aria-label="取消编辑外箱条码">
-                            <X className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-1">
-                          <Button type="button" size="icon" variant="ghost" onClick={() => toggleExpanded(item.id)} aria-label="展开箱内明细">
-                            {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                          </Button>
-                          <span>{item.box_no}</span>
-                          {item.is_general_cargo ? (
-                            <span className="rounded bg-amber-200 px-1.5 py-0.5 text-xs font-semibold text-amber-900">普货</span>
-                          ) : null}
-                        </div>
-                      )}
+                      <div className="flex items-center gap-1">
+                        <Button type="button" size="icon" variant="ghost" onClick={() => toggleExpanded(item.id)} aria-label="展开箱内明细">
+                          {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                        </Button>
+                        <span>{item.box_no}</span>
+                        {item.is_general_cargo ? (
+                          <span className="rounded bg-amber-200 px-1.5 py-0.5 text-xs font-semibold text-amber-900">普货</span>
+                        ) : null}
+                      </div>
                     </TD>
                     <TD>{item.items?.length || 0}</TD>
-                    <TD>{compact(item.warehouse_waybill_no)}</TD>
+                    <TD>
+                      <div className="flex flex-wrap items-center gap-1">
+                        <span>{compact(item.warehouse_waybill_no)}</span>
+                        <ConflictWaybillBadge conflict={item.box_conflict} />
+                      </div>
+                    </TD>
                     <TD>{compact(item.goods_name)}</TD>
                     <TD>{compact(item.quantity)}</TD>
                     <TD>{formatDecimal(item.weight)}</TD>
@@ -692,7 +711,7 @@ export function CargoBoxesTable({
                             <Tag className="h-4 w-4" />
                             {item.is_general_cargo ? "取消普货" : "普货"}
                           </Button>
-                          <Button type="button" size="icon" variant="ghost" onClick={() => startEditing(item)} aria-label="编辑外箱条码">
+                          <Button type="button" size="icon" variant="ghost" onClick={() => startEditing(item)} aria-label="编辑箱号数据">
                             <Pencil className="h-4 w-4" />
                           </Button>
                           <Button type="button" size="icon" variant="ghost" disabled={saving} onClick={() => void deleteBox(item)} aria-label="删除箱号">
@@ -719,7 +738,12 @@ export function CargoBoxesTable({
                             <TBody>
                               {item.items.map((detail) => (
                                 <TR key={detail.id}>
-                                  <TD>{compact(detail.warehouse_waybill_no)}</TD>
+                                  <TD>
+                                    <div className="flex flex-wrap items-center gap-1">
+                                      <span>{compact(detail.warehouse_waybill_no)}</span>
+                                      <ConflictWaybillBadge conflict={item.box_conflict} />
+                                    </div>
+                                  </TD>
                                   <TD>{compact(detail.goods_name)}</TD>
                                   <TD>{compact(detail.quantity)}</TD>
                                   <TD>{formatDecimal(detail.weight)}</TD>
@@ -741,6 +765,61 @@ export function CargoBoxesTable({
         </Table>
       )}
     </div>
+      <Dialog open={Boolean(editingBox && boxEditDraft)} onOpenChange={(open) => !open && cancelEditing()}>
+        <DialogContent className="w-[min(720px,calc(100vw-32px))]">
+          <DialogTitle className="pr-10 text-base font-semibold text-slate-900">编辑箱号数据</DialogTitle>
+          {boxEditDraft ? (
+            <div className="mt-3 space-y-4">
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="space-y-1 text-sm">
+                  <span className="text-slate-700">外箱条码</span>
+                  <Input value={boxEditDraft.box_no} onChange={(event) => updateBoxEditDraft("box_no", event.target.value)} />
+                </label>
+                <label className="space-y-1 text-sm">
+                  <span className="text-slate-700">仓库文件提单号</span>
+                  <Input value={boxEditDraft.warehouse_waybill_no} onChange={(event) => updateBoxEditDraft("warehouse_waybill_no", event.target.value)} />
+                </label>
+                <label className="space-y-1 text-sm md:col-span-2">
+                  <span className="text-slate-700">品名</span>
+                  <Input value={boxEditDraft.goods_name} onChange={(event) => updateBoxEditDraft("goods_name", event.target.value)} />
+                </label>
+                <label className="space-y-1 text-sm">
+                  <span className="text-slate-700">数量</span>
+                  <Input type="number" min="0" step="1" value={boxEditDraft.quantity} onChange={(event) => updateBoxEditDraft("quantity", event.target.value)} />
+                </label>
+                <label className="space-y-1 text-sm">
+                  <span className="text-slate-700">重量</span>
+                  <Input type="number" min="0" step="0.001" value={boxEditDraft.weight} onChange={(event) => updateBoxEditDraft("weight", event.target.value)} />
+                </label>
+                <label className="space-y-1 text-sm">
+                  <span className="text-slate-700">方数(CBM)</span>
+                  <Input type="number" min="0" step="0.001" value={boxEditDraft.volume} onChange={(event) => updateBoxEditDraft("volume", event.target.value)} />
+                </label>
+                <label className="space-y-1 text-sm">
+                  <span className="text-slate-700">重量/方</span>
+                  <Input type="number" min="0" step="0.001" value={boxEditDraft.weight_volume_ratio} onChange={(event) => updateBoxEditDraft("weight_volume_ratio", event.target.value)} />
+                </label>
+              </div>
+              <label className="flex items-center gap-2 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={boxEditDraft.is_general_cargo}
+                  onChange={(event) => updateBoxEditDraft("is_general_cargo", event.target.checked)}
+                />
+                普货
+              </label>
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="secondary" disabled={saving} onClick={cancelEditing}>
+                  取消
+                </Button>
+                <Button type="button" disabled={saving} onClick={() => void saveBoxEdit()}>
+                  保存
+                </Button>
+              </div>
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
       <Dialog open={batchSelectOpen} onOpenChange={(open) => (open ? setBatchSelectOpen(true) : closeBatchSelectDialog())}>
         <DialogContent className="w-[min(620px,calc(100vw-32px))]">
           <DialogTitle className="pr-10 text-base font-semibold text-slate-900">批量选中箱号</DialogTitle>

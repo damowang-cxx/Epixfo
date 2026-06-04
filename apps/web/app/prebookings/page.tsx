@@ -16,7 +16,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { CargoBoxesTable } from "@/components/waybills/cargo-boxes-table";
 import { WarehouseFileUploadButton } from "@/components/waybills/warehouse-file-upload-button";
 import { apiClient } from "@/lib/client-api";
-import { compact, formatOutboundDate } from "@/lib/utils";
+import { compact, formatDateTime, formatOutboundDate } from "@/lib/utils";
 import { formatWarehouseUploadMessage } from "@/lib/warehouse-upload";
 import type { CargoBox, CarrierAgent, PageResponse, WarehouseReceipt, Waybill, WaybillPrebooking } from "@/lib/types";
 
@@ -196,6 +196,7 @@ export default function PrebookingsPage() {
         totalWeight?: string | number | null;
         totalVolume?: string | number | null;
         weightVolumeRatio?: string | number | null;
+        uploadedAt?: string | null;
         channelTags: string[];
         boxes: CargoBox[];
       }
@@ -209,6 +210,7 @@ export default function PrebookingsPage() {
         totalWeight: receipt.total_weight,
         totalVolume: receipt.total_volume,
         weightVolumeRatio: receipt.weight_volume_ratio,
+        uploadedAt: receipt.uploaded_at,
         channelTags: channelTags(receipt.channel_tags),
         boxes: []
       });
@@ -226,6 +228,7 @@ export default function PrebookingsPage() {
           totalWeight: receipt.total_weight,
           totalVolume: receipt.total_volume,
           weightVolumeRatio: receipt.weight_volume_ratio,
+          uploadedAt: receipt.uploaded_at,
           channelTags: channelTags(receipt.channel_tags),
           boxes: []
         });
@@ -521,6 +524,7 @@ export default function PrebookingsPage() {
                           <span>总重量 {compact(group.totalWeight)}</span>
                           <span>总方数 {compact(group.totalVolume)}</span>
                           <span>重量/方 {compact(group.weightVolumeRatio)}</span>
+                          <span>上传 {formatDateTime(group.uploadedAt)}</span>
                         </div>
                       </div>
                       <div className="p-3">
@@ -614,6 +618,9 @@ export default function PrebookingsPage() {
                         <span className="block truncate font-medium">{receipt.warehouse_no}</span>
                         <span className={`block text-xs ${selectedReceipt ? "text-slate-200" : "text-slate-500"}`}>
                           箱数 {receipt.box_count ?? 0} / 重量 {formatDecimal(receipt.total_weight)} / 方数 {formatDecimal(receipt.total_volume)}
+                        </span>
+                        <span className={`block text-xs ${selectedReceipt ? "text-slate-200" : "text-slate-500"}`}>
+                          上传 {formatDateTime(receipt.uploaded_at)}
                         </span>
                       </span>
                       {tags.length ? (

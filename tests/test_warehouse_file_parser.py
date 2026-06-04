@@ -64,6 +64,40 @@ def test_parse_warehouse_xlsx_accepts_traditional_chinese_headers() -> None:
     assert result.boxes[0].volume == Decimal("0.120")
 
 
+def test_parse_warehouse_xlsx_allows_missing_quantity_column() -> None:
+    content = _xlsx_bytes(
+        [
+            ["box_no", "warehouse waybill no", "goods_name", "weight", "volume"],
+            ["BOX-NO-QTY", "WH-NO-QTY", "Shoes", 12, "60*50*40"],
+        ]
+    )
+
+    result = parse_warehouse_xlsx("warehouse.xlsx", content)
+
+    assert result.errors == []
+    assert len(result.boxes) == 1
+    assert result.boxes[0].box_no == "BOX-NO-QTY"
+    assert result.boxes[0].quantity is None
+    assert result.boxes[0].items[0].quantity is None
+    assert str(result.boxes[0].weight) == "12.000"
+    assert str(result.boxes[0].volume) == "0.120"
+
+
+def test_parse_warehouse_xlsx_allows_empty_quantity_cell() -> None:
+    content = _xlsx_bytes(
+        [
+            ["box_no", "warehouse waybill no", "goods_name", "quantity", "weight", "volume"],
+            ["BOX-EMPTY-QTY", "WH-EMPTY-QTY", "Shoes", "", 12, "60*50*40"],
+        ]
+    )
+
+    result = parse_warehouse_xlsx("warehouse.xlsx", content)
+
+    assert result.errors == []
+    assert result.boxes[0].quantity is None
+    assert result.boxes[0].items[0].quantity is None
+
+
 def test_parse_warehouse_xlsx_rejects_non_xlsx() -> None:
     with pytest.raises(HTTPException) as exc_info:
         parse_warehouse_xlsx("warehouse.csv", b"not excel")

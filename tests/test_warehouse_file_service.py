@@ -79,6 +79,7 @@ class FakeBoxRepository:
 
     def add_document(self, document: BoxDocument) -> BoxDocument:
         document.id = 99
+        document.uploaded_at = getattr(document, "uploaded_at", None) or datetime.now(UTC)
         self.document = document
         return document
 
@@ -94,6 +95,9 @@ class FakeBoxRepository:
             if box.current_waybill_id == waybill_id and box.id == box_id:
                 return box
         return None
+
+    def get_by_id(self, box_id: int):
+        return next((box for box in self.boxes_list if box.id == box_id), None)
 
     def get_by_box_no(self, box_no: str):
         return next((box for box in self.boxes_list if box.box_no == box_no), None)
@@ -114,6 +118,13 @@ class FakeBoxRepository:
 
     def list_by_receipt_id(self, receipt_id: int):
         return [box for box in self.boxes_list if box.warehouse_receipt_id == receipt_id]
+
+    def list_unbound_receipt_models_ordered(self):
+        return [
+            receipt
+            for receipt in self.receipts_by_no.values()
+            if receipt.waybill_id is None and getattr(receipt, "prebooking_id", None) is None
+        ]
 
     def get_receipt_by_id(self, receipt_id: int):
         for receipt in self.receipts_by_no.values():
@@ -352,25 +363,98 @@ def test_upload_unbound_file_reuses_receipt_without_binding_elsewhere(tmp_path) 
     assert service.db.committed is True
 
 
-def test_upload_unbound_file_rejects_already_bound_boxes(tmp_path) -> None:
+def test_upload_unbound_file_renames_conflicting_bound_boxes(tmp_path) -> None:
     waybill = SimpleNamespace(id=7, waybill_no="784-00000001", warehouse_no=None, updated_by=None)
     service = WarehouseFileService.__new__(WarehouseFileService)
     service.db = FakeDb()
     service.boxes = FakeBoxRepository()
     service.boxes.box.box_no = "DHL001"
-    service.boxes.box.warehouse_receipt = SimpleNamespace(warehouse_no="AMS-IN-001")
+    source_receipt = SimpleNamespace(id=77, warehouse_no="AMS-IN-001", source_document=SimpleNamespace(file_name="AMS-IN-001.xlsx"))
+    service.boxes.box.warehouse_receipt = source_receipt
+    service.boxes.conflict_rows = [(service.boxes.box, waybill, source_receipt)]
     service.waybills = FakeWaybillRepository(waybill)
     service._store_file = lambda file_name, file_hash, content: tmp_path / file_name
     user = SimpleNamespace(id=5, is_superuser=True, roles=[])
 
-    with pytest.raises(HTTPException) as exc_info:
-        service.upload_unbound_file("UNBOUND-IN-001.xlsx", _xlsx_bytes("DHL001"), user)
+    result = service.upload_unbound_file("UNBOUND-IN-001.xlsx", _xlsx_bytes("DHL001"), user)
 
-    assert exc_info.value.status_code == 409
-    assert exc_info.value.detail["error_code"] == "unbound_upload_box_conflicts"
-    assert exc_info.value.detail["conflicts"][0]["box_no"] == "DHL001"
-    assert service.boxes.document is None
-    assert service.db.added == []
+    assert result.success_count == 1
+    added_box = next(item for item in service.db.added if item.__class__.__name__ == "Box" and item.box_no == "DHL001-DUP1")
+    assert added_box.raw_data["box_conflict"]["original_box_no"] == "DHL001"
+    assert added_box.raw_data["box_conflict"]["renamed_box_no"] == "DHL001-DUP1"
+    assert added_box.raw_data["box_conflict"]["waybill_no"] == "784-00000001"
+    assert added_box.raw_data["box_conflict"]["warehouse_no"] == "AMS-IN-001"
+    assert added_box.raw_data["box_conflict"]["source_file_name"] == "AMS-IN-001.xlsx"
+    assert service.boxes.document is not None
+    assert service.db.committed is True
+
+
+def test_upload_unbound_file_reuses_existing_conflict_rename_for_same_receipt(tmp_path) -> None:
+    service = WarehouseFileService.__new__(WarehouseFileService)
+    service.db = FakeDb()
+    service.boxes = FakeBoxRepository()
+    service.waybills = FakeWaybillRepository(SimpleNamespace(id=7, waybill_no="784-00000001", warehouse_no=None, updated_by=None))
+    service._store_file = lambda file_name, file_hash, content: tmp_path / file_name
+    user = SimpleNamespace(id=5, is_superuser=True, roles=[])
+    receipt = WarehouseReceipt(
+        warehouse_no="UNBOUND-IN-001",
+        waybill_id=None,
+        prebooking_id=None,
+        total_quantity=1,
+        total_weight=Decimal("10.000"),
+        total_volume=Decimal("0.064"),
+        weight_volume_ratio=Decimal("156.250"),
+    )
+    receipt.id = 88
+    receipt.channel_tags = []
+    service.boxes.receipts_by_no[receipt.warehouse_no] = receipt
+    source_receipt = SimpleNamespace(id=77, warehouse_no="OLD-IN", source_document=SimpleNamespace(file_name="OLD-IN.xlsx"))
+    service.boxes.box.box_no = "DHL001"
+    service.boxes.box.warehouse_receipt_id = 77
+    service.boxes.box.current_waybill_id = None
+    service.boxes.conflict_rows = [(service.boxes.box, None, source_receipt)]
+    reusable_box = SimpleNamespace(
+        id=9,
+        box_no="DHL001-DUP1",
+        warehouse_receipt_id=88,
+        current_waybill_id=None,
+        status="unbound",
+        never_bound_direct_upload=True,
+        unbound_reason=None,
+        unbound_remark=None,
+        raw_data={
+            "box_conflict": {
+                "original_box_no": "DHL001",
+                "renamed_box_no": "DHL001-DUP1",
+                "warehouse_receipt_id": 77,
+                "warehouse_no": "OLD-IN",
+                "source_file_name": "OLD-IN.xlsx",
+            }
+        },
+        items=[],
+        document=None,
+        warehouse_receipt=receipt,
+        warehouse_waybill_no=None,
+        goods_name=None,
+        quantity=None,
+        weight=None,
+        original_volume_info=None,
+        original_weight_volume_ratio=None,
+        volume=None,
+        weight_volume_ratio=None,
+        source_row_number=None,
+        document_id=None,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    service.boxes.boxes_list.append(reusable_box)
+
+    service.upload_unbound_file("UNBOUND-IN-001.xlsx", _xlsx_bytes("DHL001"), user)
+
+    assert reusable_box.box_no == "DHL001-DUP1"
+    assert reusable_box.raw_data["box_conflict"]["original_box_no"] == "DHL001"
+    assert not [item for item in service.db.added if item.__class__.__name__ == "Box"]
+    assert service.db.committed is True
 
 
 def test_upload_unbound_file_rejects_prebooking_bound_receipt(tmp_path) -> None:
@@ -576,6 +660,141 @@ def test_update_box_toggles_general_cargo() -> None:
     assert service.db.committed is True
 
 
+def test_update_box_updates_data_fields_and_single_item() -> None:
+    waybill = SimpleNamespace(id=7, waybill_no="784-00000001", warehouse_no="AMS-IN-001", updated_by=None)
+    service = WarehouseFileService.__new__(WarehouseFileService)
+    service.db = FakeDb()
+    service.boxes = FakeBoxRepository()
+    service.waybills = FakeWaybillRepository(waybill)
+    receipt = WarehouseReceipt(
+        warehouse_no="AMS-IN-001",
+        waybill_id=7,
+        total_quantity=1,
+        total_weight=Decimal("10.000"),
+        total_volume=Decimal("1.000"),
+        weight_volume_ratio=Decimal("10.000"),
+    )
+    receipt.id = 88
+    service.boxes.receipts_by_no[receipt.warehouse_no] = receipt
+    service.boxes.box.warehouse_receipt = receipt
+    service.boxes.box.warehouse_waybill_no = "OLD-AWB"
+    service.boxes.box.goods_name = "Old goods"
+    service.boxes.box.quantity = 1
+    service.boxes.box.weight = Decimal("10.000")
+    service.boxes.box.volume = Decimal("1.000")
+    service.boxes.box.items = [
+        SimpleNamespace(
+            warehouse_waybill_no="OLD-AWB",
+            goods_name="Old goods",
+            quantity=1,
+            weight=Decimal("10.000"),
+            raw_data={},
+        )
+    ]
+    user = SimpleNamespace(id=5, is_superuser=True, roles=[])
+
+    result = service.update_box(
+        7,
+        4,
+        user,
+        fields_set={"warehouse_waybill_no", "goods_name", "quantity", "weight", "volume"},
+        warehouse_waybill_no=" NEW-AWB ",
+        goods_name=" New goods ",
+        quantity=3,
+        weight=Decimal("6.500"),
+        volume=Decimal("2.000"),
+    )
+
+    assert result.warehouse_waybill_no == "NEW-AWB"
+    assert result.goods_name == "New goods"
+    assert result.quantity == 3
+    assert result.weight == Decimal("6.500")
+    assert result.volume == Decimal("2.000")
+    assert result.weight_volume_ratio == Decimal("3.250")
+    assert result.items[0].warehouse_waybill_no == "NEW-AWB"
+    assert result.items[0].goods_name == "New goods"
+    assert result.items[0].quantity == 3
+    assert result.items[0].weight == Decimal("6.500")
+    assert service.db.committed is True
+
+
+def test_update_unbound_receipt_box_updates_box() -> None:
+    service = WarehouseFileService.__new__(WarehouseFileService)
+    service.db = FakeDb()
+    service.boxes = FakeBoxRepository()
+    service.waybills = FakeWaybillRepository(SimpleNamespace(id=7))
+    receipt = WarehouseReceipt(
+        warehouse_no="UNBOUND-IN-001",
+        waybill_id=None,
+        prebooking_id=None,
+        total_quantity=1,
+        total_weight=Decimal("1.000"),
+        total_volume=Decimal("1.000"),
+        weight_volume_ratio=Decimal("1.000"),
+    )
+    receipt.id = 88
+    service.boxes.receipts_by_no[receipt.warehouse_no] = receipt
+    service.boxes.box.current_waybill_id = None
+    service.boxes.box.status = "unbound"
+    service.boxes.box.warehouse_receipt = receipt
+    user = SimpleNamespace(id=5, is_superuser=True, roles=[])
+
+    result = service.update_unbound_receipt_box(
+        88,
+        4,
+        user,
+        fields_set={"goods_name", "quantity", "volume"},
+        goods_name="Bag",
+        quantity=8,
+        volume=Decimal("1.250"),
+    )
+
+    assert result.goods_name == "Bag"
+    assert result.quantity == 8
+    assert result.volume == Decimal("1.250")
+    assert service.db.committed is True
+
+
+def test_reorder_unbound_receipts_persists_requested_order_and_appends_missing() -> None:
+    service = WarehouseFileService.__new__(WarehouseFileService)
+    service.db = FakeDb()
+    service.boxes = FakeBoxRepository()
+    first = WarehouseReceipt(warehouse_no="IN-A", waybill_id=None, prebooking_id=None, total_quantity=0)
+    first.id = 1
+    second = WarehouseReceipt(warehouse_no="IN-B", waybill_id=None, prebooking_id=None, total_quantity=0)
+    second.id = 2
+    third = WarehouseReceipt(warehouse_no="IN-C", waybill_id=None, prebooking_id=None, total_quantity=0)
+    third.id = 3
+    service.boxes.receipts_by_no = {item.warehouse_no: item for item in (first, second, third)}
+    user = SimpleNamespace(id=5, is_superuser=True, roles=[])
+
+    service.reorder_unbound_receipts([3, 1], user)
+
+    assert third.display_order == 1
+    assert first.display_order == 2
+    assert second.display_order == 3
+    assert service.db.committed is True
+
+
+def test_reorder_unbound_receipts_rejects_bound_receipts() -> None:
+    service = WarehouseFileService.__new__(WarehouseFileService)
+    service.db = FakeDb()
+    service.boxes = FakeBoxRepository()
+    unbound = WarehouseReceipt(warehouse_no="IN-A", waybill_id=None, prebooking_id=None, total_quantity=0)
+    unbound.id = 1
+    bound = WarehouseReceipt(warehouse_no="IN-B", waybill_id=7, prebooking_id=None, total_quantity=0)
+    bound.id = 2
+    service.boxes.receipts_by_no = {item.warehouse_no: item for item in (unbound, bound)}
+    user = SimpleNamespace(id=5, is_superuser=True, roles=[])
+
+    with pytest.raises(HTTPException) as exc_info:
+        service.reorder_unbound_receipts([2, 1], user)
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail["error_code"] == "warehouse_receipt_order_invalid_receipts"
+    assert exc_info.value.detail["receipt_ids"] == [2]
+
+
 def test_create_box_requires_waybill_warehouse_no() -> None:
     waybill = SimpleNamespace(id=7, waybill_no="784-00000001", warehouse_no=None, updated_by=None)
     service = WarehouseFileService.__new__(WarehouseFileService)
@@ -705,6 +924,71 @@ def test_recalculate_box_volumes_rejects_target_below_multi_item_fixed_volume() 
     assert service.db.committed is False
 
 
+def test_recalculate_unbound_receipt_box_volumes_scales_receipt_boxes() -> None:
+    waybill = SimpleNamespace(id=7, waybill_no="784-00000001", warehouse_no="AMS-IN-001")
+    service = WarehouseFileService.__new__(WarehouseFileService)
+    service.db = FakeDb()
+    service.boxes = FakeBoxRepository()
+    service.waybills = FakeWaybillRepository(waybill)
+    receipt = WarehouseReceipt(
+        warehouse_no="UNBOUND-IN-001",
+        waybill_id=None,
+        prebooking_id=None,
+        total_quantity=0,
+        total_weight=Decimal("15.000"),
+        total_volume=Decimal("8.000"),
+        weight_volume_ratio=Decimal("1.875"),
+    )
+    receipt.id = 88
+    receipt.channel_tags = []
+    service.boxes.receipts_by_no[receipt.warehouse_no] = receipt
+    service.boxes.boxes_list = [
+        _fake_box(4, "DHL001", "10.000", "5.000"),
+        _fake_box(5, "DHL002", "5.000", "3.000", items_count=2),
+    ]
+    for box in service.boxes.boxes_list:
+        box.current_waybill_id = None
+        box.status = "unbound"
+    user = SimpleNamespace(id=5, is_superuser=True, roles=[])
+
+    result = service.recalculate_unbound_receipt_box_volumes(88, Decimal("7.000"), user)
+
+    assert result.adjusted is True
+    assert str(result.old_total_volume) == "8.000"
+    assert str(result.fixed_total_volume) == "3.000"
+    assert str(result.new_total_volume) == "7.000"
+    assert [str(box.volume) for box in service.boxes.boxes_list] == ["4.000", "3.000"]
+    assert str(receipt.total_volume) == "7.000"
+    assert str(receipt.weight_volume_ratio) == "2.143"
+    assert service.db.committed is True
+
+
+def test_recalculate_unbound_receipt_box_volumes_rejects_bound_receipt() -> None:
+    waybill = SimpleNamespace(id=7, waybill_no="784-00000001", warehouse_no="AMS-IN-001")
+    service = WarehouseFileService.__new__(WarehouseFileService)
+    service.db = FakeDb()
+    service.boxes = FakeBoxRepository()
+    service.waybills = FakeWaybillRepository(waybill)
+    receipt = WarehouseReceipt(
+        warehouse_no="BOUND-IN-001",
+        waybill_id=7,
+        prebooking_id=None,
+        total_quantity=0,
+        total_weight=Decimal("10.000"),
+        total_volume=Decimal("5.000"),
+        weight_volume_ratio=Decimal("2.000"),
+    )
+    receipt.id = 88
+    service.boxes.receipts_by_no[receipt.warehouse_no] = receipt
+    user = SimpleNamespace(id=5, is_superuser=True, roles=[])
+
+    with pytest.raises(HTTPException) as exc_info:
+        service.recalculate_unbound_receipt_box_volumes(88, Decimal("7.000"), user)
+
+    assert exc_info.value.detail == "warehouse_receipt_not_unbound"
+    assert service.db.committed is False
+
+
 def test_upload_reports_failed_rows_when_no_valid_rows(tmp_path) -> None:
     waybill = SimpleNamespace(id=7, waybill_no="784-00000001", warehouse_no=None, updated_by=None)
     service = WarehouseFileService.__new__(WarehouseFileService)
@@ -721,7 +1005,7 @@ def test_upload_reports_failed_rows_when_no_valid_rows(tmp_path) -> None:
     assert "第 2 行" in exc_info.value.detail
 
 
-def test_upload_reports_box_conflicts_without_writing(tmp_path) -> None:
+def test_upload_renames_box_conflicts_and_writes_conflict_metadata(tmp_path) -> None:
     waybill = SimpleNamespace(id=7, waybill_no="784-00000001", warehouse_no=None, updated_by=None)
     service = WarehouseFileService.__new__(WarehouseFileService)
     service.db = FakeDb()
@@ -730,16 +1014,45 @@ def test_upload_reports_box_conflicts_without_writing(tmp_path) -> None:
     service._store_file = lambda file_name, file_hash, content: tmp_path / file_name
     user = SimpleNamespace(id=5, is_superuser=True, roles=[])
     current_waybill = SimpleNamespace(id=8, waybill_no="999-00000001")
-    current_receipt = SimpleNamespace(id=77, warehouse_no="OLD-IN")
+    current_receipt = SimpleNamespace(id=77, warehouse_no="OLD-IN", source_document=SimpleNamespace(file_name="OLD-IN.xlsx"))
     service.boxes.conflict_rows = [(SimpleNamespace(box_no="BOX-001"), current_waybill, current_receipt)]
 
-    with pytest.raises(HTTPException) as exc_info:
-        service.upload_for_waybill(7, "AMS-IN-001.xlsx", _xlsx_bytes(), user)
+    result = service.upload_for_waybill(7, "AMS-IN-001.xlsx", _xlsx_bytes(), user)
 
-    assert exc_info.value.status_code == 409
-    assert exc_info.value.detail["error_code"] == "warehouse_box_conflicts"
-    assert exc_info.value.detail["conflicts"][0]["box_no"] == "BOX-001"
-    assert service.db.added == []
+    assert result.success_count == 1
+    added_box = next(item for item in service.db.added if item.__class__.__name__ == "Box" and item.box_no == "BOX-001-DUP1")
+    assert added_box.current_waybill_id == 7
+    assert added_box.raw_data["box_conflict"]["original_box_no"] == "BOX-001"
+    assert added_box.raw_data["box_conflict"]["renamed_box_no"] == "BOX-001-DUP1"
+    assert added_box.raw_data["box_conflict"]["waybill_no"] == "999-00000001"
+    assert added_box.raw_data["box_conflict"]["warehouse_no"] == "OLD-IN"
+    assert added_box.raw_data["box_conflict"]["source_file_name"] == "OLD-IN.xlsx"
+    assert service.db.committed is True
+
+
+def test_upload_for_prebooking_renames_conflicting_boxes(tmp_path) -> None:
+    service = WarehouseFileService.__new__(WarehouseFileService)
+    service.db = FakeDb()
+    service.boxes = FakeBoxRepository()
+    service.waybills = FakeWaybillRepository(SimpleNamespace(id=7, waybill_no="784-00000001", warehouse_no=None, updated_by=None))
+    service._store_file = lambda file_name, file_hash, content: tmp_path / file_name
+    user = SimpleNamespace(id=5, is_superuser=True, roles=[])
+    prebooking = SimpleNamespace(id=31, status="draft", updated_by=None)
+    source_receipt = SimpleNamespace(id=77, warehouse_no="OLD-IN", source_document=SimpleNamespace(file_name="OLD-IN.xlsx"))
+    service.boxes.box.box_no = "BOX-001"
+    service.boxes.box.warehouse_receipt_id = 77
+    service.boxes.box.current_waybill_id = None
+    service.boxes.conflict_rows = [(service.boxes.box, None, source_receipt)]
+
+    result = service.upload_for_prebooking(prebooking, "PRE-IN-001.xlsx", _xlsx_bytes(), user)
+
+    assert result.success_count == 1
+    added_box = next(item for item in service.db.added if item.__class__.__name__ == "Box" and item.box_no == "BOX-001-DUP1")
+    assert added_box.status == "prebooked"
+    assert added_box.raw_data["box_conflict"]["original_box_no"] == "BOX-001"
+    assert added_box.raw_data["box_conflict"]["warehouse_no"] == "OLD-IN"
+    assert prebooking.updated_by == 5
+    assert service.db.committed is True
 
 
 def test_batch_bind_requires_target_waybill_warehouse_no() -> None:
@@ -855,6 +1168,7 @@ def test_bind_unbound_receipt_to_waybill_appends_receipt() -> None:
         weight_volume_ratio=Decimal("156.250"),
     )
     receipt.id = 88
+    receipt.display_order = 9
     service.boxes.receipts_by_no[receipt.warehouse_no] = receipt
     service.boxes.box.current_waybill_id = None
     service.boxes.box.warehouse_receipt_id = 88
@@ -865,6 +1179,7 @@ def test_bind_unbound_receipt_to_waybill_appends_receipt() -> None:
     result = service.bind_receipt_to_waybill(88, 7, user)
 
     assert result.waybill_id == 7
+    assert result.display_order is None
     assert service.boxes.box.current_waybill_id == 7
     assert service.boxes.box.status == "bound"
     assert service.boxes.box.unbound_reason is None

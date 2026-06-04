@@ -12,9 +12,13 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.schemas.box import (
     BoxOut,
+    BoxUpdate,
+    BoxVolumeRecalculationRequest,
+    BoxVolumeRecalculationResult,
     WarehouseFileUploadResult,
     WarehouseReceiptBindRequest,
     WarehouseReceiptListOut,
+    WarehouseReceiptOrderRequest,
 )
 from app.schemas.common import PageResponse
 from app.services.permission_service import PermissionService
@@ -56,6 +60,16 @@ def list_unbound_warehouse_receipts(
     return PageResponse(items=items, total=total, page=page, page_size=page_size)
 
 
+@router.put("/unbound/order", status_code=status.HTTP_204_NO_CONTENT)
+def reorder_unbound_warehouse_receipts(
+    payload: WarehouseReceiptOrderRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    WarehouseFileService(db).reorder_unbound_receipts(payload.unique_receipt_ids, current_user)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.post("/unbound/warehouse-file", response_model=WarehouseFileUploadResult)
 async def upload_unbound_warehouse_file(
     file: UploadFile = File(...),
@@ -79,6 +93,44 @@ def list_receipt_boxes(
 ):
     PermissionService.assert_waybill_write(current_user)
     return WarehouseFileService(db).list_receipt_boxes(receipt_id)
+
+
+@router.patch("/{receipt_id}/boxes/{box_id}", response_model=BoxOut)
+def update_unbound_receipt_box(
+    receipt_id: int,
+    box_id: int,
+    payload: BoxUpdate,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return WarehouseFileService(db).update_unbound_receipt_box(
+        receipt_id,
+        box_id,
+        current_user,
+        fields_set=payload.model_fields_set,
+        box_no=payload.box_no,
+        warehouse_waybill_no=payload.warehouse_waybill_no,
+        goods_name=payload.goods_name,
+        quantity=payload.quantity,
+        weight=payload.weight,
+        volume=payload.volume,
+        weight_volume_ratio=payload.weight_volume_ratio,
+        is_general_cargo=payload.is_general_cargo,
+    )
+
+
+@router.post("/{receipt_id}/boxes/recalculate-volume", response_model=BoxVolumeRecalculationResult)
+def recalculate_unbound_receipt_box_volumes(
+    receipt_id: int,
+    payload: BoxVolumeRecalculationRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return WarehouseFileService(db).recalculate_unbound_receipt_box_volumes(
+        receipt_id,
+        payload.target_volume,
+        current_user,
+    )
 
 
 @router.post("/{receipt_id}/bind-waybill", response_model=WarehouseReceiptListOut)

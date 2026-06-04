@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
-import { Download, EyeOff, GripVertical, ListPlus, PanelRightClose, PanelRightOpen, RefreshCw, Save, Trash2 } from "lucide-react";
+import { Download, GripVertical, ListPlus, PanelRightClose, PanelRightOpen, RefreshCw, Save, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -12,7 +12,7 @@ import { Panel } from "@/components/ui/panel";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { apiClient } from "@/lib/client-api";
-import { cn, compact, formatOutboundDate } from "@/lib/utils";
+import { cn, compact, formatDateTime, formatOutboundDate } from "@/lib/utils";
 import type {
   CarrierAgent,
   User,
@@ -22,10 +22,12 @@ import type {
   WarehousePlannerRow,
   WarehousePlannerRowResult,
   WarehousePlannerValidateResult,
-  WarehouseReceipt
+  WarehouseReceipt,
+  TableColumnPreference
 } from "@/lib/types";
 
 type RightPanelMode = "candidates" | "receipts";
+type ReceiptViewMode = "list" | "summary";
 type PlannerField =
   | "carrier_agent_id"
   | "planned_flight_no"
@@ -45,6 +47,10 @@ type PlannerField =
 const CLEAR_VALUE = "__clear__";
 const CANDIDATE_DRAG_TYPE = "application/x-warehouse-planner-candidates";
 const RECEIPT_DRAG_TYPE = "application/x-warehouse-planner-receipts";
+const PLANNER_SPLIT_PREFERENCE_KEY = "warehouse-planner:split-width";
+const DEFAULT_MAIN_PANE_PERCENT = 68;
+const MIN_MAIN_PANE_PERCENT = 44;
+const MAX_MAIN_PANE_PERCENT = 82;
 
 const BATCH_FIELDS: Array<{ key: PlannerField; label: string; kind: "select" | "text" | "number" | "date" | "boolean" }> = [
   { key: "carrier_agent_id", label: "航代", kind: "select" },
@@ -104,15 +110,33 @@ function channelTags(tags?: string[] | null) {
   return (tags || []).filter(Boolean);
 }
 
+function clampMainPanePercent(value: number) {
+  if (!Number.isFinite(value)) return DEFAULT_MAIN_PANE_PERCENT;
+  return Math.min(MAX_MAIN_PANE_PERCENT, Math.max(MIN_MAIN_PANE_PERCENT, value));
+}
+
+function preferenceToMainPanePercent(preference?: TableColumnPreference | null) {
+  const value = Number(preference?.column_order?.[0]);
+  return clampMainPanePercent(value);
+}
+
 export default function WarehousePlannerPage() {
   const saveTimerRef = useRef<number | null>(null);
+  const splitSaveTimerRef = useRef<number | null>(null);
+  const plannerLayoutRef = useRef<HTMLDivElement>(null);
   const [rows, setRows] = useState<WarehousePlannerRow[]>([]);
   const [loadedDraft, setLoadedDraft] = useState(false);
+  const [loadedSplitPreference, setLoadedSplitPreference] = useState(false);
+  const [mainPanePercent, setMainPanePercent] = useState(DEFAULT_MAIN_PANE_PERCENT);
+  const [resizingSplit, setResizingSplit] = useState(false);
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
   const [candidates, setCandidates] = useState<WarehousePlannerCandidates | null>(null);
   const [selectedCandidates, setSelectedCandidates] = useState<Set<string>>(new Set());
   const [selectedReceipts, setSelectedReceipts] = useState<Set<number>>(new Set());
+  const [receiptSortDragId, setReceiptSortDragId] = useState<number | null>(null);
+  const [receiptOrderSaving, setReceiptOrderSaving] = useState(false);
   const [rightPanelMode, setRightPanelMode] = useState<RightPanelMode>("candidates");
+  const [receiptViewMode, setReceiptViewMode] = useState<ReceiptViewMode>("list");
   const [rightPanelVisible, setRightPanelVisible] = useState(true);
   const [agents, setAgents] = useState<CarrierAgent[]>([]);
   const [users, setUsers] = useState<User[]>([]);
@@ -167,6 +191,25 @@ export default function WarehousePlannerPage() {
   }, [loadAll]);
 
   useEffect(() => {
+    let cancelled = false;
+    apiClient
+      .get<TableColumnPreference>(`/user-preferences/table-columns/${encodeURIComponent(PLANNER_SPLIT_PREFERENCE_KEY)}`)
+      .then((preference) => {
+        if (cancelled) return;
+        setMainPanePercent(preferenceToMainPanePercent(preference));
+        setLoadedSplitPreference(true);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setMainPanePercent(DEFAULT_MAIN_PANE_PERCENT);
+        setLoadedSplitPreference(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!loadedDraft) return;
     if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
     saveTimerRef.current = window.setTimeout(() => {
@@ -178,6 +221,50 @@ export default function WarehousePlannerPage() {
       if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
     };
   }, [loadedDraft, rows]);
+
+  useEffect(() => {
+    if (!loadedSplitPreference) return;
+    if (splitSaveTimerRef.current) window.clearTimeout(splitSaveTimerRef.current);
+    splitSaveTimerRef.current = window.setTimeout(() => {
+      apiClient
+        .put<TableColumnPreference>(
+          `/user-preferences/table-columns/${encodeURIComponent(PLANNER_SPLIT_PREFERENCE_KEY)}`,
+          { column_order: [String(Math.round(mainPanePercent))] }
+        )
+        .catch((error) => {
+          setMessage(error instanceof Error ? `排仓宽度保存失败：${error.message}` : "排仓宽度保存失败。");
+        });
+    }, 500);
+    return () => {
+      if (splitSaveTimerRef.current) window.clearTimeout(splitSaveTimerRef.current);
+    };
+  }, [loadedSplitPreference, mainPanePercent]);
+
+  useEffect(() => {
+    if (!resizingSplit) return;
+    function onPointerMove(event: PointerEvent) {
+      const rect = plannerLayoutRef.current?.getBoundingClientRect();
+      if (!rect || rect.width <= 0) return;
+      const nextPercent = ((event.clientX - rect.left) / rect.width) * 100;
+      setMainPanePercent(clampMainPanePercent(nextPercent));
+    }
+    function onPointerUp() {
+      setResizingSplit(false);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    }
+
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+  }, [resizingSplit]);
 
   function updateRow(key: string, changes: Partial<WarehousePlannerRow>) {
     setRows((prev) => prev.map((row) => (rowKey(row) === key ? { ...row, ...changes } : row)));
@@ -220,6 +307,53 @@ export default function WarehousePlannerPage() {
     const ids = receipt && !selectedReceipts.has(receipt.id) ? [receipt.id] : [...selectedReceipts];
     event.dataTransfer.setData(RECEIPT_DRAG_TYPE, JSON.stringify(ids));
     event.dataTransfer.effectAllowed = "copy";
+  }
+
+  function onReceiptSortDragStart(event: DragEvent<HTMLElement>, receipt: WarehouseReceipt) {
+    event.stopPropagation();
+    setReceiptSortDragId(receipt.id);
+    event.dataTransfer.setData("text/plain", String(receipt.id));
+    event.dataTransfer.effectAllowed = "move";
+  }
+
+  async function persistPlannerReceiptOrder(nextReceipts: WarehouseReceipt[]) {
+    setCandidates((prev) => (prev ? { ...prev, unbound_receipts: nextReceipts } : prev));
+    setReceiptOrderSaving(true);
+    setMessage("");
+    try {
+      await apiClient.put<void>("/warehouse-receipts/unbound/order", {
+        receipt_ids: nextReceipts.map((item) => item.id)
+      });
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "保存入仓号排序失败。");
+      void loadAll().catch((loadError) => setMessage(loadError instanceof Error ? loadError.message : "重新加载排仓编辑器失败。"));
+    } finally {
+      setReceiptOrderSaving(false);
+    }
+  }
+
+  function movePlannerReceiptBefore(dragId: number, targetId: number) {
+    if (dragId === targetId || !candidates?.unbound_receipts.length) return;
+    const source = candidates.unbound_receipts.find((item) => item.id === dragId);
+    if (!source) return;
+    const withoutSource = candidates.unbound_receipts.filter((item) => item.id !== dragId);
+    const targetIndex = withoutSource.findIndex((item) => item.id === targetId);
+    if (targetIndex < 0) return;
+    const nextReceipts = [
+      ...withoutSource.slice(0, targetIndex),
+      source,
+      ...withoutSource.slice(targetIndex)
+    ];
+    void persistPlannerReceiptOrder(nextReceipts);
+  }
+
+  function toggleReceiptSelection(receiptId: number, checked: boolean) {
+    setSelectedReceipts((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(receiptId);
+      else next.delete(receiptId);
+      return next;
+    });
   }
 
   function onDropIntoRows(event: DragEvent<HTMLDivElement>) {
@@ -351,24 +485,28 @@ export default function WarehousePlannerPage() {
         }
       />
       {message ? <div className="mb-4 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">{message}</div> : null}
-      <div className={cn("grid min-w-0 gap-4", rightPanelVisible ? "xl:grid-cols-[minmax(0,1fr)_360px]" : "xl:grid-cols-1")}>
-        <Panel
-          className="min-w-0 overflow-hidden"
-          title="排仓编辑区"
-          action={
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              <span className="text-sm text-slate-500">已选 {selectedRowCount} 条</span>
-              <Button variant="secondary" disabled={!selectedRowCount} onClick={() => setBatchOpen(true)}>
-                <ListPlus className="h-4 w-4" />
-                批量编辑
-              </Button>
-              <Button disabled={!rows.length || saving} onClick={() => void validateBeforeCommit()}>
-                <Save className="h-4 w-4" />
-                录入排仓
-              </Button>
-            </div>
-          }
+      <div ref={plannerLayoutRef} className={cn("grid min-w-0 gap-4 xl:flex xl:items-start xl:gap-0", !rightPanelVisible && "xl:block")}>
+        <div
+          className="min-w-0"
+          style={rightPanelVisible ? { flexBasis: `${mainPanePercent}%`, flexGrow: 0, flexShrink: 1 } : undefined}
         >
+          <Panel
+            className="min-w-0 overflow-hidden"
+            title="排仓编辑区"
+            action={
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <span className="text-sm text-slate-500">已选 {selectedRowCount} 条</span>
+                <Button variant="secondary" disabled={!selectedRowCount} onClick={() => setBatchOpen(true)}>
+                  <ListPlus className="h-4 w-4" />
+                  批量编辑
+                </Button>
+                <Button disabled={!rows.length || saving} onClick={() => void validateBeforeCommit()}>
+                  <Save className="h-4 w-4" />
+                  录入排仓
+                </Button>
+              </div>
+            }
+          >
           <div
             className="min-h-64 min-w-0 rounded-md border border-dashed border-slate-300 bg-slate-50/50 p-2"
             onDragOver={(event) => event.preventDefault()}
@@ -437,10 +575,15 @@ export default function WarehousePlannerPage() {
                               {(row.receipt_ids || []).map((receiptId) => {
                                 const receipt = receiptMap.get(receiptId);
                                 return (
-                                  <Badge key={receiptId} variant="default" className="gap-1">
-                                    {receipt?.warehouse_no || `#${receiptId}`}
-                                    <button type="button" onClick={() => updateRow(key, { receipt_ids: row.receipt_ids.filter((id) => id !== receiptId) })}>×</button>
-                                  </Badge>
+                                  <span
+                                    key={receiptId}
+                                    title={receipt?.uploaded_at ? `上传时间：${formatDateTime(receipt.uploaded_at)}` : undefined}
+                                  >
+                                    <Badge variant="default" className="gap-1">
+                                      {receipt?.warehouse_no || `#${receiptId}`}
+                                      <button type="button" onClick={() => updateRow(key, { receipt_ids: row.receipt_ids.filter((id) => id !== receiptId) })}>×</button>
+                                    </Badge>
+                                  </span>
                                 );
                               })}
                               {!row.receipt_ids?.length ? <span className="text-xs text-slate-400">拖入入仓号</span> : null}
@@ -475,18 +618,31 @@ export default function WarehousePlannerPage() {
               <EmptyState title="暂无排仓条目" description="从右侧待排仓提单多选后拖入这里，或点击加入排仓。" />
             )}
           </div>
-        </Panel>
+          </Panel>
+        </div>
 
         {rightPanelVisible ? (
-          <div className="sticky top-20 h-[calc(100vh-96px)] space-y-3 overflow-hidden">
-            <Panel
-              title="排仓侧栏"
-              action={
-                <Button variant="secondary" size="icon" onClick={() => setRightPanelVisible(false)}>
-                  <EyeOff className="h-4 w-4" />
-                </Button>
-              }
+          <>
+            <button
+              type="button"
+              aria-label="拖动调整排仓编辑区和排仓侧栏宽度"
+              className={cn(
+                "hidden h-[calc(100vh-96px)] w-3 shrink-0 cursor-col-resize items-stretch justify-center rounded-sm transition hover:bg-slate-100 xl:flex",
+                resizingSplit && "bg-slate-100"
+              )}
+              onPointerDown={(event) => {
+                event.preventDefault();
+                setResizingSplit(true);
+              }}
             >
+              <span className="my-1 w-px rounded-full bg-slate-300" />
+            </button>
+            <div
+              className="min-w-0 xl:min-w-[280px]"
+              style={{ flexBasis: `${100 - mainPanePercent}%`, flexGrow: 1, flexShrink: 1 }}
+            >
+              <div className="sticky top-20 h-[calc(100vh-96px)] space-y-3 overflow-hidden">
+                <Panel title="排仓侧栏">
               <div className="mb-3 grid grid-cols-2 gap-2">
                 <Button variant={rightPanelMode === "candidates" ? "default" : "secondary"} onClick={() => setRightPanelMode("candidates")}>待排仓提单</Button>
                 <Button variant={rightPanelMode === "receipts" ? "default" : "secondary"} onClick={() => setRightPanelMode("receipts")}>未绑定箱号数据</Button>
@@ -542,50 +698,161 @@ export default function WarehousePlannerPage() {
                   </div>
                 </div>
               ) : (
-                <div className="max-h-[calc(100vh-220px)] space-y-2 overflow-y-auto pr-1">
-                  {(candidates?.unbound_receipts || []).map((receipt) => {
-                    const selected = selectedReceipts.has(receipt.id);
-                    return (
-                      <div
-                        key={receipt.id}
-                        draggable
-                        onDragStart={(event) => onReceiptDragStart(event, receipt)}
-                        className={cn("rounded-md border bg-white p-3 text-sm", selected ? "border-purple-300 bg-purple-50" : "border-slate-200")}
-                      >
-                        <label className="flex items-start gap-2">
-                          <input
-                            type="checkbox"
-                            checked={selected}
-                            onChange={(event) => setSelectedReceipts((prev) => {
-                              const next = new Set(prev);
-                              if (event.target.checked) next.add(receipt.id);
-                              else next.delete(receipt.id);
-                              return next;
-                            })}
-                          />
-                          <span className="min-w-0 flex-1">
-                            <span className="flex items-center gap-2 font-semibold text-slate-900">
-                              <GripVertical className="h-4 w-4 text-slate-400" />
-                              {receipt.source_file_name || receipt.warehouse_no}
-                            </span>
-                            <span className="mt-1 flex flex-wrap gap-1">
-                              {channelTags(receipt.channel_tags).map((tag) => <Badge key={tag} variant="amber">{tag}</Badge>)}
-                            </span>
-                            <span className="mt-1 grid gap-0.5 text-xs text-slate-500">
-                              <span>入仓号：{receipt.warehouse_no}</span>
-                              <span>箱数：{receipt.box_count ?? 0} / 件数：{compact(receipt.total_quantity)}</span>
-                              <span>重量：{formatDecimal(receipt.total_weight)} / 方数：{formatDecimal(receipt.total_volume)}</span>
-                            </span>
-                          </span>
-                        </label>
-                      </div>
-                    );
-                  })}
-                  {!candidates?.unbound_receipts.length ? <EmptyState title="暂无未绑定入仓号" description="未绑定箱号模块上传后会显示在这里。" /> : null}
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button className="h-8 text-xs" variant={receiptViewMode === "list" ? "default" : "secondary"} onClick={() => setReceiptViewMode("list")}>
+                      操作列表
+                    </Button>
+                    <Button className="h-8 text-xs" variant={receiptViewMode === "summary" ? "default" : "secondary"} onClick={() => setReceiptViewMode("summary")}>
+                      入仓号总览
+                    </Button>
+                  </div>
+                  {receiptViewMode === "list" ? (
+                    <div className="max-h-[calc(100vh-268px)] space-y-2 overflow-y-auto pr-1">
+                      {(candidates?.unbound_receipts || []).map((receipt) => {
+                        const selected = selectedReceipts.has(receipt.id);
+                        return (
+                          <div
+                            key={receipt.id}
+                            draggable
+                            onDragStart={(event) => onReceiptDragStart(event, receipt)}
+                            onDragOver={(event) => {
+                              if (receiptSortDragId !== null) {
+                                event.preventDefault();
+                                event.dataTransfer.dropEffect = "move";
+                              }
+                            }}
+                            onDrop={(event) => {
+                              if (receiptSortDragId !== null) {
+                                event.preventDefault();
+                                movePlannerReceiptBefore(receiptSortDragId, receipt.id);
+                                setReceiptSortDragId(null);
+                              }
+                            }}
+                            className={cn("rounded-md border bg-white p-3 text-sm", selected ? "border-purple-300 bg-purple-50" : "border-slate-200")}
+                          >
+                            <label className="flex items-start gap-2">
+                              <input
+                                type="checkbox"
+                                checked={selected}
+                                onChange={(event) => toggleReceiptSelection(receipt.id, event.target.checked)}
+                              />
+                              <span className="min-w-0 flex-1">
+                                <span className="flex items-center gap-2 font-semibold text-slate-900">
+                                  <span
+                                    role="button"
+                                    tabIndex={0}
+                                    draggable={!receiptOrderSaving}
+                                    className="inline-flex h-6 w-6 cursor-grab items-center justify-center rounded text-slate-400 hover:bg-slate-100 active:cursor-grabbing"
+                                    title="拖动排序"
+                                    onMouseDown={(event) => event.stopPropagation()}
+                                    onClick={(event) => {
+                                      event.preventDefault();
+                                      event.stopPropagation();
+                                    }}
+                                    onDragStart={(event) => onReceiptSortDragStart(event, receipt)}
+                                    onDragEnd={() => setReceiptSortDragId(null)}
+                                  >
+                                    <GripVertical className="h-4 w-4" />
+                                  </span>
+                                  {receipt.source_file_name || receipt.warehouse_no}
+                                </span>
+                                <span className="mt-1 flex flex-wrap gap-1">
+                                  {channelTags(receipt.channel_tags).map((tag) => <Badge key={tag} variant="amber">{tag}</Badge>)}
+                                </span>
+                                <span className="mt-1 grid gap-0.5 text-xs text-slate-500">
+                                  <span>入仓号：{receipt.warehouse_no}</span>
+                                  <span>上传：{formatDateTime(receipt.uploaded_at)}</span>
+                                  <span>箱数：{receipt.box_count ?? 0} / 件数：{compact(receipt.total_quantity)}</span>
+                                  <span>重量：{formatDecimal(receipt.total_weight)} / 方数：{formatDecimal(receipt.total_volume)}</span>
+                                </span>
+                              </span>
+                            </label>
+                          </div>
+                        );
+                      })}
+                      {!candidates?.unbound_receipts.length ? <EmptyState title="暂无未绑定入仓号" description="未绑定箱号模块上传后会显示在这里。" /> : null}
+                    </div>
+                  ) : (
+                    <div className="max-h-[calc(100vh-268px)] overflow-y-auto pr-1">
+                      {candidates?.unbound_receipts.length ? (
+                        <div className="grid grid-cols-[repeat(auto-fit,minmax(138px,1fr))] gap-2">
+                          {candidates.unbound_receipts.map((receipt) => {
+                            const selected = selectedReceipts.has(receipt.id);
+                            const fileName = receipt.source_file_name || receipt.warehouse_no;
+                            return (
+                              <div
+                                key={receipt.id}
+                                draggable
+                                onDragStart={(event) => onReceiptDragStart(event, receipt)}
+                                onDragOver={(event) => {
+                                  if (receiptSortDragId !== null) {
+                                    event.preventDefault();
+                                    event.dataTransfer.dropEffect = "move";
+                                  }
+                                }}
+                                onDrop={(event) => {
+                                  if (receiptSortDragId !== null) {
+                                    event.preventDefault();
+                                    movePlannerReceiptBefore(receiptSortDragId, receipt.id);
+                                    setReceiptSortDragId(null);
+                                  }
+                                }}
+                                className={cn("rounded-md border bg-white p-2 text-xs", selected ? "border-purple-300 bg-purple-50" : "border-slate-200")}
+                              >
+                                <label className="block">
+                                  <span className="flex items-start gap-2">
+                                    <input
+                                      className="mt-0.5"
+                                      type="checkbox"
+                                      checked={selected}
+                                      onChange={(event) => toggleReceiptSelection(receipt.id, event.target.checked)}
+                                    />
+                                    <span className="min-w-0 flex-1">
+                                      <span className="flex min-w-0 items-center gap-1 font-semibold text-slate-900">
+                                        <span
+                                          role="button"
+                                          tabIndex={0}
+                                          draggable={!receiptOrderSaving}
+                                          className="inline-flex h-5 w-5 shrink-0 cursor-grab items-center justify-center rounded text-slate-400 hover:bg-slate-100 active:cursor-grabbing"
+                                          title="拖动排序"
+                                          onMouseDown={(event) => event.stopPropagation()}
+                                          onClick={(event) => {
+                                            event.preventDefault();
+                                            event.stopPropagation();
+                                          }}
+                                          onDragStart={(event) => onReceiptSortDragStart(event, receipt)}
+                                          onDragEnd={() => setReceiptSortDragId(null)}
+                                        >
+                                          <GripVertical className="h-3.5 w-3.5" />
+                                        </span>
+                                        <span className="truncate" title={fileName}>{fileName}</span>
+                                      </span>
+                                      <span className="mt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-slate-500">
+                                        <span>箱数 {receipt.box_count ?? 0}</span>
+                                        <span>件数 {compact(receipt.total_quantity)}</span>
+                                        <span>重量 {formatDecimal(receipt.total_weight)}</span>
+                                        <span>方数 {formatDecimal(receipt.total_volume)}</span>
+                                      </span>
+                                      <span className="mt-1 block text-slate-400">上传 {formatDateTime(receipt.uploaded_at)}</span>
+                                    </span>
+                                  </span>
+                                </label>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <EmptyState title="暂无未绑定入仓号" description="未绑定箱号模块上传后会显示在这里。" />
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
-            </Panel>
-          </div>
+                </Panel>
+              </div>
+            </div>
+          </>
         ) : null}
       </div>
 

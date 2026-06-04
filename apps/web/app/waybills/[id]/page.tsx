@@ -139,6 +139,7 @@ export default function WaybillDetailPage() {
         totalWeight?: string | number | null;
         totalVolume?: string | number | null;
         weightVolumeRatio?: string | number | null;
+        uploadedAt?: string | null;
         channelTags: string[];
         boxes: CargoBox[];
       }
@@ -155,6 +156,7 @@ export default function WaybillDetailPage() {
           totalWeight: receipt?.total_weight,
           totalVolume: receipt?.total_volume,
           weightVolumeRatio: receipt?.weight_volume_ratio,
+          uploadedAt: receipt?.uploaded_at,
           channelTags: channelTags(receipt?.channel_tags),
           boxes: []
         });
@@ -438,6 +440,7 @@ export default function WaybillDetailPage() {
                         <span>总重量 {compact(group.totalWeight)}</span>
                         <span>总方数 {compact(group.totalVolume)}</span>
                         <span>重量/方 {compact(group.weightVolumeRatio)}</span>
+                        <span>上传 {formatDateTime(group.uploadedAt)}</span>
                       </div>
                     </div>
                     <div className="p-3">

@@ -37,6 +37,7 @@ class WarehouseReceipt(Base, TimestampMixin):
         Index("idx_warehouse_receipts_waybill_id", "waybill_id"),
         Index("idx_warehouse_receipts_prebooking_id", "prebooking_id"),
         Index("idx_warehouse_receipts_warehouse_no", "warehouse_no"),
+        Index("idx_warehouse_receipts_display_order", "display_order"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
@@ -50,10 +51,17 @@ class WarehouseReceipt(Base, TimestampMixin):
     total_volume: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 3))
     weight_volume_ratio: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 3))
     channel_tags: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
+    display_order: Mapped[Optional[int]] = mapped_column(Integer)
 
     source_document: Mapped[Optional[BoxDocument]] = relationship(back_populates="receipts")
     prebooking = relationship("WaybillPrebooking", back_populates="receipts")
     boxes: Mapped[list[Box]] = relationship(back_populates="warehouse_receipt")
+
+    @property
+    def uploaded_at(self) -> datetime:
+        if self.source_document and self.source_document.uploaded_at:
+            return self.source_document.uploaded_at
+        return self.created_at
 
 
 class Box(Base, TimestampMixin):
@@ -92,6 +100,13 @@ class Box(Base, TimestampMixin):
     document: Mapped[Optional[BoxDocument]] = relationship(back_populates="boxes")
     warehouse_receipt: Mapped[Optional[WarehouseReceipt]] = relationship(back_populates="boxes")
     items: Mapped[list[BoxItem]] = relationship(back_populates="box", cascade="all, delete-orphan")
+
+    @property
+    def box_conflict(self) -> Optional[dict]:
+        if not isinstance(self.raw_data, dict):
+            return None
+        conflict = self.raw_data.get("box_conflict")
+        return conflict if isinstance(conflict, dict) else None
 
 
 class BoxItem(Base, TimestampMixin):

@@ -181,11 +181,22 @@ export interface CargoBox {
   unbound_reason?: string | null;
   unbound_remark?: string | null;
   raw_data: Record<string, unknown>;
+  box_conflict?: BoxConflictInfo | null;
   document?: BoxDocument | null;
   warehouse_receipt?: WarehouseReceipt | null;
   items: CargoBoxItem[];
   created_at: string;
   updated_at: string;
+}
+
+export interface BoxConflictInfo {
+  original_box_no: string;
+  renamed_box_no: string;
+  waybill_id?: number | null;
+  waybill_no?: string | null;
+  warehouse_receipt_id?: number | null;
+  warehouse_no?: string | null;
+  source_file_name?: string | null;
 }
 
 export interface WarehouseReceipt {
@@ -205,6 +216,8 @@ export interface WarehouseReceipt {
   weight_volume_ratio?: string | number | null;
   channel_tags: string[];
   box_count?: number;
+  display_order?: number | null;
+  uploaded_at: string;
   created_at: string;
   updated_at: string;
 }
@@ -303,6 +316,7 @@ export interface WarehouseFileUploadResult {
   file_name: string;
   warehouse_no: string;
   document_id: number;
+  uploaded_at: string;
   success_count: number;
   skipped_count: number;
   errors: WarehouseFileImportError[];
