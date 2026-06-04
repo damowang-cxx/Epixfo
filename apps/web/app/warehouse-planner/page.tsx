@@ -351,8 +351,9 @@ export default function WarehousePlannerPage() {
         }
       />
       {message ? <div className="mb-4 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">{message}</div> : null}
-      <div className={cn("grid gap-4", rightPanelVisible ? "xl:grid-cols-[1fr_360px]" : "xl:grid-cols-1")}>
+      <div className={cn("grid min-w-0 gap-4", rightPanelVisible ? "xl:grid-cols-[minmax(0,1fr)_360px]" : "xl:grid-cols-1")}>
         <Panel
+          className="min-w-0 overflow-hidden"
           title="排仓编辑区"
           action={
             <div className="flex flex-wrap items-center justify-end gap-2">
@@ -369,12 +370,12 @@ export default function WarehousePlannerPage() {
           }
         >
           <div
-            className="min-h-64 rounded-md border border-dashed border-slate-300 bg-slate-50/50 p-2"
+            className="min-h-64 min-w-0 rounded-md border border-dashed border-slate-300 bg-slate-50/50 p-2"
             onDragOver={(event) => event.preventDefault()}
             onDrop={onDropIntoRows}
           >
             {rows.length ? (
-              <div className="overflow-x-auto rounded-md border border-slate-200 bg-white">
+              <div className="w-full max-w-full overflow-x-auto rounded-md border border-slate-200 bg-white">
                 <Table className="min-w-[1900px]">
                   <THead>
                     <TR>
