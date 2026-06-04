@@ -947,6 +947,8 @@ class WarehouseFileService:
         receipt_id: int,
         target_waybill_id: int,
         current_user: User,
+        *,
+        auto_commit: bool = True,
     ) -> WarehouseReceipt:
         PermissionService.assert_waybill_write(current_user)
         receipt = self.boxes.get_receipt_by_id(receipt_id)
@@ -972,8 +974,11 @@ class WarehouseFileService:
         waybill.warehouse_no = receipt.warehouse_no
         waybill.updated_by = current_user.id
         self._refresh_receipt_totals(receipt)
-        self.db.commit()
-        self.db.refresh(receipt)
+        if auto_commit:
+            self.db.commit()
+            self.db.refresh(receipt)
+        else:
+            self.db.flush()
         return receipt
 
     def bind_receipt_to_prebooking(
@@ -981,6 +986,8 @@ class WarehouseFileService:
         receipt_id: int,
         prebooking: WaybillPrebooking,
         current_user: User,
+        *,
+        auto_commit: bool = True,
     ) -> WarehouseReceipt:
         PermissionService.assert_waybill_write(current_user)
         if prebooking.status != "draft":
@@ -1003,8 +1010,11 @@ class WarehouseFileService:
             box.unbound_remark = None
         prebooking.updated_by = current_user.id
         self._refresh_receipt_totals(receipt)
-        self.db.commit()
-        self.db.refresh(receipt)
+        if auto_commit:
+            self.db.commit()
+            self.db.refresh(receipt)
+        else:
+            self.db.flush()
         return receipt
 
     def delete_unbound_receipt(self, receipt_id: int, current_user: User) -> None:

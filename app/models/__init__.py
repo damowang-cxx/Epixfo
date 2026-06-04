@@ -34,6 +34,7 @@ _MODEL_EXPORTS = {
     "WaybillQuerySnapshot": ("app.models.waybill", "WaybillQuerySnapshot"),
     "WaybillStatusEvent": ("app.models.waybill", "WaybillStatusEvent"),
     "WaybillViewLog": ("app.models.waybill", "WaybillViewLog"),
+    "WarehousePlanningDraft": ("app.models.warehouse_planner", "WarehousePlanningDraft"),
 }
 
 

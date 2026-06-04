@@ -153,13 +153,13 @@ class PrebookingService:
         self.db.delete(prebooking)
         self.db.commit()
 
-    def convert(self, prebooking_id: int, payload: WaybillCreate, current_user: User):
+    def convert(self, prebooking_id: int, payload: WaybillCreate, current_user: User, *, auto_commit: bool = True):
         prebooking = self.get(prebooking_id, current_user)
         if prebooking.status != "draft":
             raise bad_request("prebooking_not_convertible")
         merged = self._merge_convert_payload(prebooking, payload)
         self._validate_convert_payload(merged)
-        waybill = WaybillService(self.db).create(WaybillCreate(**merged), current_user)
+        waybill = WaybillService(self.db).create(WaybillCreate(**merged), current_user, auto_commit=False)
 
         receipts = list(
             self.db.scalars(select(WarehouseReceipt).where(WarehouseReceipt.prebooking_id == prebooking.id))
@@ -179,8 +179,11 @@ class PrebookingService:
         prebooking.converted_waybill_id = waybill.id
         prebooking.updated_by = current_user.id
         waybill.updated_by = current_user.id
-        self.db.commit()
-        return WaybillService(self.db).get_visible(waybill.id, current_user)
+        if auto_commit:
+            self.db.commit()
+            return WaybillService(self.db).get_visible(waybill.id, current_user)
+        self.db.flush()
+        return waybill
 
     def to_out(self, prebooking: WaybillPrebooking) -> WaybillPrebookingOut:
         receipts = list(

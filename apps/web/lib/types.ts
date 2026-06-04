@@ -312,6 +312,94 @@ export interface WarehouseFileUploadResult {
   integrity_issues: WarehouseUploadIntegrityIssue[];
 }
 
+export type PlannerSourceType = "waybill" | "prebooking";
+export type PlannerCommitMode = "all_or_none" | "success_only";
+
+export interface WarehousePlannerRow {
+  source_type: PlannerSourceType;
+  source_id: number;
+  waybill_no?: string | null;
+  carrier_agent_id?: number | null;
+  planned_flight_no?: string | null;
+  planned_flight_date?: string | null;
+  outbound_date?: string | null;
+  receipt_ids: number[];
+  customs_staff_id?: number | null;
+  booked_volume?: string | number | null;
+  booked_weight?: string | number | null;
+  density?: string | number | null;
+  quotation?: string | null;
+  include_tc?: boolean | null;
+  departure_port?: string | null;
+  destination_port?: string | null;
+  planned_route_text?: string | null;
+  source_updated_at?: string | null;
+}
+
+export interface WarehousePlannerDraft {
+  rows: WarehousePlannerRow[];
+  updated_at?: string | null;
+}
+
+export interface WarehousePlannerCandidate {
+  source_type: PlannerSourceType;
+  source_id: number;
+  label: string;
+  waybill_no?: string | null;
+  carrier_agent_id?: number | null;
+  carrier_agent?: CarrierAgent | null;
+  planned_flight_no?: string | null;
+  planned_flight_date?: string | null;
+  outbound_date?: string | null;
+  receipts: WarehouseReceipt[];
+  customs_staff_id?: number | null;
+  customs_staff?: UserSummary | null;
+  booked_volume?: string | number | null;
+  booked_weight?: string | number | null;
+  density?: string | number | null;
+  quotation?: string | null;
+  include_tc?: boolean | null;
+  departure_port?: string | null;
+  destination_port?: string | null;
+  planned_route_text?: string | null;
+  lifecycle_status?: string | null;
+  source_updated_at: string;
+}
+
+export interface WarehousePlannerCandidates {
+  waybills: WarehousePlannerCandidate[];
+  prebookings: WarehousePlannerCandidate[];
+  unbound_receipts: WarehouseReceipt[];
+}
+
+export interface WarehousePlannerRowError {
+  field?: string | null;
+  message: string;
+}
+
+export interface WarehousePlannerRowResult {
+  source_type: PlannerSourceType;
+  source_id: number;
+  status: "valid" | "invalid" | "committed" | "failed";
+  waybill_id?: number | null;
+  waybill_no?: string | null;
+  errors: WarehousePlannerRowError[];
+}
+
+export interface WarehousePlannerValidateResult {
+  valid_count: number;
+  invalid_count: number;
+  results: WarehousePlannerRowResult[];
+}
+
+export interface WarehousePlannerCommitResult {
+  success_count: number;
+  failed_count: number;
+  results: WarehousePlannerRowResult[];
+  remaining_rows: WarehousePlannerRow[];
+  skipped_due_to_all_or_none: boolean;
+}
+
 export interface WaybillBulkImportError {
   row_number: number;
   waybill_no?: string | null;

@@ -13,6 +13,7 @@ from app.api.v1 import (
     presence,
     user_preferences,
     users,
+    warehouse_planner,
     warehouse_receipts,
     waybills,
 )
@@ -24,6 +25,7 @@ api_router.include_router(users.router)
 api_router.include_router(user_preferences.router)
 api_router.include_router(waybills.router)
 api_router.include_router(prebookings.router)
+api_router.include_router(warehouse_planner.router)
 api_router.include_router(boards.router)
 api_router.include_router(boxes.router)
 api_router.include_router(warehouse_receipts.router)

@@ -79,7 +79,7 @@ class WaybillService:
         self.consignees = ConsigneeService(db)
         self.alerts = AlertService(db)
 
-    def create(self, payload: WaybillCreate, current_user: User) -> AirWaybill:
+    def create(self, payload: WaybillCreate, current_user: User, *, auto_commit: bool = True) -> AirWaybill:
         PermissionService.assert_waybill_write(current_user)
         waybill_no = normalize_waybill_no(payload.waybill_no)
         if not validate_waybill_no(waybill_no):
@@ -129,10 +129,13 @@ class WaybillService:
                 "运单前三位无法识别航司",
                 description=f"运单前缀 {prefix} 未配置航司映射。",
             )
-        self.db.commit()
-        return self.repo.get(waybill.id) or waybill
+        if auto_commit:
+            self.db.commit()
+            return self.repo.get(waybill.id) or waybill
+        self.db.flush()
+        return waybill
 
-    def update(self, waybill_id: int, payload: WaybillUpdate, current_user: User) -> AirWaybill:
+    def update(self, waybill_id: int, payload: WaybillUpdate, current_user: User, *, auto_commit: bool = True) -> AirWaybill:
         PermissionService.assert_waybill_write(current_user)
         waybill = self.get_visible(waybill_id, current_user)
         if waybill.lifecycle_status == WaybillLifecycleStatus.VOIDED:
@@ -173,8 +176,11 @@ class WaybillService:
             waybill.first_monitor_at, initial_next = compute_monitor_window(planned_date)
             waybill.next_query_at = compute_next_query_at(planned_date, waybill.lifecycle_status) or initial_next
         waybill.updated_by = current_user.id
-        self.db.commit()
-        return self.repo.get(waybill.id) or waybill
+        if auto_commit:
+            self.db.commit()
+            return self.repo.get(waybill.id) or waybill
+        self.db.flush()
+        return waybill
 
     def _apply_waybill_no_update(self, waybill: AirWaybill, value: str | None) -> None:
         if value is None or not str(value).strip():
