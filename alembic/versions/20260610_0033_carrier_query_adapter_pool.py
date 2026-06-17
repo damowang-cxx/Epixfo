@@ -60,7 +60,7 @@ def upgrade() -> None:
         sa.column("adapter_code", sa.String),
         sa.column("display_name", sa.String),
         sa.column("adapter_type", sa.String),
-        sa.column("query_method", sa.String),
+        sa.column("query_method", carrier_query_method),
         sa.column("enabled", sa.Boolean),
         sa.column("display_order", sa.Integer),
         sa.column("remark", sa.Text),
