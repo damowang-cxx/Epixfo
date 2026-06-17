@@ -2,8 +2,8 @@ from datetime import date, datetime
 from io import BytesIO
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile
+from fastapi.responses import FileResponse, StreamingResponse
 
 from app.core.platform_patch import patch_platform_wmi
 
@@ -22,6 +22,8 @@ from app.schemas.lookup import WaybillLookupRequest, WaybillLookupResponse
 from app.schemas.waybill import (
     ManualStatusRequest,
     WaybillAccessRequest,
+    WaybillAirlineFileBatchUploadResult,
+    WaybillAirlineFileOut,
     WaybillAssemblyEventOut,
     WaybillBulkDeleteRequest,
     WaybillBulkDeleteResult,
@@ -42,6 +44,7 @@ from app.schemas.waybill import (
 from app.services.lookup_service import WaybillLookupService
 from app.services.permission_service import PermissionService
 from app.services.customs_export_service import CustomsExportService
+from app.services.waybill_airline_file_service import WaybillAirlineFileService
 from app.services.waybill_bulk_import_service import WaybillBulkImportService
 from app.services.warehouse_file_service import WarehouseFileService
 from app.services.waybill_service import WaybillService
@@ -164,6 +167,36 @@ def bulk_delete_waybills(
     return WaybillService(db).bulk_delete(payload, current_user)
 
 
+@router.get("/general-cargo-export")
+def general_cargo_export(
+    year: int = Query(..., ge=2000, le=2100),
+    month: int = Query(..., ge=1, le=12),
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    PermissionService.require_any(current_user, {UserRoleCode.ADMIN, UserRoleCode.ROUTE_STAFF})
+    content = CustomsExportService(db).build_monthly_general_cargo_export(year, month)
+    filename = f"{year}年{month}月普货汇总.xlsx"
+    encoded_filename = quote(filename)
+    return StreamingResponse(
+        BytesIO(content),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"},
+    )
+
+
+@router.post("/airline-files/batch", response_model=WaybillAirlineFileBatchUploadResult)
+async def batch_upload_airline_files(
+    files: list[UploadFile] = File(...),
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    uploaded_files = []
+    for file in files:
+        uploaded_files.append((file.filename or "airline-file.pdf", await file.read(), file.content_type))
+    return WaybillAirlineFileService(db).batch_upload(uploaded_files, current_user)
+
+
 @router.get("/{waybill_id}", response_model=WaybillOut)
 def get_waybill(
     waybill_id: int,
@@ -191,6 +224,41 @@ def update_waybill(
 @router.delete("/{waybill_id}", status_code=204)
 def delete_waybill(waybill_id: int, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
     WaybillService(db).delete(waybill_id, current_user)
+    return Response(status_code=204)
+
+
+@router.post("/{waybill_id}/airline-file", response_model=WaybillAirlineFileOut)
+async def upload_airline_file(
+    waybill_id: int,
+    file: UploadFile = File(...),
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    content = await file.read()
+    outcome = WaybillAirlineFileService(db).upload_for_waybill(
+        waybill_id,
+        file.filename or "airline-file.pdf",
+        content,
+        file.content_type,
+        current_user,
+    )
+    return WaybillAirlineFileOut.model_validate(outcome.file)
+
+
+@router.get("/{waybill_id}/airline-file/download")
+def download_airline_file(waybill_id: int, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    download = WaybillAirlineFileService(db).get_download(waybill_id, current_user)
+    encoded_filename = quote(download.file.original_file_name)
+    return FileResponse(
+        download.path,
+        media_type=download.file.content_type or "application/pdf",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"},
+    )
+
+
+@router.delete("/{waybill_id}/airline-file", status_code=204)
+def delete_airline_file(waybill_id: int, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    WaybillAirlineFileService(db).delete_for_waybill(waybill_id, current_user)
     return Response(status_code=204)
 
 

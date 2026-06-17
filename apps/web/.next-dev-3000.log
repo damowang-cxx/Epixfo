@@ -1,0 +1,44 @@
+
+> epixfo-web@0.1.0 dev
+> next dev --webpack --port 3000
+
+▲ Next.js 16.2.6 (webpack)
+- Local:         http://localhost:3000
+- Network:       http://192.168.31.2:3000
+- Environments: .env.local
+✓ Ready in 446ms
+⚠ Attempted to load @next/swc-win32-x64-msvc, but an error occurred: \\?\D:\code\letme\epixfo\apps\web\node_modules\@next\swc-win32-x64-msvc\next-swc.win32-x64-msvc.node is not a valid Win32 application.
+\\?\D:\code\letme\epixfo\apps\web\node_modules\@next\swc-win32-x64-msvc\next-swc.win32-x64-msvc.node
+  Skipping creating a lockfile at D:\code\letme\epixfo\apps\web\.next\dev\lock because we're using WASM bindings
+
+ GET /warehouse-planner 200 in 1905ms (next.js: 1750ms, application-code: 156ms)
+ GET /api/auth/me 401 in 432ms (next.js: 417ms, application-code: 15ms)
+ GET /warehouse-planner 200 in 70ms (next.js: 26ms, application-code: 44ms)
+ GET /login 200 in 371ms (next.js: 354ms, application-code: 17ms)
+ GET /api/auth/me 401 in 10ms (next.js: 5ms, application-code: 5ms)
+ GET /login 200 in 47ms (next.js: 6ms, application-code: 41ms)
+ GET /login 200 in 18ms (next.js: 1776µs, application-code: 16ms)
+ GET /login 200 in 25ms (next.js: 3ms, application-code: 23ms)
+ GET /login 200 in 16ms (next.js: 1994µs, application-code: 14ms)
+ GET /login 200 in 23ms (next.js: 2ms, application-code: 20ms)
+ GET /login 200 in 22ms (next.js: 2ms, application-code: 20ms)
+ GET /login 200 in 20ms (next.js: 2ms, application-code: 18ms)
+ GET /login 200 in 17ms (next.js: 1649µs, application-code: 15ms)
+ GET /login 200 in 24ms (next.js: 2ms, application-code: 22ms)
+ GET /login 200 in 19ms (next.js: 3ms, application-code: 16ms)
+ GET /login 200 in 18ms (next.js: 1708µs, application-code: 16ms)
+ GET /login 404 in 620ms (next.js: 595ms, application-code: 25ms)
+ GET /login 200 in 149ms (next.js: 9ms, application-code: 140ms)
+RangeError: Failed to allocate memory
+    at ignore-listed frames {
+  code: 'ERR_MEMORY_ALLOCATION_FAILED'
+}
+⨯ uncaughtException: RangeError: Failed to allocate memory
+    at ignore-listed frames {
+  code: 'ERR_MEMORY_ALLOCATION_FAILED'
+}
+⨯ uncaughtException:  RangeError: Failed to allocate memory
+    at ignore-listed frames {
+  code: 'ERR_MEMORY_ALLOCATION_FAILED'
+}
+[?25h

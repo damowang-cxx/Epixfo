@@ -88,7 +88,7 @@ class WaybillService:
             raise bad_request("Waybill already exists")
 
         prefix, carrier_code, _adapter_code = self.carriers.identify_waybill(waybill_no)
-        agent_snapshot = self._resolve_agent_snapshot(payload.carrier_agent_id, carrier_code)
+        agent_snapshot = self._resolve_agent_snapshot(payload.carrier_agent_id)
         consignee_snapshot = self._resolve_consignee_snapshot(payload.consignee_contact_id)
         self._validate_customs_staff_id(payload.customs_staff_id)
         plan_data = self._plan_data_from_payload(payload)
@@ -145,7 +145,7 @@ class WaybillService:
         if "waybill_no" in data:
             self._apply_waybill_no_update(waybill, data.pop("waybill_no"))
         if "carrier_agent_id" in data:
-            agent_snapshot = self._resolve_agent_snapshot(data.pop("carrier_agent_id"), waybill.carrier_code)
+            agent_snapshot = self._resolve_agent_snapshot(data.pop("carrier_agent_id"))
             if agent_snapshot is None:
                 waybill.carrier_agent_id = None
                 waybill.agent = None
@@ -607,7 +607,6 @@ class WaybillService:
     def _resolve_agent_snapshot(
         self,
         carrier_agent_id: int | None,
-        carrier_code: str | None,
     ) -> tuple[int, str] | None:
         """根据 carrier_agent_id 查代理实体，返回 (id, agent_name) 快照对。None 表示未指定。"""
         if carrier_agent_id is None:
@@ -615,8 +614,6 @@ class WaybillService:
         agent = self.carriers.get_agent(carrier_agent_id)
         if agent is None:
             raise bad_request("carrier_agent_not_found")
-        if carrier_code and agent.carrier_code != carrier_code:
-            raise bad_request("carrier_agent_carrier_mismatch")
         return agent.id, agent.agent_name
 
     def _resolve_consignee_snapshot(

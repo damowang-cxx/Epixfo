@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from io import BytesIO
 
 import pytest
@@ -132,6 +133,51 @@ def test_waybill_import_parser_reports_unmatched_required_names() -> None:
     assert len(result.rows) == 1
     assert result.rows[0].payload is None
     assert result.rows[0].error == "航代未匹配: UNKNOWN"
+
+
+def test_waybill_import_parser_planner_mode_is_lenient() -> None:
+    content = _workbook_bytes(
+        [
+            [
+                "UNKNOWN",
+                "bad-flight-info",
+                "",
+                "AMS-IN-002",
+                "BBV",
+                "Nobody",
+                "",
+                "CAN-AMS",
+                "bad-weight",
+                "12.5",
+                "1:167",
+                "38.6",
+            ]
+        ]
+    )
+
+    result = WaybillImportTemplateParser(
+        consignees_by_name={"bbv": 18},
+        users_by_name={"known": 7},
+    ).parse_planner(content, source_id_base=1000)
+
+    assert result.skipped_count == 0
+    assert result.errors == []
+    assert len(result.rows) == 1
+    row = result.rows[0]
+    assert row.source_type == "import_prebooking"
+    assert row.source_id == -1001
+    assert row.waybill_no is None
+    assert row.carrier_agent_id is None
+    assert row.consignee_contact_id == 18
+    assert row.planned_flight_no is None
+    assert row.planned_flight_date is None
+    assert row.booked_volume == Decimal("12.5")
+    assert row.booked_weight is None
+    messages = {(item.field, item.message) for item in result.warnings}
+    assert ("航代", "lookup_not_found") in messages
+    assert ("资料数据", "lookup_not_found") in messages
+    assert ("航班信息", "invalid_planned_flight_info") in messages
+    assert ("订舱重量", "invalid_decimal") in messages
 
 
 def test_waybill_import_parser_requires_template_headers() -> None:

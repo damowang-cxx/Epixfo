@@ -1,0 +1,13 @@
+
+> epixfo-web@0.1.0 dev
+> next dev --webpack --port 3000
+
+▲ Next.js 16.2.6 (webpack)
+- Local:         http://localhost:3000
+- Network:       http://192.168.31.2:3000
+- Environments: .env.local
+✓ Ready in 430ms
+  Skipping creating a lockfile at D:\code\letme\epixfo\apps\web\.next\dev\lock because we're using WASM bindings
+
+ GET /waybills 200 in 1572ms (next.js: 1435ms, application-code: 137ms)
+ GET /warehouse-planner 200 in 1392ms (next.js: 1149ms, application-code: 243ms)

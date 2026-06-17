@@ -2,7 +2,7 @@ from datetime import date
 
 import app.models.all
 from app.core.database import Base
-from app.models.enums import CarrierQueryMethod, UserRoleCode, WaybillLifecycleStatus
+from app.models.enums import CarrierAdapterType, CarrierQueryMethod, UserRoleCode, WaybillLifecycleStatus
 from app.models.waybill import AirWaybill, WaybillOfficialFlightSegment
 
 
@@ -15,6 +15,7 @@ def test_core_model_tables_are_registered() -> None:
         "carriers",
         "carrier_prefix_mappings",
         "carrier_query_configs",
+        "carrier_query_adapters",
         "consignees",
         "consignee_contacts",
         "consignee_notify_parties",
@@ -29,6 +30,7 @@ def test_core_model_tables_are_registered() -> None:
         "waybill_alerts",
         "waybill_boards",
         "waybill_prebookings",
+        "waybill_airline_files",
         "waybill_customs_access_grants",
         "waybill_view_logs",
         "user_refresh_tokens",
@@ -48,6 +50,8 @@ def test_core_model_tables_are_registered() -> None:
 def test_business_enum_values_match_phase_one_design() -> None:
     assert UserRoleCode.ADMIN.value == "admin"
     assert UserRoleCode.ROUTE_STAFF.value == "route_staff"
+    assert CarrierAdapterType.DEDICATED.value == "dedicated"
+    assert CarrierAdapterType.GENERAL.value == "general"
     assert CarrierQueryMethod.HYBRID.value == "hybrid"
     assert WaybillLifecycleStatus.WAREHOUSE_RECEIVED.value == "warehouse_received"
     assert WaybillLifecycleStatus.PICKED_UP.value == "picked_up"
@@ -74,12 +78,54 @@ def test_prebooking_table_has_outbound_date_column() -> None:
     assert "outbound_date" in prebooking_columns
 
 
+def test_carrier_agent_table_is_not_bound_to_single_carrier() -> None:
+    agent_columns = Base.metadata.tables["carrier_agents"].columns
+
+    assert "carrier_code" not in agent_columns
+
+
 def test_user_table_preferences_have_account_scoped_columns() -> None:
     preference_columns = Base.metadata.tables["user_table_preferences"].columns
 
     assert "user_id" in preference_columns
     assert "table_key" in preference_columns
     assert "column_order" in preference_columns
+
+
+def test_carrier_query_adapters_have_type_and_order_columns() -> None:
+    adapter_columns = Base.metadata.tables["carrier_query_adapters"].columns
+
+    assert "adapter_code" in adapter_columns
+    assert "display_name" in adapter_columns
+    assert "adapter_type" in adapter_columns
+    assert "query_method" in adapter_columns
+    assert "enabled" in adapter_columns
+    assert "display_order" in adapter_columns
+
+
+def test_query_snapshots_have_adapter_type_column() -> None:
+    snapshot_columns = Base.metadata.tables["waybill_query_snapshots"].columns
+
+    assert "adapter_code" in snapshot_columns
+    assert "adapter_type" in snapshot_columns
+
+
+def test_waybill_airline_files_table_has_expected_columns() -> None:
+    airline_file_columns = Base.metadata.tables["waybill_airline_files"].columns
+
+    for column in [
+        "waybill_id",
+        "original_file_name",
+        "stored_file_path",
+        "file_hash",
+        "file_size",
+        "content_type",
+        "extracted_waybill_no",
+        "extraction_method",
+        "uploaded_by",
+        "uploaded_at",
+    ]:
+        assert column in airline_file_columns
 
 
 def test_waybill_board_table_has_expected_columns() -> None:

@@ -4,7 +4,14 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.models.enums import AlertLevel, CarrierQueryMethod, OfficialEventType, QueryStatus, WaybillLifecycleStatus
+from app.models.enums import (
+    AlertLevel,
+    CarrierAdapterType,
+    CarrierQueryMethod,
+    OfficialEventType,
+    QueryStatus,
+    WaybillLifecycleStatus,
+)
 from app.schemas.board import BoardSummaryOut
 from app.schemas.carrier import CarrierAgentOut
 from app.schemas.consignee import ConsigneeContactOut
@@ -157,6 +164,45 @@ class WaybillPlanOut(BaseModel):
     planned_route_text: str | None = None
 
 
+class WaybillAirlineFileOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    waybill_id: int
+    original_file_name: str
+    file_hash: str
+    file_size: int
+    content_type: str | None = None
+    extracted_waybill_no: str | None = None
+    extraction_method: str | None = None
+    uploaded_by: int | None = None
+    uploaded_at: datetime
+
+
+class WaybillAirlineFileBatchSuccess(BaseModel):
+    file_name: str
+    waybill_id: int
+    waybill_no: str
+    extracted_waybill_no: str | None = None
+    extraction_method: str | None = None
+    replaced_existing: bool
+    airline_file: WaybillAirlineFileOut
+
+
+class WaybillAirlineFileBatchFailure(BaseModel):
+    file_name: str
+    error_code: str
+    message: str
+    extracted_waybill_no: str | None = None
+
+
+class WaybillAirlineFileBatchUploadResult(BaseModel):
+    success_count: int
+    failed_count: int
+    successes: list[WaybillAirlineFileBatchSuccess]
+    failures: list[WaybillAirlineFileBatchFailure]
+
+
 class WaybillOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -207,6 +253,7 @@ class WaybillOut(BaseModel):
     next_query_at: datetime | None = None
     consecutive_query_failures: int
     plan: WaybillPlanOut | None = None
+    airline_file: WaybillAirlineFileOut | None = None
     official_estimated_flight_date: date | None = None
     created_at: datetime
     updated_at: datetime
@@ -312,6 +359,7 @@ class WaybillQuerySnapshotOut(BaseModel):
     waybill_id: int
     carrier_code: str | None = None
     adapter_code: str | None = None
+    adapter_type: CarrierAdapterType | None = None
     query_method: CarrierQueryMethod | None = None
     query_status: QueryStatus
     raw_response: dict[str, Any] | None = None

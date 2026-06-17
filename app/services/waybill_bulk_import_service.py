@@ -21,9 +21,11 @@ from app.schemas.waybill import (
     WaybillBulkImportResult,
     WaybillCreate,
 )
+from app.schemas.warehouse_planner import WarehousePlannerRow
 from app.services.permission_service import PermissionService
 from app.services.waybill_service import WaybillService
 from app.utils.datetime_utils import local_now
+from app.utils.planned_flight import parse_planned_flight_info
 
 
 @dataclass
@@ -38,6 +40,29 @@ class ParsedWaybillImportRow:
 class ParsedWaybillImportFile:
     rows: list[ParsedWaybillImportRow] = field(default_factory=list)
     skipped_count: int = 0
+
+
+@dataclass
+class ParsedPlannerImportWarning:
+    row_number: int
+    field: str
+    raw_value: str | None
+    message: str
+
+
+@dataclass
+class ParsedPlannerImportError:
+    row_number: int | None
+    waybill_no: str | None
+    message: str
+
+
+@dataclass
+class ParsedPlannerImportFile:
+    rows: list[WarehousePlannerRow] = field(default_factory=list)
+    skipped_count: int = 0
+    warnings: list[ParsedPlannerImportWarning] = field(default_factory=list)
+    errors: list[ParsedPlannerImportError] = field(default_factory=list)
 
 
 def _normalize_header(value: Any) -> str:
@@ -183,6 +208,41 @@ class WaybillImportTemplateParser:
             parsed.rows.append(self._parse_row(row_number, values, header_map, headers))
         return parsed
 
+    def parse_planner(self, content: bytes, *, source_id_base: int) -> ParsedPlannerImportFile:
+        try:
+            workbook = load_workbook(BytesIO(content), data_only=True)
+        except Exception as exc:
+            raise bad_request("invalid_waybill_import_xlsx") from exc
+        worksheet = workbook.worksheets[0]
+        header_row_number = self._find_header_row(worksheet)
+        if header_row_number is None:
+            raise bad_request("waybill_import_header_not_found")
+
+        headers = [_normalize_header(cell.value) for cell in worksheet[header_row_number]]
+        header_map = {header: index for index, header in enumerate(headers) if header}
+        if "提单号" not in header_map:
+            raise bad_request("waybill_import_header_not_found")
+
+        parsed = ParsedPlannerImportFile()
+        imported_index = 0
+        for row_number in range(header_row_number + 1, worksheet.max_row + 1):
+            values = [cell.value for cell in worksheet[row_number]]
+            if not any(_clean_text(value) for value in values):
+                parsed.skipped_count += 1
+                continue
+            imported_index += 1
+            row, warnings, errors = self._parse_planner_row(
+                row_number,
+                values,
+                header_map,
+                source_id=-(source_id_base + imported_index),
+            )
+            parsed.warnings.extend(warnings)
+            parsed.errors.extend(errors)
+            if row is not None:
+                parsed.rows.append(row)
+        return parsed
+
     def _find_header_row(self, worksheet) -> int | None:
         for row_number in range(1, min(10, worksheet.max_row) + 1):
             headers = {_normalize_header(cell.value) for cell in worksheet[row_number]}
@@ -276,6 +336,103 @@ class WaybillImportTemplateParser:
         except Exception as exc:
             return ParsedWaybillImportRow(row_number=row_number, waybill_no=waybill_no, error=str(exc))
         return ParsedWaybillImportRow(row_number=row_number, waybill_no=waybill_no, payload=payload)
+
+    def _parse_planner_row(
+        self,
+        row_number: int,
+        values: list[Any],
+        header_map: dict[str, int],
+        *,
+        source_id: int,
+    ) -> tuple[WarehousePlannerRow | None, list[ParsedPlannerImportWarning], list[ParsedPlannerImportError]]:
+        warnings: list[ParsedPlannerImportWarning] = []
+        errors: list[ParsedPlannerImportError] = []
+
+        def cell(header: str) -> Any:
+            index = header_map.get(header)
+            if index is None or index >= len(values):
+                return None
+            return values[index]
+
+        def warning(field: str, raw_value: Any, message: str) -> None:
+            warnings.append(
+                ParsedPlannerImportWarning(
+                    row_number=row_number,
+                    field=field,
+                    raw_value=_clean_text(raw_value),
+                    message=message,
+                )
+            )
+
+        def lookup_optional(lookup: dict[str, int | None], value: Any, field: str) -> int | None:
+            text = _clean_text(value)
+            if not text:
+                return None
+            matched = lookup.get(_normalize_lookup(text))
+            if matched is None:
+                warning(field, value, "lookup_not_found")
+                return None
+            return matched
+
+        def decimal_optional(value: Any, field: str) -> Decimal | None:
+            parsed_value = _decimal_or_none(value)
+            if _clean_text(value) and parsed_value is None:
+                warning(field, value, "invalid_decimal")
+            return parsed_value
+
+        waybill_no = _clean_text(cell("提单号"))
+        source_type = "import_waybill" if waybill_no else "import_prebooking"
+        planned_flight_no: str | None = None
+        planned_flight_date: date | None = None
+        planned_flight_info = _clean_text(cell("航班信息"))
+        if planned_flight_info:
+            try:
+                planned_flight = parse_planned_flight_info(planned_flight_info, today=local_now().date())
+                planned_flight_no = planned_flight.flight_no
+                planned_flight_date = planned_flight.flight_date
+            except ValueError:
+                warning("航班信息", planned_flight_info, "invalid_planned_flight_info")
+
+        route_text = _clean_text(cell("航程"))
+        cutoff_text = _clean_text(cell("截单时间"))
+        if not route_text and cutoff_text and "-" in cutoff_text and not _datetime_or_none(cutoff_text):
+            route_text = cutoff_text
+        departure_port, destination_port = self._route_ports(route_text)
+
+        include_tc: bool | None = None
+        include_tc_text = self._blank_after(values, header_map, "报价")
+        if _clean_text(include_tc_text):
+            include_tc = _bool_or_none(include_tc_text)
+            if include_tc is None:
+                warning("含T", include_tc_text, "invalid_boolean")
+        else:
+            include_tc = _bool_or_none(cell("报价"))
+
+        try:
+            row = WarehousePlannerRow(
+                source_type=source_type,
+                source_id=source_id,
+                waybill_no=waybill_no,
+                carrier_agent_id=lookup_optional(self.agents_by_name, cell("航代"), "航代"),
+                planned_flight_no=planned_flight_no,
+                planned_flight_date=planned_flight_date,
+                receipt_ids=[],
+                consignee_contact_id=lookup_optional(self.consignees_by_name, cell("收件人"), "收件人"),
+                customs_staff_id=lookup_optional(self.users_by_name, cell("资料数据"), "资料数据"),
+                booked_volume=decimal_optional(cell("方数"), "方数"),
+                booked_weight=decimal_optional(cell("订舱重量"), "订舱重量"),
+                density=decimal_optional(cell("密度"), "密度"),
+                quotation=_clean_text(cell("报价")),
+                include_tc=include_tc,
+                departure_port=departure_port,
+                destination_port=destination_port,
+                planned_route_text=route_text,
+                source_updated_at=local_now(),
+            )
+        except Exception as exc:
+            errors.append(ParsedPlannerImportError(row_number=row_number, waybill_no=waybill_no, message=str(exc)))
+            return None, warnings, errors
+        return row, warnings, errors
 
     def _lookup_optional(
         self,

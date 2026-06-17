@@ -86,6 +86,31 @@ def test_validate_prebooking_requires_formal_waybill_fields() -> None:
     assert "quotation_required" in messages
 
 
+def test_validate_import_prebooking_requires_waybill_before_commit() -> None:
+    service = _service()
+    row = WarehousePlannerRow(
+        source_type="import_prebooking",
+        source_id=-1,
+        carrier_agent_id=3,
+        planned_flight_no="QR8943",
+        planned_flight_date=date(2026, 6, 1),
+        booked_volume=Decimal("12.000"),
+        booked_weight=Decimal("1000"),
+        quotation="38.6",
+        departure_port="CAN",
+        destination_port="AMS",
+        planned_route_text="CAN-AMS",
+    )
+
+    result = service.validate_rows(WarehousePlannerRowsRequest(rows=[row]), _route_user())
+
+    assert result.valid_count == 0
+    assert result.invalid_count == 1
+    assert result.results[0].source_type == "import_prebooking"
+    assert result.results[0].source_id == -1
+    assert {error.message for error in result.results[0].errors} == {"waybill_no_required"}
+
+
 def test_validate_rejects_receipt_bound_to_other_waybill() -> None:
     waybill = SimpleNamespace(id=5, waybill_no="176-29600664", lifecycle_status=WaybillLifecycleStatus.CREATED)
     receipt = SimpleNamespace(id=9, warehouse_no="WH-9", waybill_id=22, prebooking_id=None)

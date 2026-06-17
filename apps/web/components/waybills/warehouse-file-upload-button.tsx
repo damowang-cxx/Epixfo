@@ -6,7 +6,14 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { ApiError, apiClient } from "@/lib/client-api";
-import type { WarehouseBoxConflict, WarehouseFileUploadResult, WarehouseUploadIntegrityIssue } from "@/lib/types";
+import type {
+  WarehouseBoxConflict,
+  WarehouseChannelReviewIssue,
+  WarehouseFileImportError,
+  WarehouseFileUploadResult,
+  WarehouseProhibitedGoodsIssue,
+  WarehouseUploadIntegrityIssue
+} from "@/lib/types";
 
 function isWarehouseConflictDetail(detail: unknown): detail is {
   error_code: "warehouse_box_conflicts";
@@ -39,6 +46,35 @@ function isWarehouseUploadIntegrityDetail(detail: unknown): detail is WarehouseU
   );
 }
 
+interface WarehouseUploadWarnings {
+  file_name: string;
+  warehouse_no: string;
+  parse_errors: WarehouseFileImportError[];
+  channel_issues: WarehouseChannelReviewIssue[];
+  integrity_issues: WarehouseUploadIntegrityIssue[];
+  prohibited_goods_issues: WarehouseProhibitedGoodsIssue[];
+}
+
+function uploadWarningsFromResult(result: WarehouseFileUploadResult): WarehouseUploadWarnings | null {
+  const warnings: WarehouseUploadWarnings = {
+    file_name: result.file_name,
+    warehouse_no: result.warehouse_no,
+    parse_errors: result.errors || [],
+    channel_issues: result.channel_review?.issues || [],
+    integrity_issues: result.integrity_issues || [],
+    prohibited_goods_issues: result.prohibited_goods_issues || []
+  };
+  if (
+    !warnings.parse_errors.length &&
+    !warnings.channel_issues.length &&
+    !warnings.integrity_issues.length &&
+    !warnings.prohibited_goods_issues.length
+  ) {
+    return null;
+  }
+  return warnings;
+}
+
 export function WarehouseFileUploadButton({
   waybillId,
   uploadPath,
@@ -62,6 +98,7 @@ export function WarehouseFileUploadButton({
   const [conflicts, setConflicts] = useState<WarehouseBoxConflict[]>([]);
   const [selectedBoxNos, setSelectedBoxNos] = useState<Set<string>>(new Set());
   const [integrityFailure, setIntegrityFailure] = useState<WarehouseUploadIntegrityDetail | null>(null);
+  const [uploadWarnings, setUploadWarnings] = useState<WarehouseUploadWarnings | null>(null);
 
   async function upload(file: File, forceMoveBoxNos: string[] = [], skipConflictBoxNos: string[] = []) {
     const formData = new FormData();
@@ -78,6 +115,7 @@ export function WarehouseFileUploadButton({
       setConflicts([]);
       setSelectedBoxNos(new Set());
       setIntegrityFailure(null);
+      setUploadWarnings(uploadWarningsFromResult(result));
       onUploaded?.(result);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409 && isWarehouseConflictDetail(err.detail)) {
@@ -87,6 +125,7 @@ export function WarehouseFileUploadButton({
         return;
       }
       if (err instanceof ApiError && err.status === 400 && isWarehouseUploadIntegrityDetail(err.detail)) {
+        setUploadWarnings(null);
         setIntegrityFailure(err.detail);
         return;
       }
@@ -189,6 +228,125 @@ export function WarehouseFileUploadButton({
               </Button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={Boolean(uploadWarnings)} onOpenChange={(open) => !open && setUploadWarnings(null)}>
+        <DialogContent className="w-[min(820px,calc(100vw-32px))]">
+          <DialogTitle className="pr-10 text-base font-semibold text-slate-900">入仓文件已上传，存在警告</DialogTitle>
+          {uploadWarnings ? (
+            <div className="mt-3 space-y-4 text-sm text-slate-600">
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">
+                有效箱号已写入系统；以下内容需要人工复核，但不会阻断本次上传。
+              </div>
+              <div className="flex flex-wrap gap-3 text-slate-700">
+                <span>文件：{uploadWarnings.file_name || "-"}</span>
+                <span>入仓号：{uploadWarnings.warehouse_no || "-"}</span>
+              </div>
+              {uploadWarnings.channel_issues.length ? (
+                <div className="space-y-2">
+                  <div className="font-medium text-amber-900">渠道审查警告</div>
+                  <Table>
+                    <THead>
+                      <TR>
+                        <TH>外箱条码</TH>
+                        <TH>前三字母</TH>
+                        <TH>规则原因</TH>
+                        <TH>说明</TH>
+                      </TR>
+                    </THead>
+                    <TBody>
+                      {uploadWarnings.channel_issues.map((issue) => (
+                        <TR key={`${issue.box_no}-${issue.reason}`}>
+                          <TD className="font-medium text-slate-900">{issue.box_no}</TD>
+                          <TD>{issue.prefix}</TD>
+                          <TD>{issue.reason}</TD>
+                          <TD>{issue.message}</TD>
+                        </TR>
+                      ))}
+                    </TBody>
+                  </Table>
+                </div>
+              ) : null}
+              {uploadWarnings.integrity_issues.length ? (
+                <div className="space-y-2">
+                  <div className="font-medium text-amber-900">上传完整性警告</div>
+                  <Table>
+                    <THead>
+                      <TR>
+                        <TH>Excel 行号</TH>
+                        <TH>外箱条码</TH>
+                        <TH>说明</TH>
+                      </TR>
+                    </THead>
+                    <TBody>
+                      {uploadWarnings.integrity_issues.map((issue) => (
+                        <TR key={`${issue.row_number}-${issue.box_no}`}>
+                          <TD>{issue.row_number}</TD>
+                          <TD className="font-medium text-slate-900">{issue.box_no}</TD>
+                          <TD>{issue.message}</TD>
+                        </TR>
+                      ))}
+                    </TBody>
+                  </Table>
+                </div>
+              ) : null}
+              {uploadWarnings.prohibited_goods_issues.length ? (
+                <div className="space-y-2">
+                  <div className="font-medium text-amber-900">品名违禁词警告</div>
+                  <Table>
+                    <THead>
+                      <TR>
+                        <TH>Excel 行号</TH>
+                        <TH>外箱条码</TH>
+                        <TH>运单号</TH>
+                        <TH>品名</TH>
+                        <TH>命中词</TH>
+                        <TH>说明</TH>
+                      </TR>
+                    </THead>
+                    <TBody>
+                      {uploadWarnings.prohibited_goods_issues.map((issue) => (
+                        <TR key={`${issue.row_number}-${issue.box_no}-${issue.keyword}`}>
+                          <TD>{issue.row_number}</TD>
+                          <TD className="font-medium text-slate-900">{issue.box_no}</TD>
+                          <TD>{issue.warehouse_waybill_no || "-"}</TD>
+                          <TD>{issue.goods_name}</TD>
+                          <TD>{issue.keyword}</TD>
+                          <TD>{issue.message}</TD>
+                        </TR>
+                      ))}
+                    </TBody>
+                  </Table>
+                </div>
+              ) : null}
+              {uploadWarnings.parse_errors.length ? (
+                <div className="space-y-2">
+                  <div className="font-medium text-amber-900">行级解析警告</div>
+                  <Table>
+                    <THead>
+                      <TR>
+                        <TH>Excel 行号</TH>
+                        <TH>说明</TH>
+                      </TR>
+                    </THead>
+                    <TBody>
+                      {uploadWarnings.parse_errors.map((item, index) => (
+                        <TR key={`${item.row_number}-${index}`}>
+                          <TD>{item.row_number}</TD>
+                          <TD>{item.message}</TD>
+                        </TR>
+                      ))}
+                    </TBody>
+                  </Table>
+                </div>
+              ) : null}
+              <div className="flex justify-end">
+                <Button type="button" onClick={() => setUploadWarnings(null)}>
+                  知道了
+                </Button>
+              </div>
+            </div>
+          ) : null}
         </DialogContent>
       </Dialog>
       <Dialog open={Boolean(integrityFailure)} onOpenChange={(open) => !open && setIntegrityFailure(null)}>

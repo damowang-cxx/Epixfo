@@ -1,13 +1,14 @@
 from io import BytesIO
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, File, Response, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.schemas.warehouse_planner import (
+    WarehousePlannerBulkImportResult,
     WarehousePlannerCandidatesOut,
     WarehousePlannerCommitRequest,
     WarehousePlannerCommitResult,
@@ -44,6 +45,16 @@ def clear_planning_draft(current_user=Depends(get_current_user), db: Session = D
 @router.get("/candidates", response_model=WarehousePlannerCandidatesOut)
 def planning_candidates(current_user=Depends(get_current_user), db: Session = Depends(get_db)):
     return WarehousePlannerService(db).candidates(current_user)
+
+
+@router.post("/bulk-import", response_model=WarehousePlannerBulkImportResult)
+async def bulk_import_planning_rows(
+    file: UploadFile = File(...),
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    content = await file.read()
+    return WarehousePlannerService(db).bulk_import(file.filename or "waybill-import.xlsx", content, current_user)
 
 
 @router.post("/validate", response_model=WarehousePlannerValidateResult)

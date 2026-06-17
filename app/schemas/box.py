@@ -198,9 +198,19 @@ class WarehouseUploadIntegrityIssue(BaseModel):
     message: str
 
 
+class WarehouseProhibitedGoodsIssue(BaseModel):
+    row_number: int
+    box_no: str
+    warehouse_waybill_no: str | None = None
+    goods_name: str
+    keyword: str
+    message: str
+
+
 class WarehouseChannelReviewOut(BaseModel):
     detected_channel: Literal["europe", "uk", "unknown", "mixed"]
     warnings: list[str] = Field(default_factory=list)
+    issues: list[WarehouseChannelReviewIssue] = Field(default_factory=list)
 
 
 class WarehouseFileUploadResult(BaseModel):
@@ -215,6 +225,7 @@ class WarehouseFileUploadResult(BaseModel):
     channel_review: WarehouseChannelReviewOut | None = None
     channel_tags: list[str] = Field(default_factory=list)
     integrity_issues: list[WarehouseUploadIntegrityIssue] = Field(default_factory=list)
+    prohibited_goods_issues: list[WarehouseProhibitedGoodsIssue] = Field(default_factory=list)
 
 
 class BoxBatchBindRequest(BaseModel):

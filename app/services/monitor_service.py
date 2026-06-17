@@ -18,7 +18,7 @@ from app.models import (
     WaybillQuerySnapshot,
     WaybillStatusEvent,
 )
-from app.models.enums import AlertLevel, QueryStatus
+from app.models.enums import AlertLevel, CarrierAdapterType, QueryStatus
 from app.models.system import AutoFlightQuerySettings
 from app.parsers.base import ParsedCarrierData
 from app.parsers.registry import parser_registry
@@ -49,25 +49,7 @@ class MonitorService:
 
     async def trigger_query(self, waybill: AirWaybill) -> WaybillQuerySnapshot:
         auto_settings = self._auto_settings()
-        primary_adapter_code = self._primary_adapter_code(waybill)
-
-        if primary_adapter_code is None and auto_settings.fallback_enabled:
-            final_attempt = await self._query_with_adapter(waybill, auto_settings.fallback_adapter_code)
-        elif primary_adapter_code is None:
-            final_attempt = self._record_adapter_not_found(
-                waybill,
-                adapter_code=None,
-                error_code="default_adapter_not_found",
-                error_message="Default carrier adapter was not found.",
-            )
-        else:
-            final_attempt = await self._query_with_adapter(waybill, primary_adapter_code)
-            if (
-                not final_attempt.usable
-                and auto_settings.fallback_enabled
-                and auto_settings.fallback_adapter_code != primary_adapter_code
-            ):
-                final_attempt = await self._query_with_adapter(waybill, auto_settings.fallback_adapter_code)
+        final_attempt = await self._run_query_plan(waybill, self._query_plan(waybill, auto_settings))
 
         if final_attempt.usable and final_attempt.parsed is not None:
             self.alerts.handle_query_success(waybill)
@@ -98,8 +80,52 @@ class MonitorService:
     def _primary_adapter_code(self, waybill: AirWaybill) -> str | None:
         if waybill.carrier_code and waybill.carrier_code != "UNKNOWN":
             mapping = self.carriers.get_mapping_by_prefix(waybill.carrier_prefix or "")
-            return mapping.adapter_code if mapping else None
+            if mapping and self._adapter_type(mapping.adapter_code) != CarrierAdapterType.GENERAL.value:
+                return mapping.adapter_code
         return None
+
+    def _query_plan(self, waybill: AirWaybill, auto_settings: AutoFlightQuerySettings) -> list[str]:
+        primary_adapter_code = self._primary_adapter_code(waybill)
+        if primary_adapter_code is None:
+            return self._general_adapter_codes()
+
+        codes = [primary_adapter_code]
+        if auto_settings.fallback_enabled:
+            codes.extend(code for code in self._general_adapter_codes() if code != primary_adapter_code)
+        return codes
+
+    async def _run_query_plan(self, waybill: AirWaybill, adapter_codes: list[str]) -> _QueryAttempt:
+        final_attempt: _QueryAttempt | None = None
+        for adapter_code in adapter_codes:
+            final_attempt = await self._query_with_adapter(waybill, adapter_code)
+            if final_attempt.usable:
+                return final_attempt
+
+        if final_attempt is not None:
+            return final_attempt
+        return self._record_adapter_not_found(
+            waybill,
+            adapter_code=None,
+            error_code="general_adapter_pool_empty",
+            error_message="No enabled general carrier adapters were available.",
+        )
+
+    def _general_adapter_codes(self) -> list[str]:
+        if hasattr(self.carriers, "list_general_query_adapters"):
+            items = self.carriers.list_general_query_adapters(enabled_only=True)
+            return [item.adapter_code for item in items if registry.get(item.adapter_code) is not None]
+        return [GENERAL_ADAPTER_CODE] if registry.get(GENERAL_ADAPTER_CODE) is not None else []
+
+    def _adapter_type(self, adapter_code: str | None) -> str | None:
+        if not adapter_code:
+            return None
+        if hasattr(self.carriers, "get_query_adapter"):
+            item = self.carriers.get_query_adapter(adapter_code)
+            if item is not None:
+                return item.adapter_type
+        if adapter_code == GENERAL_ADAPTER_CODE:
+            return CarrierAdapterType.GENERAL.value
+        return CarrierAdapterType.DEDICATED.value if registry.get(adapter_code) is not None else None
 
     async def _query_with_adapter(self, waybill: AirWaybill, adapter_code: str) -> _QueryAttempt:
         adapter = registry.get(adapter_code)
@@ -123,13 +149,15 @@ class MonitorService:
                 error_code="adapter_exception",
                 error_message=str(exc),
             )
-        if result.adapter_code == GENERAL_ADAPTER_CODE and waybill.carrier_code:
+        adapter_type = self._adapter_type(result.adapter_code)
+        if adapter_type == CarrierAdapterType.GENERAL.value and waybill.carrier_code:
             result.carrier_code = waybill.carrier_code
 
         snapshot = WaybillQuerySnapshot(
             waybill_id=waybill.id,
             carrier_code=result.carrier_code,
             adapter_code=result.adapter_code,
+            adapter_type=adapter_type,
             query_method=result.query_method,
             query_status=result.status,
             raw_response=result.raw_response,
@@ -157,6 +185,7 @@ class MonitorService:
             waybill_id=waybill.id,
             carrier_code=waybill.carrier_code,
             adapter_code=adapter_code,
+            adapter_type=self._adapter_type(adapter_code),
             query_status=QueryStatus.FAILED,
             error_code=error_code,
             error_message=error_message,

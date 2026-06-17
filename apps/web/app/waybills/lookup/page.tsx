@@ -11,7 +11,7 @@ import { Panel } from "@/components/ui/panel";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { apiClient, ApiError } from "@/lib/client-api";
-import { carrierAdapterLabels, carrierAdapterOptions } from "@/lib/constants";
+import { carrierAdapterLabels, carrierAdapterOptions, carrierAdapterTypeLabels } from "@/lib/constants";
 import { compact, computeRatio, formatDateTime } from "@/lib/utils";
 import type { Carrier, CarrierPrefixMapping, WaybillLookupResponse } from "@/lib/types";
 
@@ -191,6 +191,11 @@ export default function WaybillLookupPage() {
           </span>
           <span className="text-slate-400">/</span>
           <span>当前适配器：{selectedAdapterLabel}</span>
+          {result?.adapter_type ? (
+            <Badge variant={result.adapter_type === "general" ? "blue" : "gray"}>
+              {carrierAdapterTypeLabels[result.adapter_type] || result.adapter_type}
+            </Badge>
+          ) : null}
         </div>
         {configError ? (
           <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
@@ -217,6 +222,11 @@ export default function WaybillLookupPage() {
           <div className="mt-3 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700">
             查询成功：{result.waybill_no}
             {result.carrier_code ? <span className="ml-2 text-xs text-green-600">({result.carrier_code})</span> : null}
+            {result.adapter_type ? (
+              <Badge variant={result.adapter_type === "general" ? "blue" : "gray"} className="ml-2">
+                {carrierAdapterTypeLabels[result.adapter_type] || result.adapter_type}
+              </Badge>
+            ) : null}
           </div>
         ) : null}
       </Panel>

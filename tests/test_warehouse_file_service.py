@@ -303,6 +303,59 @@ def test_upload_for_waybill_replaces_boxes_and_updates_warehouse_no(tmp_path) ->
     assert service.db.committed is True
 
 
+def test_upload_for_waybill_returns_integrity_warning_without_blocking(tmp_path) -> None:
+    waybill = SimpleNamespace(id=7, waybill_no="784-00000001", warehouse_no=None, updated_by=None)
+    service = WarehouseFileService.__new__(WarehouseFileService)
+    service.db = FakeDb()
+    service.boxes = FakeBoxRepository()
+    service.waybills = FakeWaybillRepository(waybill)
+    service._store_file = lambda file_name, file_hash, content: tmp_path / file_name
+    user = SimpleNamespace(id=5, is_superuser=True, roles=[])
+
+    result = service.upload_for_waybill(
+        7,
+        "AMS-IN-001.xlsx",
+        _xlsx_rows(
+            [
+                ["DHL001", "WH-AWB-001", "Shoes", 1, 1, "40*40*40", 0.1],
+                ["DHL002", "WH-AWB-002", "Shoes", 1, 1, "40*40*40", 0.1],
+            ]
+        ),
+        user,
+        skip_conflict_box_nos=["DHL002"],
+    )
+
+    assert result.success_count == 1
+    assert result.integrity_issues
+    assert result.integrity_issues[0].row_number == 3
+    assert result.integrity_issues[0].box_no == "DHL002"
+    assert service.db.committed is True
+
+
+def test_upload_for_waybill_returns_english_prohibited_goods_warning_without_blocking(tmp_path) -> None:
+    waybill = SimpleNamespace(id=7, waybill_no="784-00000001", warehouse_no=None, updated_by=None)
+    service = WarehouseFileService.__new__(WarehouseFileService)
+    service.db = FakeDb()
+    service.boxes = FakeBoxRepository()
+    service.waybills = FakeWaybillRepository(waybill)
+    service._store_file = lambda file_name, file_hash, content: tmp_path / file_name
+    user = SimpleNamespace(id=5, is_superuser=True, roles=[])
+
+    result = service.upload_for_waybill(
+        7,
+        "AMS-IN-001.xlsx",
+        _xlsx_rows([["DHL001", "WH-AWB-001", "Perfume gift set", 1, 1, "40*40*40", 0.1]]),
+        user,
+    )
+
+    assert result.success_count == 1
+    assert result.prohibited_goods_issues
+    assert result.prohibited_goods_issues[0].row_number == 2
+    assert result.prohibited_goods_issues[0].box_no == "DHL001"
+    assert result.prohibited_goods_issues[0].keyword == "perfume"
+    assert service.db.committed is True
+
+
 def test_upload_unbound_file_creates_unbound_receipt_boxes(tmp_path) -> None:
     waybill = SimpleNamespace(id=7, waybill_no="784-00000001", warehouse_no=None, updated_by=None)
     service = WarehouseFileService.__new__(WarehouseFileService)
@@ -333,6 +386,23 @@ def test_upload_unbound_file_creates_unbound_receipt_boxes(tmp_path) -> None:
     assert added_box.unbound_reason is None
     assert added_box.raw_data["source"] == "unbound_receipt_upload"
     assert len(service.boxes.added_items) == 1
+    assert service.db.committed is True
+
+
+def test_upload_unbound_file_returns_chinese_prohibited_goods_warning_without_blocking(tmp_path) -> None:
+    service, user = _unbound_service(tmp_path)
+
+    result = service.upload_unbound_file(
+        "UNBOUND-IN-001.xlsx",
+        _xlsx_rows([["DHL001", "WH-AWB-001", "香水套装", 1, 1, "40*40*40", 0.1]]),
+        user,
+    )
+
+    assert result.success_count == 1
+    assert result.prohibited_goods_issues
+    assert result.prohibited_goods_issues[0].row_number == 2
+    assert result.prohibited_goods_issues[0].goods_name == "香水套装"
+    assert result.prohibited_goods_issues[0].keyword == "香水"
     assert service.db.committed is True
 
 
@@ -531,92 +601,91 @@ def test_upload_unbound_file_marks_all_ctt_receipt_with_three_tags(tmp_path) -> 
     assert service.boxes.receipts_by_no["CTT-IN-001"].channel_tags == ["MAD", "BCN", "AMS"]
 
 
-def test_upload_unbound_file_rejects_minority_channel_boxes_without_writing(tmp_path) -> None:
+def test_upload_unbound_file_reports_minority_channel_boxes_as_warning_and_writes(tmp_path) -> None:
     service, user = _unbound_service(tmp_path)
 
-    with pytest.raises(HTTPException) as exc_info:
-        service.upload_unbound_file(
-            "EU-IN-001.xlsx",
-            _xlsx_rows(
-                [
-                    ["DHL001", "WH-AWB-001", "Shoes", 1, 1, "40*40*40", 0.1],
-                    ["UPS001", "WH-AWB-002", "Shoes", 1, 1, "40*40*40", 0.1],
-                    ["KDP001", "WH-AWB-003", "Shoes", 1, 1, "40*40*40", 0.1],
-                ]
-            ),
-            user,
-        )
+    result = service.upload_unbound_file(
+        "EU-IN-001.xlsx",
+        _xlsx_rows(
+            [
+                ["DHL001", "WH-AWB-001", "Shoes", 1, 1, "40*40*40", 0.1],
+                ["UPS001", "WH-AWB-002", "Shoes", 1, 1, "40*40*40", 0.1],
+                ["KDP001", "WH-AWB-003", "Shoes", 1, 1, "40*40*40", 0.1],
+            ]
+        ),
+        user,
+    )
 
-    assert exc_info.value.status_code == 400
-    assert exc_info.value.detail["error_code"] == "warehouse_channel_review_failed"
-    assert exc_info.value.detail["detected_channel"] == "europe"
-    assert exc_info.value.detail["issues"][0]["box_no"] == "KDP001"
-    assert exc_info.value.detail["issues"][0]["reason"] == "uk_box_in_europe_receipt"
-    assert service.db.added == []
-    assert service.boxes.document is None
-    assert service.db.committed is False
+    assert result.success_count == 3
+    assert result.channel_review is not None
+    assert result.channel_review.detected_channel == "europe"
+    assert result.channel_review.issues[0].box_no == "KDP001"
+    assert result.channel_review.issues[0].reason == "uk_box_in_europe_receipt"
+    assert service.db.added
+    assert service.boxes.document is not None
+    assert service.db.committed is True
 
 
-def test_upload_unbound_file_rejects_ctt_internal_mix(tmp_path) -> None:
+def test_upload_unbound_file_reports_ctt_internal_mix_as_warning(tmp_path) -> None:
     service, user = _unbound_service(tmp_path)
 
-    with pytest.raises(HTTPException) as exc_info:
-        service.upload_unbound_file(
-            "CTT-IN-001.xlsx",
-            _xlsx_rows(
-                [
-                    ["CTT001", "WH-AWB-001", "Shoes", 1, 1, "40*40*40", 0.1],
-                    ["UPS001", "WH-AWB-002", "Shoes", 1, 1, "40*40*40", 0.1],
-                ]
-            ),
-            user,
-        )
+    result = service.upload_unbound_file(
+        "CTT-IN-001.xlsx",
+        _xlsx_rows(
+            [
+                ["CTT001", "WH-AWB-001", "Shoes", 1, 1, "40*40*40", 0.1],
+                ["UPS001", "WH-AWB-002", "Shoes", 1, 1, "40*40*40", 0.1],
+            ]
+        ),
+        user,
+    )
 
-    assert exc_info.value.detail["issues"][0]["box_no"] == "UPS001"
-    assert "ctt_mix_not_allowed" in exc_info.value.detail["issues"][0]["reason"]
-    assert service.db.added == []
+    assert result.channel_review is not None
+    assert result.channel_review.issues[0].box_no == "UPS001"
+    assert "ctt_mix_not_allowed" in result.channel_review.issues[0].reason
+    assert service.db.added
 
 
-def test_upload_unbound_file_rejects_nle_internal_mix(tmp_path) -> None:
+def test_upload_unbound_file_reports_nle_internal_mix_as_warning(tmp_path) -> None:
     service, user = _unbound_service(tmp_path)
 
-    with pytest.raises(HTTPException) as exc_info:
-        service.upload_unbound_file(
-            "NLE-IN-001.xlsx",
-            _xlsx_rows(
-                [
-                    ["NLE001", "WH-AWB-001", "Shoes", 1, 1, "40*40*40", 0.1],
-                    ["ITE001", "WH-AWB-002", "Shoes", 1, 1, "40*40*40", 0.1],
-                ]
-            ),
-            user,
-        )
+    result = service.upload_unbound_file(
+        "NLE-IN-001.xlsx",
+        _xlsx_rows(
+            [
+                ["NLE001", "WH-AWB-001", "Shoes", 1, 1, "40*40*40", 0.1],
+                ["ITE001", "WH-AWB-002", "Shoes", 1, 1, "40*40*40", 0.1],
+            ]
+        ),
+        user,
+    )
 
-    assert exc_info.value.detail["issues"][0]["box_no"] == "ITE001"
-    assert "nle_mix_not_allowed" in exc_info.value.detail["issues"][0]["reason"]
-    assert service.db.added == []
+    assert result.channel_review is not None
+    assert result.channel_review.issues[0].box_no == "ITE001"
+    assert "nle_mix_not_allowed" in result.channel_review.issues[0].reason
+    assert service.db.added
 
 
-def test_upload_unbound_file_rejects_ups_fed_with_too_many_dhl_boxes(tmp_path) -> None:
+def test_upload_unbound_file_reports_ups_fed_with_too_many_dhl_boxes_as_warning(tmp_path) -> None:
     service, user = _unbound_service(tmp_path)
 
-    with pytest.raises(HTTPException) as exc_info:
-        service.upload_unbound_file(
-            "UPS-IN-001.xlsx",
-            _xlsx_rows(
-                [
-                    ["UPS001", "WH-AWB-001", "Shoes", 1, 1, "40*40*40", 0.1],
-                    ["DHL001", "WH-AWB-002", "Shoes", 1, 1, "40*40*40", 0.1],
-                    ["DHL002", "WH-AWB-003", "Shoes", 1, 1, "40*40*40", 0.1],
-                ]
-            ),
-            user,
-        )
+    result = service.upload_unbound_file(
+        "UPS-IN-001.xlsx",
+        _xlsx_rows(
+            [
+                ["UPS001", "WH-AWB-001", "Shoes", 1, 1, "40*40*40", 0.1],
+                ["DHL001", "WH-AWB-002", "Shoes", 1, 1, "40*40*40", 0.1],
+                ["DHL002", "WH-AWB-003", "Shoes", 1, 1, "40*40*40", 0.1],
+            ]
+        ),
+        user,
+    )
 
-    issues = exc_info.value.detail["issues"]
-    assert {item["box_no"] for item in issues} == {"DHL001", "DHL002"}
-    assert all("dhl_ratio_too_high" in item["reason"] for item in issues)
-    assert service.db.added == []
+    assert result.channel_review is not None
+    issues = result.channel_review.issues
+    assert {item.box_no for item in issues} == {"DHL001", "DHL002"}
+    assert all("dhl_ratio_too_high" in item.reason for item in issues)
+    assert service.db.added
 
 
 def test_update_box_no_updates_bound_box() -> None:

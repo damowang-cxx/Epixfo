@@ -22,7 +22,9 @@ import type {
   PageResponse,
   WarehouseBoxConflict,
   WarehouseChannelReviewIssue,
+  WarehouseFileImportError,
   WarehouseFileUploadResult,
+  WarehouseProhibitedGoodsIssue,
   WarehouseUploadIntegrityIssue,
   WarehouseReceipt,
   Waybill
@@ -51,6 +53,10 @@ interface BatchUploadSuccess {
   success_count: number;
   detected_channel?: string | null;
   warnings: string[];
+  issues: WarehouseChannelReviewIssue[];
+  integrity_issues: WarehouseUploadIntegrityIssue[];
+  prohibited_goods_issues: WarehouseProhibitedGoodsIssue[];
+  errors: WarehouseFileImportError[];
   channel_tags: string[];
 }
 
@@ -261,6 +267,16 @@ function uploadFailureFromError(file: File, error: unknown): BatchUploadFailure 
     integrity_issues: [],
     conflicts: []
   };
+}
+
+function successWarningCount(item: BatchUploadSuccess) {
+  return (
+    item.warnings.length +
+    item.issues.length +
+    item.integrity_issues.length +
+    item.prohibited_goods_issues.length +
+    item.errors.length
+  );
 }
 
 export default function WarehouseReceiptsPage() {
@@ -517,6 +533,10 @@ export default function WarehouseReceiptsPage() {
             success_count: result.success_count,
             detected_channel: result.channel_review?.detected_channel,
             warnings: result.channel_review?.warnings || [],
+            issues: result.channel_review?.issues || [],
+            integrity_issues: result.integrity_issues || [],
+            prohibited_goods_issues: result.prohibited_goods_issues || [],
+            errors: result.errors || [],
             channel_tags: result.channel_tags || []
           });
         } catch (error) {
@@ -1182,6 +1202,9 @@ export default function WarehouseReceiptsPage() {
                 <span>成功 {batchUploadResult.successes.length} 个文件</span>
                 <span>失败 {batchUploadResult.failures.length} 个文件</span>
                 <span>
+                  警告 {batchUploadResult.successes.filter((item) => successWarningCount(item) > 0).length} 个文件
+                </span>
+                <span>
                   待确认{" "}
                   {
                     batchUploadResult.successes.filter((item) =>
@@ -1229,12 +1252,133 @@ export default function WarehouseReceiptsPage() {
                                   {warningLabel(warning)}
                                 </Badge>
                               ))}
+                              {item.issues.length ? (
+                                <Badge variant="amber" className="mr-1">
+                                  渠道警告 {item.issues.length}
+                                </Badge>
+                              ) : null}
+                              {item.integrity_issues.length ? (
+                                <Badge variant="amber" className="mr-1">
+                                  完整性警告 {item.integrity_issues.length}
+                                </Badge>
+                              ) : null}
+                              {item.prohibited_goods_issues.length ? (
+                                <Badge variant="amber" className="mr-1">
+                                  品名警告 {item.prohibited_goods_issues.length}
+                                </Badge>
+                              ) : null}
+                              {item.errors.length ? (
+                                <Badge variant="amber" className="mr-1">
+                                  行级警告 {item.errors.length}
+                                </Badge>
+                              ) : null}
                             </TD>
                           </TR>
                         ))}
                       </TBody>
                     </Table>
                   </div>
+                  {batchUploadResult.successes.some((item) => successWarningCount(item) > 0) ? (
+                    <div className="max-h-72 overflow-auto space-y-3 rounded-md border border-amber-200 bg-amber-50 p-3">
+                      <div className="font-medium text-amber-900">已上传，存在警告</div>
+                      {batchUploadResult.successes
+                        .filter((item) => successWarningCount(item) > 0)
+                        .map((item) => (
+                          <div key={`${item.file_name}-${item.warehouse_no}-warnings`} className="rounded-md border border-amber-200 bg-white p-3 text-amber-950">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-semibold">{item.warehouse_no || item.file_name}</span>
+                              <span className="text-xs text-amber-700">{item.file_name}</span>
+                            </div>
+                            {item.issues.length ? (
+                              <Table className="mt-3">
+                                <THead>
+                                  <TR>
+                                    <TH>外箱条码</TH>
+                                    <TH>前三字母</TH>
+                                    <TH>规则原因</TH>
+                                    <TH>说明</TH>
+                                  </TR>
+                                </THead>
+                                <TBody>
+                                  {item.issues.map((issue) => (
+                                    <TR key={`${item.file_name}-${issue.box_no}-${issue.reason}`}>
+                                      <TD className="font-medium">{issue.box_no}</TD>
+                                      <TD>{issue.prefix}</TD>
+                                      <TD>{issue.reason}</TD>
+                                      <TD>{issue.message}</TD>
+                                    </TR>
+                                  ))}
+                                </TBody>
+                              </Table>
+                            ) : null}
+                            {item.integrity_issues.length ? (
+                              <Table className="mt-3">
+                                <THead>
+                                  <TR>
+                                    <TH>Excel 行号</TH>
+                                    <TH>外箱条码</TH>
+                                    <TH>说明</TH>
+                                  </TR>
+                                </THead>
+                                <TBody>
+                                  {item.integrity_issues.map((issue) => (
+                                    <TR key={`${item.file_name}-${issue.row_number}-${issue.box_no}`}>
+                                      <TD>{issue.row_number}</TD>
+                                      <TD className="font-medium">{issue.box_no}</TD>
+                                      <TD>{issue.message}</TD>
+                                    </TR>
+                                  ))}
+                                </TBody>
+                              </Table>
+                            ) : null}
+                            {item.prohibited_goods_issues.length ? (
+                              <Table className="mt-3">
+                                <THead>
+                                  <TR>
+                                    <TH>Excel 行号</TH>
+                                    <TH>外箱条码</TH>
+                                    <TH>运单号</TH>
+                                    <TH>品名</TH>
+                                    <TH>命中词</TH>
+                                    <TH>说明</TH>
+                                  </TR>
+                                </THead>
+                                <TBody>
+                                  {item.prohibited_goods_issues.map((issue) => (
+                                    <TR key={`${item.file_name}-${issue.row_number}-${issue.box_no}-${issue.keyword}`}>
+                                      <TD>{issue.row_number}</TD>
+                                      <TD className="font-medium">{issue.box_no}</TD>
+                                      <TD>{compact(issue.warehouse_waybill_no)}</TD>
+                                      <TD>{issue.goods_name}</TD>
+                                      <TD>{issue.keyword}</TD>
+                                      <TD>{issue.message}</TD>
+                                    </TR>
+                                  ))}
+                                </TBody>
+                              </Table>
+                            ) : null}
+                            {item.errors.length ? (
+                              <Table className="mt-3">
+                                <THead>
+                                  <TR>
+                                    <TH>Excel 行号</TH>
+                                    <TH>说明</TH>
+                                  </TR>
+                                </THead>
+                                <TBody>
+                                  {item.errors.map((error, index) => (
+                                    <TR key={`${item.file_name}-${error.row_number}-${index}`}>
+                                      <TD>{error.row_number}</TD>
+                                      <TD>{error.message}</TD>
+                                    </TR>
+                                  ))}
+                                </TBody>
+                              </Table>
+                            ) : null}
+                          </div>
+                        ))}
+                    </div>
+                  ) : null}
                 </section>
               ) : null}
 

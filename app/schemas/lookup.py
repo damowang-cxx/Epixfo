@@ -6,7 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from app.models.enums import CarrierQueryMethod, OfficialEventType, QueryStatus
+from app.models.enums import CarrierAdapterType, CarrierQueryMethod, OfficialEventType, QueryStatus
 
 
 class WaybillLookupRequest(BaseModel):
@@ -67,6 +67,7 @@ class WaybillLookupResponse(BaseModel):
     status: QueryStatus
     carrier_code: str | None = None
     adapter_code: str | None = None
+    adapter_type: CarrierAdapterType | None = None
     query_method: CarrierQueryMethod | None = None
     error_code: str | None = None
     error_message: str | None = None

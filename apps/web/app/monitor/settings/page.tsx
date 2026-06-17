@@ -8,11 +8,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { apiClient } from "@/lib/client-api";
-import { carrierAdapterOptions } from "@/lib/constants";
 import { formatDateTime } from "@/lib/utils";
-import type { AutoFlightQuerySettings } from "@/lib/types";
+import type { AutoFlightQuerySettings, CarrierQueryAdapter } from "@/lib/types";
 
 type SettingsDraft = {
   fallbackEnabled: boolean;
@@ -33,6 +31,7 @@ function draftFromSettings(settings: AutoFlightQuerySettings): SettingsDraft {
 export default function AutoFlightQuerySettingsPage() {
   const [settings, setSettings] = useState<AutoFlightQuerySettings | null>(null);
   const [draft, setDraft] = useState<SettingsDraft | null>(null);
+  const [queryAdapters, setQueryAdapters] = useState<CarrierQueryAdapter[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
@@ -47,10 +46,14 @@ export default function AutoFlightQuerySettingsPage() {
       setLoading(true);
       setError("");
       try {
-        const result = await apiClient.get<AutoFlightQuerySettings>("/monitor/settings");
+        const [result, adapters] = await Promise.all([
+          apiClient.get<AutoFlightQuerySettings>("/monitor/settings"),
+          apiClient.get<CarrierQueryAdapter[]>("/carrier-query-adapters")
+        ]);
         if (cancelled) return;
         setSettings(result);
         setDraft(draftFromSettings(result));
+        setQueryAdapters(adapters);
       } catch (exc) {
         if (cancelled) return;
         setError(exc instanceof Error ? exc.message : "设置加载失败");
@@ -73,7 +76,6 @@ export default function AutoFlightQuerySettingsPage() {
     try {
       const result = await apiClient.patch<AutoFlightQuerySettings>("/monitor/settings", {
         fallback_enabled: draft.fallbackEnabled,
-        fallback_adapter_code: draft.fallbackAdapterCode,
         query_interval_hours: Number(draft.queryIntervalHours),
         scan_limit: Number(draft.scanLimit)
       });
@@ -105,6 +107,26 @@ export default function AutoFlightQuerySettingsPage() {
   }
 
   const disabled = loading || saving || !draft;
+  const generalAdapters = queryAdapters.filter((adapter) => adapter.adapter_type === "general");
+
+  async function moveGeneralAdapter(adapterCode: string, direction: -1 | 1) {
+    const index = generalAdapters.findIndex((adapter) => adapter.adapter_code === adapterCode);
+    const nextIndex = index + direction;
+    if (index < 0 || nextIndex < 0 || nextIndex >= generalAdapters.length) return;
+    const ordered = [...generalAdapters];
+    [ordered[index], ordered[nextIndex]] = [ordered[nextIndex], ordered[index]];
+    try {
+      const updated = await apiClient.put<CarrierQueryAdapter[]>("/carrier-query-adapters/general-order", {
+        adapter_codes: ordered.map((adapter) => adapter.adapter_code)
+      });
+      setQueryAdapters((prev) => {
+        const nonGeneral = prev.filter((adapter) => adapter.adapter_type !== "general");
+        return [...nonGeneral, ...updated];
+      });
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "通用适配器顺序保存失败");
+    }
+  }
 
   return (
     <>
@@ -123,24 +145,8 @@ export default function AutoFlightQuerySettingsPage() {
                 />
                 默认适配器失败后启用通用查询
               </label>
-              <div className="space-y-1.5">
-                <Label htmlFor="fallback-adapter">兜底适配器</Label>
-                <Select
-                  value={draft.fallbackAdapterCode}
-                  onValueChange={(value) => setDraft({ ...draft, fallbackAdapterCode: value })}
-                  disabled={disabled || !draft.fallbackEnabled}
-                >
-                  <SelectTrigger id="fallback-adapter">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {carrierAdapterOptions.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              <div className="rounded-md border border-slate-100 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                通用兜底会按右侧“通用适配器顺序”依次尝试，不再固定为单个适配器。
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="query-interval">查询间隔（小时）</Label>
@@ -171,6 +177,46 @@ export default function AutoFlightQuerySettingsPage() {
                   <Save className="h-4 w-4" />
                   {saving ? "保存中..." : "保存设置"}
                 </Button>
+              </div>
+              <div className="space-y-2 lg:col-span-2">
+                <div className="text-sm font-medium text-slate-700">通用适配器顺序</div>
+                {generalAdapters.length ? (
+                  <div className="space-y-2">
+                    {generalAdapters.map((adapter, index) => (
+                      <div
+                        key={adapter.adapter_code}
+                        className="flex items-center justify-between rounded-md border border-slate-100 px-3 py-2 text-sm"
+                      >
+                        <div>
+                          <div className="font-medium text-slate-800">{adapter.display_name}</div>
+                          <div className="text-xs text-slate-500">{adapter.adapter_code}</div>
+                        </div>
+                        <div className="flex gap-1">
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => moveGeneralAdapter(adapter.adapter_code, -1)}
+                            disabled={index === 0}
+                          >
+                            上移
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => moveGeneralAdapter(adapter.adapter_code, 1)}
+                            disabled={index === generalAdapters.length - 1}
+                          >
+                            下移
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-sm text-slate-500">暂无启用的通用适配器</div>
+                )}
               </div>
             </div>
           ) : (

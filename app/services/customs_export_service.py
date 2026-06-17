@@ -13,9 +13,12 @@ patch_platform_wmi()
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.worksheet import Worksheet
+from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm import selectinload
 
-from app.models import AirWaybill, Box
+from app.models import AirWaybill, Box, WarehouseReceipt, WaybillPlan
+from app.models.enums import WaybillLifecycleStatus
 from app.repositories.box_repository import BoxRepository
 from app.utils.planned_flight import extract_planned_flight_no
 
@@ -44,6 +47,44 @@ class CustomsExportService:
         stream = BytesIO()
         workbook.save(stream)
         return stream.getvalue()
+
+    def build_monthly_general_cargo_export(self, year: int, month: int) -> bytes:
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "普货汇总"
+        self._write_general_cargo_summary_sheet(sheet, self._list_monthly_general_cargo_rows(year, month))
+
+        stream = BytesIO()
+        workbook.save(stream)
+        return stream.getvalue()
+
+    def _list_monthly_general_cargo_rows(self, year: int, month: int) -> list[tuple[AirWaybill, WarehouseReceipt, Box]]:
+        start_date = date(year, month, 1)
+        end_date = _next_month_start(year, month)
+        stmt = (
+            select(AirWaybill, WarehouseReceipt, Box)
+            .join(WaybillPlan, WaybillPlan.waybill_id == AirWaybill.id)
+            .join(WarehouseReceipt, WarehouseReceipt.waybill_id == AirWaybill.id)
+            .join(Box, Box.warehouse_receipt_id == WarehouseReceipt.id)
+            .options(
+                selectinload(Box.items),
+                selectinload(WarehouseReceipt.source_document),
+            )
+            .where(
+                WaybillPlan.planned_flight_date >= start_date,
+                WaybillPlan.planned_flight_date < end_date,
+                AirWaybill.lifecycle_status != WaybillLifecycleStatus.VOIDED,
+                Box.is_general_cargo.is_(True),
+            )
+            .order_by(
+                WaybillPlan.planned_flight_date.asc(),
+                AirWaybill.waybill_no.asc(),
+                WarehouseReceipt.id.asc(),
+                Box.source_row_number.asc(),
+                Box.id.asc(),
+            )
+        )
+        return [(row[0], row[1], row[2]) for row in self.db.execute(stmt).all()]
 
     def _write_inbound_sheet(self, sheet: Worksheet, boxes: list[Box]) -> None:
         headers = ["外箱条码", "提单号码", "品名", "数量", "重量", "收货体积信息", "收货重量/方"]
@@ -97,6 +138,59 @@ class CustomsExportService:
         self._append_inbound_summary_row(sheet, total_weight, total_volume)
         self._finish_table(sheet, widths=[18, 20, 28, 10, 12, 16, 16])
 
+    def _write_general_cargo_summary_sheet(
+        self,
+        sheet: Worksheet,
+        rows: list[tuple[AirWaybill, WarehouseReceipt, Box]],
+    ) -> None:
+        headers = ["主提单号", "入仓号文件", "外箱条码", "运单号", "品名", "数量", "重量", "收货体积信息", "收货重量/方"]
+        sheet.append(headers)
+        self._style_header(sheet, len(headers))
+        total_weight = Decimal("0.000")
+        total_volume = Decimal("0.000")
+
+        for waybill, receipt, box in rows:
+            source_file_name = _receipt_file_name(receipt)
+            items = list(box.items or [])
+            if not items:
+                total_weight += _to_decimal(box.weight) or Decimal("0.000")
+                total_volume += _to_decimal(box.volume) or Decimal("0.000")
+                sheet.append(
+                    [
+                        waybill.waybill_no,
+                        source_file_name,
+                        box.box_no,
+                        box.warehouse_waybill_no,
+                        box.goods_name,
+                        box.quantity,
+                        _format_decimal_trim(box.weight),
+                        _format_box_volume_info(box),
+                        _format_decimal_3(box.volume),
+                    ]
+                )
+                continue
+
+            total_volume += _to_decimal(box.volume) or Decimal("0.000")
+            for index, item in enumerate(items):
+                is_first = index == 0
+                total_weight += _to_decimal(item.weight) or Decimal("0.000")
+                sheet.append(
+                    [
+                        waybill.waybill_no,
+                        source_file_name,
+                        box.box_no if is_first else "",
+                        item.warehouse_waybill_no,
+                        item.goods_name,
+                        item.quantity,
+                        _format_decimal_trim(item.weight),
+                        _format_box_volume_info(box) if is_first else "",
+                        _format_decimal_3(box.volume) if is_first else "",
+                    ]
+                )
+
+        self._append_general_cargo_summary_row(sheet, total_weight, total_volume)
+        self._finish_table(sheet, widths=[20, 28, 18, 20, 28, 10, 12, 16, 16])
+
     @staticmethod
     def _highlight_general_cargo_row(sheet: Worksheet) -> None:
         for cell in sheet[sheet.max_row][:7]:
@@ -123,6 +217,32 @@ class CustomsExportService:
             ]
         )
         for cell in sheet[sheet.max_row][3:7]:
+            cell.fill = SUMMARY_FILL
+            cell.font = Font(bold=True)
+
+    @staticmethod
+    def _append_general_cargo_summary_row(sheet: Worksheet, total_weight: Decimal, total_volume: Decimal) -> None:
+        total_weight = total_weight.quantize(DECIMAL_001)
+        total_volume = total_volume.quantize(DECIMAL_001)
+        total_density = (
+            (total_weight / total_volume).quantize(DECIMAL_001)
+            if total_volume > 0
+            else Decimal("0.000")
+        )
+        sheet.append(
+            [
+                "",
+                "",
+                "",
+                "",
+                "",
+                "合计",
+                _format_decimal_trim(total_weight),
+                _format_decimal_3(total_density),
+                _format_decimal_3(total_volume),
+            ]
+        )
+        for cell in sheet[sheet.max_row][5:9]:
             cell.fill = SUMMARY_FILL
             cell.font = Font(bold=True)
 
@@ -224,6 +344,18 @@ def _format_flight_date(value: date | None) -> str:
     if value is None:
         return ""
     return f"{value.day:02d}{MONTH_CODES[value.month - 1]}"
+
+
+def _next_month_start(year: int, month: int) -> date:
+    if month == 12:
+        return date(year + 1, 1, 1)
+    return date(year, month + 1, 1)
+
+
+def _receipt_file_name(receipt: WarehouseReceipt) -> str:
+    source_document = getattr(receipt, "source_document", None)
+    source_file_name = _clean(getattr(source_document, "file_name", None))
+    return source_file_name or _clean(getattr(receipt, "warehouse_no", None))
 
 
 def _format_decimal_3(value: Decimal | int | float | str | None) -> str:

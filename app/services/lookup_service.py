@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.adapters.carrier_query.base import CarrierQueryResult
 from app.adapters.carrier_query.registry import GENERAL_ADAPTER_CODE, registry
-from app.models.enums import QueryStatus
+from app.models.enums import CarrierAdapterType, QueryStatus
 from app.parsers.base import ParsedCarrierData
 from app.parsers.registry import parser_registry
 from app.repositories.carrier_repository import CarrierRepository
@@ -21,6 +21,7 @@ from app.schemas.lookup import (
     LookupStatusEvent,
     WaybillLookupResponse,
 )
+from app.services.carrier_service import DEFAULT_QUERY_ADAPTERS
 from app.utils.waybill_utils import (
     carrier_prefix_from_waybill,
     normalize_waybill_no,
@@ -63,6 +64,7 @@ class WaybillLookupService:
                 status=QueryStatus.FAILED,
                 carrier_code=carrier_code,
                 adapter_code=adapter_code,
+                adapter_type=self._adapter_type(adapter_code),
                 error_code="adapter_not_found",
                 error_message=f"adapter_code={adapter_code!r} 未在 registry 中注册",
             )
@@ -83,30 +85,51 @@ class WaybillLookupService:
                 status=QueryStatus.FAILED,
                 carrier_code=carrier_code,
                 adapter_code=adapter_code,
+                adapter_type=self._adapter_type(adapter_code),
                 error_code="adapter_not_found",
                 error_message=f"adapter_code={adapter_code!r} 未在 registry 中注册",
             )
 
         logger.info("ad-hoc lookup %s via %s", waybill_no, adapter_code)
         result = await adapter.query(waybill_no)
-        if result.adapter_code == GENERAL_ADAPTER_CODE:
+        adapter_type = self._adapter_type(result.adapter_code)
+        if adapter_type == CarrierAdapterType.GENERAL.value:
             result.carrier_code = carrier_code
 
         if result.status not in {QueryStatus.SUCCESS, QueryStatus.PARTIAL_SUCCESS} or result.raw_response is None:
-            return _from_failed_result(waybill_no, result)
+            return _from_failed_result(waybill_no, result, adapter_type)
 
         parser = parser_registry.get(result.adapter_code)
         parsed = parser.parse(result.raw_response) if parser is not None else ParsedCarrierData()
 
-        return _from_parsed(waybill_no, result, parsed)
+        return _from_parsed(waybill_no, result, parsed, adapter_type)
+
+    def _adapter_type(self, adapter_code: str | None) -> str | None:
+        if not adapter_code:
+            return None
+        if hasattr(self.carriers, "get_query_adapter"):
+            item = self.carriers.get_query_adapter(adapter_code)
+            if item is not None:
+                return item.adapter_type
+        default = DEFAULT_QUERY_ADAPTERS.get(adapter_code)
+        if default is not None:
+            return str(default["adapter_type"])
+        if adapter_code == GENERAL_ADAPTER_CODE:
+            return CarrierAdapterType.GENERAL.value
+        return None
 
 
-def _from_failed_result(waybill_no: str, result: CarrierQueryResult) -> WaybillLookupResponse:
+def _from_failed_result(
+    waybill_no: str,
+    result: CarrierQueryResult,
+    adapter_type: str | None,
+) -> WaybillLookupResponse:
     return WaybillLookupResponse(
         waybill_no=waybill_no,
         status=result.status,
         carrier_code=result.carrier_code,
         adapter_code=result.adapter_code,
+        adapter_type=adapter_type,
         query_method=result.query_method,
         error_code=result.error_code,
         error_message=result.error_message,
@@ -118,6 +141,7 @@ def _from_parsed(
     waybill_no: str,
     result: CarrierQueryResult,
     parsed: ParsedCarrierData,
+    adapter_type: str | None,
 ) -> WaybillLookupResponse:
     official_info = None
     if parsed.official_info is not None:
@@ -137,6 +161,7 @@ def _from_parsed(
         status=result.status,
         carrier_code=result.carrier_code,
         adapter_code=result.adapter_code,
+        adapter_type=adapter_type,
         query_method=result.query_method,
         error_code=result.error_code,
         error_message=result.error_message,

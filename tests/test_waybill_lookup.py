@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.adapters.carrier_query.base import CarrierQueryResult
-from app.models.enums import CarrierQueryMethod, OfficialEventType, QueryStatus
+from app.models.enums import CarrierAdapterType, CarrierQueryMethod, OfficialEventType, QueryStatus
 from app.services import lookup_service as lookup_service_module
 from app.services.lookup_service import WaybillLookupService
 
@@ -78,6 +78,7 @@ def test_lookup_success_returns_parsed_data(monkeypatch: pytest.MonkeyPatch) -> 
     assert response.waybill_no == "784-83707805"
     assert response.carrier_code == "CZ"
     assert response.adapter_code == "cz_adapter"
+    assert response.adapter_type == CarrierAdapterType.DEDICATED.value
     assert response.error_code is None
     assert response.official_info is not None
     assert response.official_info.official_waybill_no == "784-83707805"
@@ -162,6 +163,7 @@ def test_lookup_unmapped_prefix_falls_back_to_general_adapter(monkeypatch: pytes
     assert response.status == QueryStatus.SUCCESS
     assert response.carrier_code == "UNKNOWN"
     assert response.adapter_code == "general_adapter"
+    assert response.adapter_type == CarrierAdapterType.GENERAL.value
     assert response.official_info is not None
     assert response.official_info.carrier_text == "China Southern"
 
@@ -195,6 +197,7 @@ def test_lookup_explicit_general_adapter_overrides_mapped_adapter(monkeypatch: p
     assert response.status == QueryStatus.SUCCESS
     assert response.carrier_code == "CZ"
     assert response.adapter_code == "general_adapter"
+    assert response.adapter_type == CarrierAdapterType.GENERAL.value
 
 
 def test_lookup_explicit_unknown_adapter_does_not_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -254,6 +257,7 @@ def test_lookup_unknown_adapter_falls_back_to_general_adapter(monkeypatch: pytes
     assert response.status == QueryStatus.SUCCESS
     assert response.carrier_code == "ZZ"
     assert response.adapter_code == "general_adapter"
+    assert response.adapter_type == CarrierAdapterType.GENERAL.value
 
 
 def test_lookup_passes_through_adapter_failed_result(monkeypatch: pytest.MonkeyPatch) -> None:

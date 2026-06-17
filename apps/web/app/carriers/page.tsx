@@ -11,8 +11,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { apiClient } from "@/lib/client-api";
-import { carrierAdapterLabels, carrierAdapterOptions, carrierAdapterQueryMethods } from "@/lib/constants";
-import type { Carrier, CarrierAgent, CarrierPrefixMapping } from "@/lib/types";
+import { carrierAdapterLabels, carrierAdapterOptions, carrierAdapterQueryMethods, carrierAdapterTypeLabels } from "@/lib/constants";
+import type { Carrier, CarrierAgent, CarrierPrefixMapping, CarrierQueryAdapter } from "@/lib/types";
 
 type EditingRowId = number | "new" | null;
 
@@ -27,7 +27,6 @@ type MappingDraft = {
 };
 
 type AgentDraft = {
-  carrierCode: string;
   agentName: string;
   contactPerson: string;
   contactPhone: string;
@@ -60,10 +59,8 @@ function mappingDraftFromItem(item: CarrierPrefixMapping, carrier?: Carrier): Ma
   };
 }
 
-function emptyAgentDraft(carriers: Carrier[]): AgentDraft {
-  const firstCarrier = carriers.find((carrier) => carrier.enabled) || carriers[0];
+function emptyAgentDraft(): AgentDraft {
   return {
-    carrierCode: firstCarrier?.carrier_code || "",
     agentName: "",
     contactPerson: "",
     contactPhone: "",
@@ -75,7 +72,6 @@ function emptyAgentDraft(carriers: Carrier[]): AgentDraft {
 
 function agentDraftFromItem(item: CarrierAgent): AgentDraft {
   return {
-    carrierCode: item.carrier_code,
     agentName: item.agent_name,
     contactPerson: item.contact_person || "",
     contactPhone: item.contact_phone || "",
@@ -93,12 +89,13 @@ export default function CarriersPage() {
   const [carriers, setCarriers] = useState<Carrier[]>([]);
   const [mappings, setMappings] = useState<CarrierPrefixMapping[]>([]);
   const [agents, setAgents] = useState<CarrierAgent[]>([]);
+  const [queryAdapters, setQueryAdapters] = useState<CarrierQueryAdapter[]>([]);
   const [editingMappingId, setEditingMappingId] = useState<EditingRowId>(null);
   const [carrierDraft, setCarrierDraft] = useState<MappingDraft>(() => emptyMappingDraft());
   const [mappingError, setMappingError] = useState("");
   const [savingMapping, setSavingMapping] = useState(false);
   const [editingAgentId, setEditingAgentId] = useState<EditingRowId>(null);
-  const [agentDraft, setAgentDraft] = useState<AgentDraft>(() => emptyAgentDraft([]));
+  const [agentDraft, setAgentDraft] = useState<AgentDraft>(() => emptyAgentDraft());
   const [agentError, setAgentError] = useState("");
   const [savingAgent, setSavingAgent] = useState(false);
 
@@ -106,41 +103,16 @@ export default function CarriersPage() {
     return new Map(carriers.map((carrier) => [carrier.carrier_code, carrier]));
   }, [carriers]);
 
-  const carrierOptions = useMemo(() => {
-    const items = new Map<string, { code: string; label: string; enabled: boolean }>();
-    carriers.forEach((carrier) => {
-      items.set(carrier.carrier_code, {
-        code: carrier.carrier_code,
-        label: `${carrier.carrier_code} / ${carrier.carrier_name}`,
-        enabled: carrier.enabled
-      });
-    });
-    mappings.forEach((mapping) => {
-      if (!items.has(mapping.carrier_code)) {
-        items.set(mapping.carrier_code, {
-          code: mapping.carrier_code,
-          label: mapping.carrier_code,
-          enabled: mapping.enabled
-        });
-      }
-    });
-    agents.forEach((agent) => {
-      if (!items.has(agent.carrier_code)) {
-        items.set(agent.carrier_code, {
-          code: agent.carrier_code,
-          label: agent.carrier_code,
-          enabled: agent.enabled
-        });
-      }
-    });
-    return Array.from(items.values()).sort((left, right) => left.code.localeCompare(right.code));
-  }, [agents, carriers, mappings]);
+  const adapterByCode = useMemo(() => {
+    return new Map(queryAdapters.map((adapter) => [adapter.adapter_code, adapter]));
+  }, [queryAdapters]);
 
   const load = useCallback(async () => {
     const results = await Promise.allSettled([
       apiClient.get<Carrier[]>("/carriers"),
       apiClient.get<CarrierPrefixMapping[]>("/carrier-prefix-mappings"),
-      apiClient.get<CarrierAgent[]>("/carrier-agents")
+      apiClient.get<CarrierAgent[]>("/carrier-agents"),
+      apiClient.get<CarrierQueryAdapter[]>("/carrier-query-adapters")
     ]);
     if (results[0].status === "fulfilled") {
       setCarriers(results[0].value);
@@ -157,6 +129,11 @@ export default function CarriersPage() {
     } else {
       setAgentError(errorMessage(results[2].reason, "航代信息加载失败"));
     }
+    if (results[3].status === "fulfilled") {
+      setQueryAdapters(results[3].value);
+    } else {
+      setMappingError(errorMessage(results[3].reason, "adapter load failed"));
+    }
   }, []);
 
   useEffect(() => {
@@ -164,7 +141,8 @@ export default function CarriersPage() {
     void Promise.allSettled([
       apiClient.get<Carrier[]>("/carriers"),
       apiClient.get<CarrierPrefixMapping[]>("/carrier-prefix-mappings"),
-      apiClient.get<CarrierAgent[]>("/carrier-agents")
+      apiClient.get<CarrierAgent[]>("/carrier-agents"),
+      apiClient.get<CarrierQueryAdapter[]>("/carrier-query-adapters")
     ]).then((results) => {
       if (!active) return;
       if (results[0].status === "fulfilled") {
@@ -182,6 +160,11 @@ export default function CarriersPage() {
       } else {
         setAgentError(errorMessage(results[2].reason, "航代信息加载失败"));
       }
+      if (results[3].status === "fulfilled") {
+        setQueryAdapters(results[3].value);
+      } else {
+        setMappingError(errorMessage(results[3].reason, "adapter load failed"));
+      }
     });
     return () => {
       active = false;
@@ -194,7 +177,49 @@ export default function CarriersPage() {
       carrierDraft.carrierName.trim() &&
       carrierDraft.adapterCode.trim()
   );
-  const agentReady = Boolean(agentDraft.carrierCode.trim() && agentDraft.agentName.trim());
+  const agentReady = Boolean(agentDraft.agentName.trim());
+
+  function adapterLabel(adapterCode: string) {
+    const adapter = adapterByCode.get(adapterCode);
+    if (adapter) {
+      return `${adapter.display_name}（${adapter.adapter_code}）`;
+    }
+    return carrierAdapterLabels[adapterCode] || adapterCode;
+  }
+
+  function adapterTypeLabel(adapterCode: string) {
+    const adapter = adapterByCode.get(adapterCode);
+    return adapter ? carrierAdapterTypeLabels[adapter.adapter_type] || adapter.adapter_type : "";
+  }
+
+  function adapterSelectItems() {
+    if (!queryAdapters.length) {
+      return carrierAdapterOptions.map((option) => (
+        <SelectItem key={option.value} value={option.value}>
+          {option.label}
+        </SelectItem>
+      ));
+    }
+
+    const dedicated = queryAdapters.filter((adapter) => adapter.adapter_type === "dedicated" && adapter.enabled);
+    const general = queryAdapters.filter((adapter) => adapter.adapter_type === "general" && adapter.enabled);
+    return (
+      <>
+        {dedicated.length ? <div className="px-2 py-1 text-xs font-medium text-slate-500">专属适配器</div> : null}
+        {dedicated.map((adapter) => (
+          <SelectItem key={adapter.adapter_code} value={adapter.adapter_code}>
+            {adapter.display_name}（{adapter.adapter_code}）
+          </SelectItem>
+        ))}
+        {general.length ? <div className="px-2 py-1 text-xs font-medium text-slate-500">通用适配器</div> : null}
+        {general.map((adapter) => (
+          <SelectItem key={adapter.adapter_code} value={adapter.adapter_code}>
+            {adapter.display_name}（{adapter.adapter_code}）
+          </SelectItem>
+        ))}
+      </>
+    );
+  }
 
   function startNewMapping() {
     setMappingError("");
@@ -272,11 +297,7 @@ export default function CarriersPage() {
   function startNewAgent() {
     setAgentError("");
     setEditingAgentId("new");
-    const firstCarrier = carrierOptions.find((carrier) => carrier.enabled) || carrierOptions[0];
-    setAgentDraft({
-      ...emptyAgentDraft(carriers),
-      carrierCode: firstCarrier?.code || ""
-    });
+    setAgentDraft(emptyAgentDraft());
   }
 
   function editAgent(item: CarrierAgent) {
@@ -288,11 +309,7 @@ export default function CarriersPage() {
   function cancelAgentEdit() {
     setAgentError("");
     setEditingAgentId(null);
-    const firstCarrier = carrierOptions.find((carrier) => carrier.enabled) || carrierOptions[0];
-    setAgentDraft({
-      ...emptyAgentDraft(carriers),
-      carrierCode: firstCarrier?.code || ""
-    });
+    setAgentDraft(emptyAgentDraft());
   }
 
   async function saveAgentDraft() {
@@ -303,7 +320,6 @@ export default function CarriersPage() {
     try {
       if (editingAgentId === "new") {
         await apiClient.post<CarrierAgent>("/carrier-agents", {
-          carrier_code: agentDraft.carrierCode,
           agent_name: agentDraft.agentName.trim(),
           contact_person: agentDraft.contactPerson.trim() || null,
           contact_phone: agentDraft.contactPhone.trim() || null,
@@ -371,13 +387,7 @@ export default function CarriersPage() {
             <SelectTrigger className="w-56">
               <SelectValue placeholder="选择适配器" />
             </SelectTrigger>
-            <SelectContent>
-              {carrierAdapterOptions.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
+            <SelectContent>{adapterSelectItems()}</SelectContent>
           </Select>
         </TD>
         <TD>
@@ -414,32 +424,9 @@ export default function CarriersPage() {
     );
   }
 
-  function agentDraftRow(key: string, carrierReadOnly: boolean) {
+  function agentDraftRow(key: string) {
     return (
       <TR key={key} className="bg-slate-50 align-top hover:bg-slate-50">
-        <TD>
-          {carrierReadOnly ? (
-            <Input value={agentDraft.carrierCode} readOnly className="w-28" />
-          ) : (
-            <Select
-              value={agentDraft.carrierCode}
-              onValueChange={(value) => setAgentDraft((prev) => ({ ...prev, carrierCode: value }))}
-            >
-              <SelectTrigger className="w-48">
-                <SelectValue placeholder="选择航司" />
-              </SelectTrigger>
-              <SelectContent>
-                {carrierOptions
-                  .filter((carrier) => carrier.enabled)
-                  .map((carrier) => (
-                    <SelectItem key={carrier.code} value={carrier.code}>
-                      {carrier.label}
-                    </SelectItem>
-                  ))}
-              </SelectContent>
-            </Select>
-          )}
-        </TD>
         <TD>
           <Input
             value={agentDraft.agentName}
@@ -546,7 +533,14 @@ export default function CarriersPage() {
                   <TD>{item.carrier_code}</TD>
                   <TD>{carrier?.carrier_name || "-"}</TD>
                   <TD>{carrier?.carrier_name_en || "-"}</TD>
-                  <TD>{carrierAdapterLabels[item.adapter_code] || item.adapter_code}</TD>
+                  <TD>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span>{adapterLabel(item.adapter_code)}</span>
+                      {adapterTypeLabel(item.adapter_code) ? (
+                        <Badge variant="blue">{adapterTypeLabel(item.adapter_code)}</Badge>
+                      ) : null}
+                    </div>
+                  </TD>
                   <TD>
                     <Badge variant={item.enabled ? "green" : "gray"}>{item.enabled ? "启用" : "停用"}</Badge>
                   </TD>
@@ -586,7 +580,6 @@ export default function CarriersPage() {
         <Table>
           <THead>
             <TR>
-              <TH>航司</TH>
               <TH>代理名</TH>
               <TH>联系人</TH>
               <TH>电话</TH>
@@ -597,14 +590,13 @@ export default function CarriersPage() {
             </TR>
           </THead>
           <TBody>
-            {editingAgentId === "new" ? agentDraftRow("new-agent", false) : null}
+            {editingAgentId === "new" ? agentDraftRow("new-agent") : null}
             {agents.map((item) => {
               if (editingAgentId === item.id) {
-                return agentDraftRow(`agent-${item.id}`, true);
+                return agentDraftRow(`agent-${item.id}`);
               }
               return (
                 <TR key={item.id}>
-                  <TD className="font-medium">{item.carrier_code}</TD>
                   <TD>{item.agent_name}</TD>
                   <TD>{item.contact_person || "-"}</TD>
                   <TD>{item.contact_phone || "-"}</TD>

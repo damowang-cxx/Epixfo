@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 
 from app.core.platform_patch import patch_platform_wmi
@@ -16,9 +17,13 @@ from pydantic import ValidationError
 from sqlalchemy import exists, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.exceptions import bad_request
 from app.models import AirWaybill, CarrierAgent, User, WarehousePlanningDraft, WarehouseReceipt, WaybillPrebooking
 from app.models.enums import WaybillLifecycleStatus
 from app.schemas.warehouse_planner import (
+    WarehousePlannerBulkImportError,
+    WarehousePlannerBulkImportResult,
+    WarehousePlannerBulkImportWarning,
     WarehousePlannerCandidate,
     WarehousePlannerCandidatesOut,
     WarehousePlannerCommitRequest,
@@ -35,11 +40,15 @@ from app.schemas.waybill import WaybillCreate, WaybillUpdate
 from app.services.permission_service import PermissionService
 from app.services.prebooking_service import PrebookingService
 from app.services.warehouse_file_service import WarehouseFileService
+from app.services.waybill_bulk_import_service import WaybillBulkImportService, WaybillImportTemplateParser
 from app.services.waybill_service import WaybillService
+from app.utils.datetime_utils import local_now
 
 
 ACTIVE_EXCLUDED_STATUSES = {WaybillLifecycleStatus.PICKED_UP, WaybillLifecycleStatus.VOIDED}
+IMPORT_SOURCE_TYPES = {"import_waybill", "import_prebooking"}
 PLANNER_EXPORT_HEADERS = [
+    "排仓栏位",
     "来源",
     "航代",
     "计划航班",
@@ -100,6 +109,43 @@ class WarehousePlannerService:
             waybills=[self._waybill_candidate(item) for item in waybill_items],
             prebookings=[self._prebooking_candidate(item) for item in prebooking_items],
             unbound_receipts=self._all_unbound_receipts(),
+        )
+
+    def bulk_import(self, file_name: str, content: bytes, current_user: User) -> WarehousePlannerBulkImportResult:
+        PermissionService.assert_waybill_write(current_user)
+        if Path(file_name).suffix.lower() != ".xlsx":
+            raise bad_request("waybill_import_only_xlsx_supported")
+
+        lookup_service = WaybillBulkImportService(self.db)
+        parser = WaybillImportTemplateParser(
+            agents_by_name=lookup_service._agent_lookup(),
+            consignees_by_name=lookup_service._consignee_lookup(),
+            users_by_name=lookup_service._user_lookup(),
+        )
+        source_id_base = int(local_now().timestamp() * 1000) * 1000
+        parsed = parser.parse_planner(content, source_id_base=source_id_base)
+        return WarehousePlannerBulkImportResult(
+            file_name=file_name,
+            imported_count=len(parsed.rows),
+            skipped_count=parsed.skipped_count,
+            rows=parsed.rows,
+            warnings=[
+                WarehousePlannerBulkImportWarning(
+                    row_number=item.row_number,
+                    field=item.field,
+                    raw_value=item.raw_value,
+                    message=item.message,
+                )
+                for item in parsed.warnings
+            ],
+            errors=[
+                WarehousePlannerBulkImportError(
+                    row_number=item.row_number,
+                    waybill_no=item.waybill_no,
+                    message=item.message,
+                )
+                for item in parsed.errors
+            ],
         )
 
     def validate_rows(self, payload: WarehousePlannerRowsRequest, current_user: User) -> WarehousePlannerValidateResult:
@@ -211,7 +257,7 @@ class WarehousePlannerService:
         for row in draft.rows:
             sheet.append(self._export_row_values(row))
 
-        widths = [12, 18, 16, 18, 14, 26, 18, 16, 18, 14, 12, 12, 10, 12, 12, 24]
+        widths = [12, 12, 18, 16, 18, 14, 26, 18, 16, 18, 14, 12, 12, 10, 12, 12, 24]
         for index, width in enumerate(widths, start=1):
             sheet.column_dimensions[chr(64 + index)].width = width
         for item in sheet.iter_rows():
@@ -358,6 +404,17 @@ class WarehousePlannerService:
                 errors=errors,
             )
 
+        if row.source_type in IMPORT_SOURCE_TYPES:
+            errors.extend(self._validate_import_create(row))
+            errors.extend(self._validate_receipts(row, target_new_waybill=True))
+            return WarehousePlannerRowResult(
+                source_type=row.source_type,
+                source_id=row.source_id,
+                status="invalid" if errors else "valid",
+                waybill_no=row.waybill_no,
+                errors=errors,
+            )
+
         prebooking = self.db.get(WaybillPrebooking, row.source_id)
         if prebooking is None:
             return self._invalid_result(row, None, "prebooking_not_found")
@@ -383,7 +440,29 @@ class WarehousePlannerService:
 
     def _validate_prebooking_convert(self, row: WarehousePlannerRow, prebooking: WaybillPrebooking) -> list[WarehousePlannerRowError]:
         data = self._prebooking_convert_data(row, prebooking)
-        errors = []
+        errors = self._required_formal_waybill_errors(data)
+        if errors:
+            return errors
+        try:
+            WaybillCreate.model_validate(data)
+        except ValidationError as exc:
+            return [self._error_from_validation(exc)]
+        return []
+
+    def _validate_import_create(self, row: WarehousePlannerRow) -> list[WarehousePlannerRowError]:
+        data = self._import_create_data(row)
+        errors = self._required_formal_waybill_errors(data)
+        if errors:
+            return errors
+        try:
+            WaybillCreate.model_validate(data)
+        except ValidationError as exc:
+            return [self._error_from_validation(exc)]
+        return []
+
+    @staticmethod
+    def _required_formal_waybill_errors(data: dict[str, Any]) -> list[WarehousePlannerRowError]:
+        errors: list[WarehousePlannerRowError] = []
         required = {
             "waybill_no": "waybill_no_required",
             "carrier_agent_id": "carrier_agent_required",
@@ -399,13 +478,7 @@ class WarehousePlannerService:
                 errors.append(WarehousePlannerRowError(field=field, message=message))
         if not data.get("planned_flight_no") or not data.get("planned_flight_date"):
             errors.append(WarehousePlannerRowError(field="planned_flight_no", message="planned_flight_required"))
-        if errors:
-            return errors
-        try:
-            WaybillCreate.model_validate(data)
-        except ValidationError as exc:
-            return [self._error_from_validation(exc)]
-        return []
+        return errors
 
     def _validate_receipts(
         self,
@@ -413,6 +486,7 @@ class WarehousePlannerService:
         *,
         current_waybill_id: int | None = None,
         current_prebooking_id: int | None = None,
+        target_new_waybill: bool = False,
     ) -> list[WarehousePlannerRowError]:
         errors: list[WarehousePlannerRowError] = []
         for receipt_id in row.receipt_ids:
@@ -420,6 +494,11 @@ class WarehousePlannerService:
             if receipt is None:
                 errors.append(WarehousePlannerRowError(field="receipt_ids", message=f"warehouse_receipt_not_found:{receipt_id}"))
                 continue
+            if target_new_waybill:
+                if receipt.waybill_id is not None:
+                    errors.append(WarehousePlannerRowError(field="receipt_ids", message=f"receipt_bound_to_waybill:{receipt.warehouse_no}"))
+                if receipt.prebooking_id is not None:
+                    errors.append(WarehousePlannerRowError(field="receipt_ids", message=f"receipt_bound_to_prebooking:{receipt.warehouse_no}"))
             if current_waybill_id is not None:
                 if receipt.prebooking_id is not None:
                     errors.append(WarehousePlannerRowError(field="receipt_ids", message=f"receipt_bound_to_prebooking:{receipt.warehouse_no}"))
@@ -440,6 +519,19 @@ class WarehousePlannerService:
                 current_user,
                 auto_commit=False,
             )
+            for receipt_id in row.receipt_ids:
+                self.warehouse_files.bind_receipt_to_waybill(receipt_id, waybill.id, current_user, auto_commit=False)
+            return WarehousePlannerRowResult(
+                source_type=row.source_type,
+                source_id=row.source_id,
+                status="committed",
+                waybill_id=waybill.id,
+                waybill_no=waybill.waybill_no,
+            )
+
+        if row.source_type in IMPORT_SOURCE_TYPES:
+            payload = WaybillCreate.model_validate(self._import_create_data(row))
+            waybill = self.waybills.create(payload, current_user, auto_commit=False)
             for receipt_id in row.receipt_ids:
                 self.warehouse_files.bind_receipt_to_waybill(receipt_id, waybill.id, current_user, auto_commit=False)
             return WarehousePlannerRowResult(
@@ -481,6 +573,26 @@ class WarehousePlannerService:
             "planned_route_text": row.planned_route_text,
         }
 
+    def _import_create_data(self, row: WarehousePlannerRow) -> dict[str, Any]:
+        return {
+            "waybill_no": row.waybill_no,
+            "carrier_agent_id": row.carrier_agent_id,
+            "planned_flight_no": row.planned_flight_no,
+            "planned_flight_date": row.planned_flight_date,
+            "planned_destination": row.destination_port,
+            "outbound_date": row.outbound_date,
+            "consignee_contact_id": row.consignee_contact_id,
+            "customs_staff_id": row.customs_staff_id,
+            "booked_volume": row.booked_volume,
+            "booked_weight": row.booked_weight,
+            "density": row.density,
+            "quotation": row.quotation,
+            "include_tc": row.include_tc if row.include_tc is not None else False,
+            "departure_port": row.departure_port,
+            "destination_port": row.destination_port,
+            "planned_route_text": row.planned_route_text,
+        }
+
     def _prebooking_convert_data(self, row: WarehousePlannerRow, prebooking: WaybillPrebooking) -> dict[str, Any]:
         return {
             "waybill_no": row.waybill_no or prebooking.waybill_no,
@@ -517,7 +629,8 @@ class WarehousePlannerService:
         agent_name = self._agent_name(row.carrier_agent_id)
         customs_name = self._user_name(row.customs_staff_id)
         return [
-            "正式提单" if row.source_type == "waybill" else "预排仓",
+            row.planning_channel,
+            _source_label(row.source_type),
             agent_name,
             row.planned_flight_no,
             row.waybill_no,
@@ -603,3 +716,13 @@ def _format_decimal(value: Decimal | None) -> str:
         return ""
     text = format(value, "f")
     return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+def _source_label(source_type: str) -> str:
+    labels = {
+        "waybill": "正式提单",
+        "prebooking": "预排仓",
+        "import_waybill": "导入提单",
+        "import_prebooking": "导入预排仓",
+    }
+    return labels.get(source_type, source_type)

@@ -72,6 +72,43 @@ export interface WaybillPlan {
   planned_route_text?: string | null;
 }
 
+export interface WaybillAirlineFile {
+  id: number;
+  waybill_id: number;
+  original_file_name: string;
+  file_hash: string;
+  file_size: number;
+  content_type?: string | null;
+  extracted_waybill_no?: string | null;
+  extraction_method?: string | null;
+  uploaded_by?: number | null;
+  uploaded_at: string;
+}
+
+export interface WaybillAirlineFileBatchSuccess {
+  file_name: string;
+  waybill_id: number;
+  waybill_no: string;
+  extracted_waybill_no?: string | null;
+  extraction_method?: string | null;
+  replaced_existing: boolean;
+  airline_file: WaybillAirlineFile;
+}
+
+export interface WaybillAirlineFileBatchFailure {
+  file_name: string;
+  error_code: string;
+  message: string;
+  extracted_waybill_no?: string | null;
+}
+
+export interface WaybillAirlineFileBatchUploadResult {
+  success_count: number;
+  failed_count: number;
+  successes: WaybillAirlineFileBatchSuccess[];
+  failures: WaybillAirlineFileBatchFailure[];
+}
+
 export interface Waybill {
   id: number;
   waybill_no: string;
@@ -120,6 +157,7 @@ export interface Waybill {
   next_query_at?: string | null;
   consecutive_query_failures: number;
   plan?: WaybillPlan | null;
+  airline_file?: WaybillAirlineFile | null;
   official_estimated_flight_date?: string | null;
   created_at: string;
   updated_at: string;
@@ -307,9 +345,19 @@ export interface WarehouseUploadIntegrityIssue {
   message: string;
 }
 
+export interface WarehouseProhibitedGoodsIssue {
+  row_number: number;
+  box_no: string;
+  warehouse_waybill_no?: string | null;
+  goods_name: string;
+  keyword: string;
+  message: string;
+}
+
 export interface WarehouseChannelReview {
   detected_channel: "europe" | "uk" | "unknown" | "mixed";
   warnings: string[];
+  issues?: WarehouseChannelReviewIssue[];
 }
 
 export interface WarehouseFileUploadResult {
@@ -324,20 +372,24 @@ export interface WarehouseFileUploadResult {
   channel_review?: WarehouseChannelReview | null;
   channel_tags: string[];
   integrity_issues: WarehouseUploadIntegrityIssue[];
+  prohibited_goods_issues: WarehouseProhibitedGoodsIssue[];
 }
 
-export type PlannerSourceType = "waybill" | "prebooking";
+export type PlannerSourceType = "waybill" | "prebooking" | "import_waybill" | "import_prebooking";
 export type PlannerCommitMode = "all_or_none" | "success_only";
+export type PlannerChannel = "AMS" | "LHR";
 
 export interface WarehousePlannerRow {
   source_type: PlannerSourceType;
   source_id: number;
+  planning_channel?: PlannerChannel | null;
   waybill_no?: string | null;
   carrier_agent_id?: number | null;
   planned_flight_no?: string | null;
   planned_flight_date?: string | null;
   outbound_date?: string | null;
   receipt_ids: number[];
+  consignee_contact_id?: number | null;
   customs_staff_id?: number | null;
   booked_volume?: string | number | null;
   booked_weight?: string | number | null;
@@ -412,6 +464,28 @@ export interface WarehousePlannerCommitResult {
   results: WarehousePlannerRowResult[];
   remaining_rows: WarehousePlannerRow[];
   skipped_due_to_all_or_none: boolean;
+}
+
+export interface WarehousePlannerBulkImportWarning {
+  row_number: number;
+  field: string;
+  raw_value?: string | null;
+  message: string;
+}
+
+export interface WarehousePlannerBulkImportError {
+  row_number?: number | null;
+  waybill_no?: string | null;
+  message: string;
+}
+
+export interface WarehousePlannerBulkImportResult {
+  file_name: string;
+  imported_count: number;
+  skipped_count: number;
+  rows: WarehousePlannerRow[];
+  warnings: WarehousePlannerBulkImportWarning[];
+  errors: WarehousePlannerBulkImportError[];
 }
 
 export interface WaybillBulkImportError {
@@ -606,7 +680,6 @@ export interface ConsigneeNotifyParty {
 
 export interface CarrierAgent {
   id: number;
-  carrier_code: string;
   agent_name: string;
   contact_person?: string | null;
   contact_phone?: string | null;
@@ -624,6 +697,21 @@ export interface CarrierPrefixMapping {
   adapter_code: string;
   query_method: "protocol" | "playwright" | "hybrid";
   enabled: boolean;
+  remark?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type CarrierAdapterType = "dedicated" | "general";
+
+export interface CarrierQueryAdapter {
+  id: number;
+  adapter_code: string;
+  display_name: string;
+  adapter_type: CarrierAdapterType;
+  query_method: "protocol" | "playwright" | "hybrid";
+  enabled: boolean;
+  display_order: number;
   remark?: string | null;
   created_at: string;
   updated_at: string;
@@ -696,6 +784,7 @@ export interface QuerySnapshot {
   waybill_id: number;
   carrier_code?: string | null;
   adapter_code?: string | null;
+  adapter_type?: CarrierAdapterType | null;
   query_method?: string | null;
   query_status: QueryStatus;
   raw_response?: Record<string, unknown> | null;
@@ -837,6 +926,7 @@ export interface WaybillLookupResponse {
   status: QueryStatus;
   carrier_code?: string | null;
   adapter_code?: string | null;
+  adapter_type?: CarrierAdapterType | null;
   query_method?: string | null;
   error_code?: string | null;
   error_message?: string | null;

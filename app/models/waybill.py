@@ -26,7 +26,14 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
-from app.models.enums import AlertLevel, CarrierQueryMethod, OfficialEventType, QueryStatus, WaybillLifecycleStatus, enum_values
+from app.models.enums import (
+    AlertLevel,
+    CarrierQueryMethod,
+    OfficialEventType,
+    QueryStatus,
+    WaybillLifecycleStatus,
+    enum_values,
+)
 from app.models.mixins import CreatedAtMixin, TimestampMixin
 
 
@@ -219,6 +226,12 @@ class AirWaybill(Base, TimestampMixin):
         back_populates="waybill",
         cascade="all, delete-orphan",
     )
+    airline_file: Mapped[Optional[WaybillAirlineFile]] = relationship(
+        back_populates="waybill",
+        cascade="all, delete-orphan",
+        uselist=False,
+        lazy="selectin",
+    )
 
     @property
     def official_estimated_flight_date(self) -> date | None:
@@ -226,6 +239,35 @@ class AirWaybill(Base, TimestampMixin):
             if segment.flight_date is not None:
                 return segment.flight_date
         return None
+
+
+class WaybillAirlineFile(Base):
+    __tablename__ = "waybill_airline_files"
+    __table_args__ = (
+        UniqueConstraint("waybill_id", name="uq_waybill_airline_files_waybill_id"),
+        Index("idx_waybill_airline_files_waybill_id", "waybill_id"),
+        Index("idx_waybill_airline_files_uploaded_by", "uploaded_by"),
+        Index("idx_waybill_airline_files_uploaded_at", "uploaded_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    waybill_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("air_waybills.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    original_file_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    stored_file_path: Mapped[str] = mapped_column(Text, nullable=False)
+    file_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    file_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    content_type: Mapped[Optional[str]] = mapped_column(String(128))
+    extracted_waybill_no: Mapped[Optional[str]] = mapped_column(String(64))
+    extraction_method: Mapped[Optional[str]] = mapped_column(String(32))
+    uploaded_by: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="SET NULL"))
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+    waybill: Mapped[AirWaybill] = relationship(back_populates="airline_file")
+    uploader = relationship("User")
 
 
 class WaybillCustomsAccessGrant(Base, CreatedAtMixin):
@@ -305,6 +347,7 @@ class WaybillQuerySnapshot(Base):
     )
     carrier_code: Mapped[Optional[str]] = mapped_column(String(16))
     adapter_code: Mapped[Optional[str]] = mapped_column(String(64))
+    adapter_type: Mapped[Optional[str]] = mapped_column(String(16))
     query_method: Mapped[Optional[CarrierQueryMethod]] = mapped_column(
         Enum(CarrierQueryMethod, name="carrier_query_method", values_callable=enum_values),
     )

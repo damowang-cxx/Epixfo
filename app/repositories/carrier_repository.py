@@ -7,7 +7,8 @@ patch_platform_wmi()
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Carrier, CarrierAgent, CarrierPrefixMapping, CarrierQueryConfig
+from app.models import Carrier, CarrierAgent, CarrierPrefixMapping, CarrierQueryAdapter, CarrierQueryConfig
+from app.models.enums import CarrierAdapterType
 
 
 class CarrierRepository:
@@ -40,11 +41,39 @@ class CarrierRepository:
             )
         )
 
-    def list_agents(self, carrier_code: str | None = None) -> list[CarrierAgent]:
-        stmt = select(CarrierAgent).order_by(CarrierAgent.carrier_code, CarrierAgent.agent_name)
-        if carrier_code:
-            stmt = stmt.where(CarrierAgent.carrier_code == carrier_code)
-        return list(self.db.scalars(stmt))
+    def get_query_adapter(self, adapter_code: str | None) -> CarrierQueryAdapter | None:
+        if not adapter_code:
+            return None
+        return self.db.scalar(select(CarrierQueryAdapter).where(CarrierQueryAdapter.adapter_code == adapter_code))
+
+    def list_query_adapters(self) -> list[CarrierQueryAdapter]:
+        return list(
+            self.db.scalars(
+                select(CarrierQueryAdapter).order_by(
+                    CarrierQueryAdapter.adapter_type,
+                    CarrierQueryAdapter.display_order,
+                    CarrierQueryAdapter.created_at,
+                    CarrierQueryAdapter.adapter_code,
+                )
+            )
+        )
+
+    def list_general_query_adapters(self, enabled_only: bool = True) -> list[CarrierQueryAdapter]:
+        stmt = select(CarrierQueryAdapter).where(CarrierQueryAdapter.adapter_type == CarrierAdapterType.GENERAL.value)
+        if enabled_only:
+            stmt = stmt.where(CarrierQueryAdapter.enabled.is_(True))
+        return list(
+            self.db.scalars(
+                stmt.order_by(
+                    CarrierQueryAdapter.display_order.asc(),
+                    CarrierQueryAdapter.created_at.asc(),
+                    CarrierQueryAdapter.adapter_code.asc(),
+                )
+            )
+        )
+
+    def list_agents(self) -> list[CarrierAgent]:
+        return list(self.db.scalars(select(CarrierAgent).order_by(CarrierAgent.agent_name, CarrierAgent.id)))
 
     def get_agent(self, agent_id: int) -> CarrierAgent | None:
         return self.db.get(CarrierAgent, agent_id)

@@ -27,6 +27,11 @@ class CarrierQueryMethod(StrEnum):
     HYBRID = "hybrid"
 
 
+class CarrierAdapterType(StrEnum):
+    DEDICATED = "dedicated"
+    GENERAL = "general"
+
+
 class QueryStatus(StrEnum):
     SUCCESS = "success"
     FAILED = "failed"

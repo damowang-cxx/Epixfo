@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { Ban, Download, Pencil, Play, Trash2, UserCheck } from "lucide-react";
+import { Ban, Download, Pencil, Play, Trash2, Upload, UserCheck } from "lucide-react";
 import { AlertLevelBadge, LifecycleBadge } from "@/components/ui/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,7 +19,7 @@ import { WarehouseFileUploadButton } from "@/components/waybills/warehouse-file-
 import { useAuth } from "@/components/layout/auth-provider";
 import { apiClient } from "@/lib/client-api";
 import { compact, computeRatio, formatDateTime, formatOutboundDate } from "@/lib/utils";
-import { lifecycleLabels } from "@/lib/constants";
+import { carrierAdapterTypeLabels, lifecycleLabels } from "@/lib/constants";
 import { formatPlannedFlightInfo } from "@/lib/planned-flight";
 import { formatWarehouseUploadMessage } from "@/lib/warehouse-upload";
 import type {
@@ -32,7 +32,8 @@ import type {
   QuerySnapshot,
   StatusEvent,
   User,
-  Waybill
+  Waybill,
+  WaybillAirlineFile
 } from "@/lib/types";
 
 const statusOptions: LifecycleStatus[] = [
@@ -79,10 +80,22 @@ function channelTags(tags?: string[] | null) {
   return (tags || []).filter(Boolean);
 }
 
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 export default function WaybillDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const id = Array.isArray(params.id) ? params.id[0] : params.id;
+  const airlineFileInputRef = useRef<HTMLInputElement | null>(null);
   const { hasRole } = useAuth();
   const isAdmin = hasRole("admin");
   const isRouteStaff = hasRole("route_staff");
@@ -103,6 +116,9 @@ export default function WaybillDetailPage() {
   const [manualStatus, setManualStatus] = useState<LifecycleStatus>("created");
   const [message, setMessage] = useState("");
   const [customsStaffSaving, setCustomsStaffSaving] = useState(false);
+  const [airlineFileUploading, setAirlineFileUploading] = useState(false);
+  const [airlineFileDeleting, setAirlineFileDeleting] = useState(false);
+  const [airlineFileDownloading, setAirlineFileDownloading] = useState(false);
 
   const load = useCallback(() => {
     if (!id) return;
@@ -264,6 +280,55 @@ export default function WaybillDetailPage() {
     }
   }
 
+  async function uploadAirlineFile(files: FileList | null) {
+    const file = files?.[0];
+    if (!id || !file || !canEditBoxes) return;
+    const formData = new FormData();
+    formData.append("file", file);
+    setAirlineFileUploading(true);
+    setMessage("");
+    try {
+      const uploaded = await apiClient.postForm<WaybillAirlineFile>(`/waybills/${id}/airline-file`, formData);
+      setWaybill((current) => (current ? { ...current, airline_file: uploaded } : current));
+      setMessage("航司对接文件已上传。");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "航司对接文件上传失败。");
+    } finally {
+      setAirlineFileUploading(false);
+      if (airlineFileInputRef.current) airlineFileInputRef.current.value = "";
+    }
+  }
+
+  async function downloadAirlineFile() {
+    if (!id || !waybill?.airline_file) return;
+    setAirlineFileDownloading(true);
+    setMessage("");
+    try {
+      const { blob, filename } = await apiClient.download(`/waybills/${id}/airline-file/download`);
+      downloadBlob(blob, filename || waybill.airline_file.original_file_name || `airline-file-${waybill.waybill_no}.pdf`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "航司对接文件下载失败。");
+    } finally {
+      setAirlineFileDownloading(false);
+    }
+  }
+
+  async function deleteAirlineFile() {
+    if (!id || !waybill?.airline_file || !canEditBoxes) return;
+    if (!window.confirm("确认删除当前航司对接文件？")) return;
+    setAirlineFileDeleting(true);
+    setMessage("");
+    try {
+      await apiClient.delete<void>(`/waybills/${id}/airline-file`);
+      setWaybill((current) => (current ? { ...current, airline_file: null } : current));
+      setMessage("航司对接文件已删除。");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "航司对接文件删除失败。");
+    } finally {
+      setAirlineFileDeleting(false);
+    }
+  }
+
   return (
     <>
       <PageHeader
@@ -334,13 +399,50 @@ export default function WaybillDetailPage() {
           <TabsTrigger value="edit">编辑</TabsTrigger>
         </TabsList>
         <TabsContent value="base">
-          <Panel title="提单信息">
+          <Panel
+            title="提单信息"
+            action={
+              <div className="flex flex-wrap items-center justify-end gap-2 py-1">
+                <input
+                  ref={airlineFileInputRef}
+                  type="file"
+                  accept="application/pdf,.pdf"
+                  className="hidden"
+                  onChange={(event) => void uploadAirlineFile(event.target.files)}
+                />
+                {waybill.airline_file ? (
+                  <Button type="button" variant="secondary" size="sm" disabled={airlineFileDownloading} onClick={() => void downloadAirlineFile()}>
+                    <Download className="h-4 w-4" />
+                    {airlineFileDownloading ? "下载中..." : "下载航司对接文件"}
+                  </Button>
+                ) : null}
+                {canEditBoxes ? (
+                  <Button type="button" variant="secondary" size="sm" disabled={airlineFileUploading} onClick={() => airlineFileInputRef.current?.click()}>
+                    <Upload className="h-4 w-4" />
+                    {airlineFileUploading ? "上传中..." : waybill.airline_file ? "替换航司对接文件" : "上传航司对接文件"}
+                  </Button>
+                ) : null}
+                {canEditBoxes && waybill.airline_file ? (
+                  <Button type="button" variant="ghost" size="sm" disabled={airlineFileDeleting} onClick={() => void deleteAirlineFile()}>
+                    <Trash2 className="h-4 w-4 text-red-600" />
+                    {airlineFileDeleting ? "删除中..." : "删除"}
+                  </Button>
+                ) : null}
+              </div>
+            }
+          >
             <FieldGrid
               items={[
                 ["始发港", waybill.departure_port],
                 ["目的港", waybill.destination_port],
                 ["航代", waybill.agent],
                 ["入仓号", waybill.warehouse_no],
+                [
+                  "航司对接文件",
+                  waybill.airline_file
+                    ? `${waybill.airline_file.original_file_name}（${formatDateTime(waybill.airline_file.uploaded_at)}）`
+                    : "未上传"
+                ],
                 ["出仓日期", formatOutboundDate(waybill.outbound_date)],
                 ["收货人", waybill.consignee],
                 ["指定清关人员", userDisplayName(waybill.customs_staff)],
@@ -576,8 +678,8 @@ export default function WaybillDetailPage() {
               </div>
             </div>
             {snapshots.length ? (
-              <Table><THead><TR><TH>时间</TH><TH>状态</TH><TH>适配器</TH><TH>错误码</TH><TH>错误信息</TH></TR></THead>
-                <TBody>{snapshots.map((item) => <TR key={item.id}><TD>{formatDateTime(item.queried_at)}</TD><TD>{item.query_status}</TD><TD>{compact(item.adapter_code)}</TD><TD>{compact(item.error_code)}</TD><TD>{compact(item.error_message)}</TD></TR>)}</TBody>
+              <Table><THead><TR><TH>时间</TH><TH>状态</TH><TH>适配器</TH><TH>类型</TH><TH>错误码</TH><TH>错误信息</TH></TR></THead>
+                <TBody>{snapshots.map((item) => <TR key={item.id}><TD>{formatDateTime(item.queried_at)}</TD><TD>{item.query_status}</TD><TD>{compact(item.adapter_code)}</TD><TD>{item.adapter_type ? <Badge variant={item.adapter_type === "general" ? "blue" : "gray"}>{carrierAdapterTypeLabels[item.adapter_type] || item.adapter_type}</Badge> : "-"}</TD><TD>{compact(item.error_code)}</TD><TD>{compact(item.error_message)}</TD></TR>)}</TBody>
               </Table>
             ) : <EmptyState title="暂无查询快照" description="手动触发或调度执行后会记录查询结果。" />}
           </Panel>

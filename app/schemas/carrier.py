@@ -2,7 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models.enums import CarrierQueryMethod
+from app.models.enums import CarrierAdapterType, CarrierQueryMethod
 
 
 class CarrierCreate(BaseModel):
@@ -61,8 +61,26 @@ class CarrierPrefixMappingOut(BaseModel):
     updated_at: datetime
 
 
+class CarrierQueryAdapterOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    adapter_code: str
+    display_name: str
+    adapter_type: CarrierAdapterType
+    query_method: CarrierQueryMethod
+    enabled: bool
+    display_order: int
+    remark: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class CarrierQueryAdapterOrderUpdate(BaseModel):
+    adapter_codes: list[str] = Field(default_factory=list)
+
+
 class CarrierAgentCreate(BaseModel):
-    carrier_code: str = Field(max_length=16)
     agent_name: str = Field(max_length=128)
     contact_person: str | None = Field(default=None, max_length=128)
     contact_phone: str | None = Field(default=None, max_length=64)
@@ -84,7 +102,6 @@ class CarrierAgentOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    carrier_code: str
     agent_name: str
     contact_person: str | None = None
     contact_phone: str | None = None

@@ -20,6 +20,8 @@ from app.schemas.carrier import (
     CarrierPrefixMappingCreate,
     CarrierPrefixMappingOut,
     CarrierPrefixMappingUpdate,
+    CarrierQueryAdapterOrderUpdate,
+    CarrierQueryAdapterOut,
 )
 from app.services.carrier_service import CarrierService
 from app.services.permission_service import PermissionService
@@ -81,13 +83,27 @@ def update_mapping(
     return mapping
 
 
-@router.get("/carrier-agents", response_model=list[CarrierAgentOut])
-def list_agents(
-    carrier_code: str | None = None,
+@router.get("/carrier-query-adapters", response_model=list[CarrierQueryAdapterOut])
+def list_query_adapters(current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    return CarrierService(db).list_query_adapters()
+
+
+@router.put("/carrier-query-adapters/general-order", response_model=list[CarrierQueryAdapterOut])
+def update_general_adapter_order(
+    payload: CarrierQueryAdapterOrderUpdate,
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    return CarrierService(db).list_agents(carrier_code)
+    PermissionService.require_any(current_user, {UserRoleCode.ADMIN, UserRoleCode.ROUTE_STAFF})
+    return CarrierService(db).update_general_adapter_order(payload)
+
+
+@router.get("/carrier-agents", response_model=list[CarrierAgentOut])
+def list_agents(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return CarrierService(db).list_agents()
 
 
 @router.post("/carrier-agents", response_model=CarrierAgentOut)

@@ -18,14 +18,14 @@ def _make_service(get_agent_fn):
 
 def test_resolve_agent_snapshot_returns_none_for_none_input() -> None:
     service = _make_service(lambda agent_id: None)
-    assert service._resolve_agent_snapshot(None, "CZ") is None
+    assert service._resolve_agent_snapshot(None) is None
 
 
 def test_resolve_agent_snapshot_returns_id_and_name_pair() -> None:
-    fake_agent = SimpleNamespace(id=42, agent_name="代理ABC", carrier_code="CZ")
+    fake_agent = SimpleNamespace(id=42, agent_name="代理ABC")
     service = _make_service(lambda agent_id: fake_agent if agent_id == 42 else None)
 
-    result = service._resolve_agent_snapshot(42, "CZ")
+    result = service._resolve_agent_snapshot(42)
 
     assert result == (42, "代理ABC")
 
@@ -33,24 +33,14 @@ def test_resolve_agent_snapshot_returns_id_and_name_pair() -> None:
 def test_resolve_agent_snapshot_raises_when_agent_missing() -> None:
     service = _make_service(lambda agent_id: None)
     with pytest.raises(HTTPException) as exc_info:
-        service._resolve_agent_snapshot(999, "CZ")
+        service._resolve_agent_snapshot(999)
     assert "carrier_agent_not_found" in str(exc_info.value.detail)
 
 
-def test_resolve_agent_snapshot_raises_on_carrier_code_mismatch() -> None:
-    fake_agent = SimpleNamespace(id=1, agent_name="代理X", carrier_code="MU")
+def test_resolve_agent_snapshot_allows_agent_across_carriers() -> None:
+    fake_agent = SimpleNamespace(id=1, agent_name="代理X")
     service = _make_service(lambda agent_id: fake_agent)
 
-    with pytest.raises(HTTPException) as exc_info:
-        service._resolve_agent_snapshot(1, "CZ")
-    assert "carrier_agent_carrier_mismatch" in str(exc_info.value.detail)
-
-
-def test_resolve_agent_snapshot_skips_carrier_check_when_carrier_code_none() -> None:
-    """运单还没识别出 carrier_code 时（如 UNKNOWN），不强制校验。"""
-    fake_agent = SimpleNamespace(id=1, agent_name="代理X", carrier_code="MU")
-    service = _make_service(lambda agent_id: fake_agent)
-
-    result = service._resolve_agent_snapshot(1, None)
+    result = service._resolve_agent_snapshot(1)
 
     assert result == (1, "代理X")

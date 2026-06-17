@@ -274,7 +274,7 @@ export function WaybillForm({ waybill }: { waybill?: Waybill }) {
                   <SelectItem value="__none__">不指定</SelectItem>
                   {visibleAgents.map((agent) => (
                     <SelectItem key={agent.id} value={String(agent.id)}>
-                      [{agent.carrier_code}] {agent.agent_name}
+                      {agent.agent_name}
                       {!agent.enabled ? "（已停用）" : ""}
                     </SelectItem>
                   ))}

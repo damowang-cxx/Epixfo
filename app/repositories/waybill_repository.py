@@ -32,6 +32,7 @@ class WaybillRepository:
             select(AirWaybill)
             .options(
                 selectinload(AirWaybill.plan),
+                selectinload(AirWaybill.airline_file),
                 selectinload(AirWaybill.official_flight_segments),
                 selectinload(AirWaybill.board).selectinload(WaybillBoard.waybills),
                 selectinload(AirWaybill.customs_staff),

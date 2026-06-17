@@ -33,6 +33,7 @@ from app.schemas.box import (
     WarehouseBoxConflict,
     WarehouseFileImportError,
     WarehouseFileUploadResult,
+    WarehouseProhibitedGoodsIssue,
     WarehouseReceiptListOut,
     WarehouseUploadIntegrityIssue,
 )
@@ -63,6 +64,7 @@ NLE_ALLOWED_PREFIXES = {"NLE", "DHL"}
 EUROPE_CHANNEL_TAGS = ["AMS"]
 UK_CHANNEL_TAGS = ["LHR"]
 ALL_CTT_CHANNEL_TAGS = ["MAD", "BCN", "AMS"]
+PROHIBITED_GOODS_KEYWORDS = ("香水", "perfume")
 DIMENSION_VOLUME_PATTERN = re.compile(
     r"(\d+(?:\.\d+)?)\s*(?:\*|x|X|×)\s*(\d+(?:\.\d+)?)\s*(?:\*|x|X|×)\s*(\d+(?:\.\d+)?)"
 )
@@ -820,12 +822,11 @@ class WarehouseFileService:
         bindable_boxes = [item for item in parse_result.boxes if item.box_no not in skipped_conflict_box_nos]
         if not bindable_boxes:
             raise bad_request("warehouse_file_no_bindable_boxes")
-        assert_warehouse_upload_integrity(
-            file_name=file_name,
-            warehouse_no=warehouse_no,
+        integrity_issues = warehouse_upload_integrity_issues(
             parse_result=parse_result,
             uploaded_box_nos=[item.box_no for item in bindable_boxes],
         )
+        prohibited_goods_issues = warehouse_prohibited_goods_issues(bindable_boxes)
         target_receipt = self.boxes.get_receipt_by_warehouse_no(warehouse_no)
         if target_receipt is not None and target_receipt.waybill_id not in (None, waybill.id):
             raise bad_request("warehouse_receipt_bound_to_other_waybill")
@@ -871,6 +872,8 @@ class WarehouseFileService:
             skipped_count=parse_result.skipped_count,
             errors=parse_result.errors,
             channel_tags=list(receipt.channel_tags or []),
+            integrity_issues=integrity_issues,
+            prohibited_goods_issues=prohibited_goods_issues,
         )
 
     def upload_for_prebooking(
@@ -900,12 +903,11 @@ class WarehouseFileService:
         if receipt is not None and receipt.prebooking_id not in (None, prebooking.id):
             raise bad_request("warehouse_receipt_bound_to_other_prebooking")
 
-        assert_warehouse_upload_integrity(
-            file_name=file_name,
-            warehouse_no=warehouse_no,
+        integrity_issues = warehouse_upload_integrity_issues(
             parse_result=parse_result,
             uploaded_box_nos=[item.box_no for item in parse_result.boxes],
         )
+        prohibited_goods_issues = warehouse_prohibited_goods_issues(parse_result.boxes)
         self._apply_conflict_box_renames(
             parse_result.boxes,
             target_receipt=receipt,
@@ -958,6 +960,8 @@ class WarehouseFileService:
             skipped_count=parse_result.skipped_count,
             errors=parse_result.errors,
             channel_tags=list(receipt.channel_tags or []),
+            integrity_issues=integrity_issues,
+            prohibited_goods_issues=prohibited_goods_issues,
         )
 
     def upload_unbound_file(self, file_name: str, content: bytes, current_user: User) -> WarehouseFileUploadResult:
@@ -971,19 +975,7 @@ class WarehouseFileService:
             raise bad_request("warehouse_no_required")
 
         channel_review = review_warehouse_file_channels(warehouse_no, file_name, parse_result.boxes)
-        if channel_review.issues:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "error_code": "warehouse_channel_review_failed",
-                    "message": "入仓号文件存在不同渠道或渠道内部规则冲突，请修正后重新上传。",
-                    "warehouse_no": warehouse_no,
-                    "file_name": file_name,
-                    "detected_channel": channel_review.review.detected_channel,
-                    "warnings": channel_review.review.warnings,
-                    "issues": [item.model_dump() for item in channel_review.issues],
-                },
-            )
+        channel_review.review.issues = channel_review.issues
 
         receipt = self.boxes.get_receipt_by_warehouse_no(warehouse_no)
         if receipt is not None and receipt.waybill_id is not None:
@@ -991,12 +983,11 @@ class WarehouseFileService:
         if receipt is not None and receipt.prebooking_id is not None:
             raise bad_request("warehouse_receipt_bound_to_prebooking")
 
-        assert_warehouse_upload_integrity(
-            file_name=file_name,
-            warehouse_no=warehouse_no,
+        integrity_issues = warehouse_upload_integrity_issues(
             parse_result=parse_result,
             uploaded_box_nos=[item.box_no for item in parse_result.boxes],
         )
+        prohibited_goods_issues = warehouse_prohibited_goods_issues(parse_result.boxes)
         self._apply_conflict_box_renames(
             parse_result.boxes,
             target_receipt=receipt,
@@ -1053,6 +1044,8 @@ class WarehouseFileService:
             errors=parse_result.errors,
             channel_review=channel_review.review,
             channel_tags=list(receipt.channel_tags or []),
+            integrity_issues=integrity_issues,
+            prohibited_goods_issues=prohibited_goods_issues,
         )
 
     def bind_receipt_to_waybill(
@@ -1866,6 +1859,39 @@ def warehouse_upload_integrity_issues(
                 message="该外箱条码未成功写入系统，请检查该行是否重复、数据格式是否错误或是否被跳过。",
             )
         )
+    return issues
+
+
+def warehouse_prohibited_goods_issues(
+    boxes: list[ParsedWarehouseBox],
+) -> list[WarehouseProhibitedGoodsIssue]:
+    issues: list[WarehouseProhibitedGoodsIssue] = []
+    for box in boxes:
+        for item in box.items:
+            goods_name = (item.goods_name or "").strip()
+            if not goods_name:
+                continue
+            lower_goods_name = goods_name.lower()
+            keyword = next(
+                (
+                    candidate
+                    for candidate in PROHIBITED_GOODS_KEYWORDS
+                    if (candidate.isascii() and candidate in lower_goods_name) or (not candidate.isascii() and candidate in goods_name)
+                ),
+                None,
+            )
+            if keyword is None:
+                continue
+            issues.append(
+                WarehouseProhibitedGoodsIssue(
+                    row_number=item.source_row_number,
+                    box_no=box.box_no,
+                    warehouse_waybill_no=item.warehouse_waybill_no,
+                    goods_name=goods_name,
+                    keyword=keyword,
+                    message=f"品名包含违禁词“{keyword}”，请人工复核。",
+                )
+            )
     return issues
 
 

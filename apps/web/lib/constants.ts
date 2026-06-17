@@ -62,3 +62,8 @@ export const carrierAdapterQueryMethods: Record<string, "protocol" | "playwright
   ek_adapter: "protocol",
   general_adapter: "protocol"
 };
+
+export const carrierAdapterTypeLabels: Record<string, string> = {
+  dedicated: "专属",
+  general: "通用"
+};

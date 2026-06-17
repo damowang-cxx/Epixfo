@@ -28,7 +28,7 @@ import type {
   User,
   WaybillBulkDeleteRequest,
   WaybillBulkDeleteResult,
-  WaybillBulkImportResult,
+  WaybillAirlineFileBatchUploadResult,
   WaybillBulkInlineUpdateRequest,
   WaybillBulkInlineUpdateResult,
   WaybillInlineUpdateField,
@@ -217,9 +217,35 @@ function StatusCard({
   );
 }
 
+function currentMonthValue() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function parseMonthValue(value: string) {
+  const match = /^(\d{4})-(\d{2})$/.exec(value);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) return null;
+  return { year, month };
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 export default function WaybillsPage() {
   const { user, hasRole } = useAuth();
   const router = useRouter();
+  const airlineFileInputRef = useRef<HTMLInputElement | null>(null);
   const canBulkEditWaybills = hasRole("admin") || hasRole("route_staff");
   const canRequestCustomsAccess = hasRole("customs_staff") && !hasRole("admin") && !hasRole("route_staff");
   const [data, setData] = useState<PageResponse<Waybill> | null>(null);
@@ -231,15 +257,14 @@ export default function WaybillsPage() {
   const [lifecycleStatus, setLifecycleStatus] = useState<LifecycleStatus | "all">("all");
   const [page, setPage] = useState(1);
   const [message, setMessage] = useState("");
+  const [generalCargoMonth, setGeneralCargoMonth] = useState(currentMonthValue);
+  const [exportingGeneralCargo, setExportingGeneralCargo] = useState(false);
+  const [airlineUploading, setAirlineUploading] = useState(false);
+  const [airlineUploadResult, setAirlineUploadResult] = useState<WaybillAirlineFileBatchUploadResult | null>(null);
   const [columnOrder, setColumnOrder] = useState<WaybillColumnKey[]>(() => normalizeWaybillColumnOrder());
   const [draggingColumn, setDraggingColumn] = useState<WaybillColumnKey | null>(null);
   const [accessWaybillNo, setAccessWaybillNo] = useState("");
   const [requestingAccess, setRequestingAccess] = useState(false);
-  const bulkImportInputRef = useRef<HTMLInputElement>(null);
-  const [bulkImportOpen, setBulkImportOpen] = useState(false);
-  const [uploadingBulkImport, setUploadingBulkImport] = useState(false);
-  const [bulkImportResult, setBulkImportResult] = useState<WaybillBulkImportResult | null>(null);
-  const [bulkImportError, setBulkImportError] = useState("");
   const [editMode, setEditMode] = useState(false);
   const [draftChanges, setDraftChanges] = useState<DraftChanges>({});
   const [pendingDeleteIds, setPendingDeleteIds] = useState<number[]>([]);
@@ -566,30 +591,6 @@ export default function WaybillsPage() {
     }
   }
 
-  async function uploadWaybillImportFile(file: File | null | undefined) {
-    if (!file) return;
-    setBulkImportOpen(true);
-    setUploadingBulkImport(true);
-    setBulkImportError("");
-    setMessage("");
-    setBulkImportResult(null);
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      const result = await apiClient.postForm<WaybillBulkImportResult>("/waybills/bulk-import", formData);
-      setBulkImportResult(result);
-      setMessage(`批量导入完成：成功 ${result.created_count} 票，失败 ${result.errors.length} 行。`);
-      load();
-      loadCounts();
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "批量导入提单失败。";
-      setBulkImportError(errorMessage);
-      setMessage(errorMessage);
-    } finally {
-      setUploadingBulkImport(false);
-    }
-  }
-
   function buildInlineUpdatePayload(): WaybillBulkInlineUpdateRequest {
     const updates = Object.entries(draftChanges)
       .map(([id, changes]) => ({
@@ -700,6 +701,50 @@ export default function WaybillsPage() {
     }
   }
 
+  async function exportMonthlyGeneralCargo() {
+    const selectedMonth = parseMonthValue(generalCargoMonth);
+    if (!selectedMonth) {
+      setMessage("请选择需要导出的月份。");
+      return;
+    }
+
+    setExportingGeneralCargo(true);
+    setMessage("");
+    try {
+      const { blob, filename } = await apiClient.download(
+        `/waybills/general-cargo-export?year=${selectedMonth.year}&month=${selectedMonth.month}`
+      );
+      downloadBlob(blob, filename || `${selectedMonth.year}年${selectedMonth.month}月普货汇总.xlsx`);
+      setMessage(`${selectedMonth.year}年${selectedMonth.month}月普货汇总已导出。`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "导出普货汇总失败。");
+    } finally {
+      setExportingGeneralCargo(false);
+    }
+  }
+
+  async function uploadAirlineFiles(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    if (!canBulkEditWaybills) return;
+
+    const formData = new FormData();
+    Array.from(files).forEach((file) => formData.append("files", file));
+    setAirlineUploading(true);
+    setMessage("");
+    try {
+      const result = await apiClient.postForm<WaybillAirlineFileBatchUploadResult>("/waybills/airline-files/batch", formData);
+      setAirlineUploadResult(result);
+      setMessage(`航司对接文件上传完成：成功 ${result.success_count} 个，失败 ${result.failed_count} 个。`);
+      load();
+      loadCounts();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "航司对接文件上传失败。");
+    } finally {
+      setAirlineUploading(false);
+      if (airlineFileInputRef.current) airlineFileInputRef.current.value = "";
+    }
+  }
+
   function renderBulkEditValueInput() {
     const fieldId = "bulk-edit-value";
     if (selectedBulkField.kind === "date") {
@@ -741,7 +786,7 @@ export default function WaybillsPage() {
             <SelectItem value={BULK_CLEAR_VALUE}>清空</SelectItem>
             {enabledAgents.map((item) => (
               <SelectItem key={item.id} value={String(item.id)}>
-                [{item.carrier_code}] {item.agent_name}
+                {item.agent_name}
               </SelectItem>
             ))}
           </SelectContent>
@@ -840,7 +885,7 @@ export default function WaybillsPage() {
             <SelectItem value={BULK_CLEAR_VALUE}>清空</SelectItem>
             {enabledAgents.map((agent) => (
               <SelectItem key={agent.id} value={String(agent.id)}>
-                [{agent.carrier_code}] {agent.agent_name}
+                {agent.agent_name}
               </SelectItem>
             ))}
           </SelectContent>
@@ -1076,26 +1121,27 @@ export default function WaybillsPage() {
 
   return (
     <>
-      <input
-        ref={bulkImportInputRef}
-        type="file"
-        accept=".xlsx"
-        className="hidden"
-        onChange={(event) => {
-          const file = event.currentTarget.files?.[0];
-          event.currentTarget.value = "";
-          void uploadWaybillImportFile(file);
-        }}
-      />
       <PageHeader
         title="提单管理"
         description="录入、筛选、追踪航空头程提单"
         action={
           <div className="flex flex-wrap gap-2">
-            <Button variant="secondary" onClick={() => setBulkImportOpen(true)}>
-              <Upload className="h-4 w-4" />
-              批量上传提单
-            </Button>
+            {canBulkEditWaybills ? (
+              <>
+                <input
+                  ref={airlineFileInputRef}
+                  type="file"
+                  accept="application/pdf,.pdf"
+                  multiple
+                  className="hidden"
+                  onChange={(event) => void uploadAirlineFiles(event.target.files)}
+                />
+                <Button type="button" variant="secondary" disabled={airlineUploading} onClick={() => airlineFileInputRef.current?.click()}>
+                  <Upload className="h-4 w-4" />
+                  {airlineUploading ? "上传中..." : "上传航司对接文件"}
+                </Button>
+              </>
+            ) : null}
             <Button asChild>
               <Link href="/waybills/new">
                 <Plus className="h-4 w-4" />
@@ -1129,7 +1175,26 @@ export default function WaybillsPage() {
           </div>
         </Panel>
       ) : null}
-      <Panel title="状态总览">
+      <Panel
+        title="状态总览"
+        action={
+          canBulkEditWaybills ? (
+            <div className="flex flex-wrap items-center justify-end gap-2 py-2">
+              <Input
+                type="month"
+                value={generalCargoMonth}
+                onChange={(event) => setGeneralCargoMonth(event.target.value)}
+                className="h-8 w-36"
+                aria-label="普货汇总导出月份"
+              />
+              <Button type="button" variant="secondary" size="sm" disabled={exportingGeneralCargo} onClick={() => void exportMonthlyGeneralCargo()}>
+                <Download className="h-4 w-4" />
+                {exportingGeneralCargo ? "导出中..." : "本月普货导出"}
+              </Button>
+            </div>
+          ) : null
+        }
+      >
         <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-6 xl:grid-cols-12">
           <StatusCard
             label="全部"
@@ -1366,6 +1431,56 @@ export default function WaybillsPage() {
           </div>
         </div>
       </Panel>
+      <Dialog open={Boolean(airlineUploadResult)} onOpenChange={(open) => !open && setAirlineUploadResult(null)}>
+        <DialogContent className="w-[min(900px,calc(100vw-32px))]">
+          <DialogTitle className="pr-10 text-base font-semibold text-slate-900">航司对接文件上传结果</DialogTitle>
+          {airlineUploadResult ? (
+            <div className="grid gap-4 lg:grid-cols-2">
+              <section className="rounded-md border border-emerald-200 bg-emerald-50/60">
+                <div className="border-b border-emerald-200 px-3 py-2 text-sm font-medium text-emerald-900">
+                  成功绑定 {airlineUploadResult.success_count} 个
+                </div>
+                <div className="max-h-72 overflow-auto divide-y divide-emerald-100">
+                  {airlineUploadResult.successes.map((item, index) => (
+                    <div key={`${item.file_name}-${index}`} className="space-y-1 px-3 py-2 text-sm">
+                      <div className="font-medium text-slate-900">{item.file_name}</div>
+                      <div className="text-slate-700">
+                        提单 {item.waybill_no}
+                        {item.replaced_existing ? "，已替换旧文件" : ""}
+                      </div>
+                      <div className="text-xs text-slate-500">
+                        识别方式：{item.extraction_method === "ocr" ? "OCR" : "文本层"}
+                      </div>
+                    </div>
+                  ))}
+                  {airlineUploadResult.successes.length === 0 ? (
+                    <div className="px-3 py-8 text-center text-sm text-slate-500">没有成功绑定的文件</div>
+                  ) : null}
+                </div>
+              </section>
+              <section className="rounded-md border border-rose-200 bg-rose-50/60">
+                <div className="border-b border-rose-200 px-3 py-2 text-sm font-medium text-rose-900">
+                  失败 {airlineUploadResult.failed_count} 个
+                </div>
+                <div className="max-h-72 overflow-auto divide-y divide-rose-100">
+                  {airlineUploadResult.failures.map((item, index) => (
+                    <div key={`${item.file_name}-${index}`} className="space-y-1 px-3 py-2 text-sm">
+                      <div className="font-medium text-slate-900">{item.file_name}</div>
+                      <div className="text-rose-700">{item.message}</div>
+                      {item.extracted_waybill_no ? (
+                        <div className="text-xs text-slate-500">识别结果：{item.extracted_waybill_no}</div>
+                      ) : null}
+                    </div>
+                  ))}
+                  {airlineUploadResult.failures.length === 0 ? (
+                    <div className="px-3 py-8 text-center text-sm text-slate-500">没有失败文件</div>
+                  ) : null}
+                </div>
+              </section>
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
       <Dialog
         open={bulkEditOpen}
         onOpenChange={(open) => {
@@ -1457,105 +1572,6 @@ export default function WaybillsPage() {
                 </div>
               ) : null}
             </section>
-          </div>
-        </DialogContent>
-      </Dialog>
-      <Dialog open={bulkImportOpen} onOpenChange={setBulkImportOpen}>
-        <DialogContent className="w-[min(980px,calc(100vw-32px))]">
-          <DialogTitle className="pr-10 text-base font-semibold text-slate-900">批量上传提单</DialogTitle>
-          <div className="space-y-4 text-sm">
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-200 bg-slate-50 p-3">
-              <div className="flex flex-wrap gap-2">
-                <Button asChild variant="secondary">
-                  <a href="/templates/waybill-bulk-import-template.xlsx" download="批量上传提单号_模板.xlsx">
-                    <Download className="h-4 w-4" />
-                    下载模板
-                  </a>
-                </Button>
-                <Button type="button" disabled={uploadingBulkImport} onClick={() => bulkImportInputRef.current?.click()}>
-                  <Upload className="h-4 w-4" />
-                  {uploadingBulkImport ? "上传中..." : "上传文件"}
-                </Button>
-              </div>
-              <div className="flex gap-3 text-xs text-slate-600">
-                <span>成功 {bulkImportResult?.created_count ?? 0}</span>
-                <span>失败 {bulkImportResult?.errors.length ?? 0}</span>
-                <span>跳过 {bulkImportResult?.skipped_count ?? 0}</span>
-              </div>
-            </div>
-            {bulkImportError ? (
-              <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-red-700">{bulkImportError}</div>
-            ) : null}
-            <div className="grid gap-4 xl:grid-cols-2">
-              <section className="space-y-2">
-                <div className="font-medium text-slate-800">上传成功</div>
-                <div className="max-h-80 overflow-auto rounded-md border border-slate-200">
-                  <Table>
-                    <THead>
-                      <TR>
-                        <TH>序号</TH>
-                        <TH>提单号</TH>
-                        <TH>操作</TH>
-                      </TR>
-                    </THead>
-                    <TBody>
-                      {(bulkImportResult?.created_waybills || []).map((item, index) => (
-                        <TR key={item.id}>
-                          <TD>{index + 1}</TD>
-                          <TD className="font-medium">{item.waybill_no}</TD>
-                          <TD>
-                            <Link
-                              href={`/waybills/${item.id}`}
-                              className="text-purple-700 underline-offset-2 hover:text-purple-900 hover:underline"
-                              onClick={() => setBulkImportOpen(false)}
-                            >
-                              打开
-                            </Link>
-                          </TD>
-                        </TR>
-                      ))}
-                      {!bulkImportResult?.created_waybills.length ? (
-                        <TR>
-                          <TD colSpan={3} className="py-6 text-center text-slate-500">
-                            暂无成功数据
-                          </TD>
-                        </TR>
-                      ) : null}
-                    </TBody>
-                  </Table>
-                </div>
-              </section>
-              <section className="space-y-2">
-                <div className="font-medium text-red-700">上传失败</div>
-                <div className="max-h-80 overflow-auto rounded-md border border-red-200">
-                  <Table>
-                    <THead>
-                      <TR>
-                        <TH>行号</TH>
-                        <TH>提单号</TH>
-                        <TH>原因</TH>
-                      </TR>
-                    </THead>
-                    <TBody>
-                      {(bulkImportResult?.errors || []).map((item) => (
-                        <TR key={`${item.row_number}-${item.waybill_no || ""}`}>
-                          <TD>{item.row_number}</TD>
-                          <TD>{item.waybill_no || ""}</TD>
-                          <TD>{item.message}</TD>
-                        </TR>
-                      ))}
-                      {!bulkImportResult?.errors.length ? (
-                        <TR>
-                          <TD colSpan={3} className="py-6 text-center text-slate-500">
-                            暂无失败数据
-                          </TD>
-                        </TR>
-                      ) : null}
-                    </TBody>
-                  </Table>
-                </div>
-              </section>
-            </div>
           </div>
         </DialogContent>
       </Dialog>

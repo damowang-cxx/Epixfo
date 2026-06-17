@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.adapters.carrier_query.base import CarrierQueryResult
-from app.models.enums import CarrierQueryMethod, QueryStatus, WaybillLifecycleStatus
+from app.models.enums import CarrierAdapterType, CarrierQueryMethod, QueryStatus, WaybillLifecycleStatus
 from app.parsers.base import ParsedCarrierData, ParsedOfficialInfo
 from app.services import monitor_service as monitor_service_module
 from app.services.monitor_service import MonitorService
@@ -113,6 +113,7 @@ def test_monitor_unknown_waybill_uses_general_adapter(monkeypatch: pytest.Monkey
     snapshot = _run(service.trigger_query(waybill))
 
     assert snapshot.adapter_code == "general_adapter"
+    assert snapshot.adapter_type == CarrierAdapterType.GENERAL.value
     assert snapshot.carrier_code == "UNKNOWN"
     assert snapshot.query_status == QueryStatus.FAILED
     assert snapshot.error_code == "awb_not_found"
@@ -135,6 +136,7 @@ def test_monitor_missing_specific_adapter_falls_back_and_preserves_carrier(monke
     snapshot = _run(service.trigger_query(waybill))
 
     assert snapshot.adapter_code == "general_adapter"
+    assert snapshot.adapter_type == CarrierAdapterType.GENERAL.value
     assert snapshot.carrier_code == "ZZ"
     assert snapshot.query_status == QueryStatus.FAILED
 
@@ -162,6 +164,7 @@ def test_monitor_specific_adapter_success_does_not_call_general(monkeypatch: pyt
     snapshot = _run(service.trigger_query(waybill))
 
     assert snapshot.adapter_code == "cz_adapter"
+    assert snapshot.adapter_type == CarrierAdapterType.DEDICATED.value
     assert snapshot.query_status == QueryStatus.SUCCESS
     assert specific.calls == ["784-83707805"]
     assert general.calls == []
@@ -190,6 +193,7 @@ def test_monitor_specific_adapter_failure_uses_general_when_enabled(monkeypatch:
     snapshot = _run(service.trigger_query(waybill))
 
     assert snapshot.adapter_code == "general_adapter"
+    assert snapshot.adapter_type == CarrierAdapterType.GENERAL.value
     assert snapshot.carrier_code == "CZ"
     assert snapshot.query_status == QueryStatus.SUCCESS
     assert specific.calls == ["784-83707805"]
@@ -218,6 +222,51 @@ def test_monitor_specific_adapter_failure_stops_when_fallback_disabled(monkeypat
     snapshot = _run(service.trigger_query(waybill))
 
     assert snapshot.adapter_code == "cz_adapter"
+    assert snapshot.adapter_type == CarrierAdapterType.DEDICATED.value
     assert snapshot.query_status == QueryStatus.FAILED
     assert specific.calls == ["784-83707805"]
     assert general.calls == []
+
+
+def test_monitor_general_adapter_pool_uses_configured_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_parser(monkeypatch)
+    first = _StubAdapter(_failed_result("first_general", "UNKNOWN"))
+    second = _StubAdapter(_success_result("second_general", "UNKNOWN"))
+    monkeypatch.setattr(
+        monitor_service_module.registry,
+        "get",
+        lambda code: {"first_general": first, "second_general": second}.get(code),
+    )
+    mapping = SimpleNamespace(adapter_code="first_general", carrier_code="ZZ")
+    adapters = {
+        "first_general": SimpleNamespace(
+            adapter_code="first_general",
+            adapter_type=CarrierAdapterType.GENERAL.value,
+        ),
+        "second_general": SimpleNamespace(
+            adapter_code="second_general",
+            adapter_type=CarrierAdapterType.GENERAL.value,
+        ),
+    }
+    service = _make_service(mapping=mapping)
+    service.carriers = SimpleNamespace(
+        get_mapping_by_prefix=lambda prefix: mapping,
+        get_query_adapter=lambda code: adapters.get(code),
+        list_general_query_adapters=lambda enabled_only=True: [adapters["first_general"], adapters["second_general"]],
+    )
+    waybill = SimpleNamespace(
+        id=6,
+        carrier_code="ZZ",
+        carrier_prefix="784",
+        waybill_no="784-83707805",
+        plan=None,
+        lifecycle_status=WaybillLifecycleStatus.MONITORING,
+    )
+
+    snapshot = _run(service.trigger_query(waybill))
+
+    assert snapshot.adapter_code == "second_general"
+    assert snapshot.adapter_type == CarrierAdapterType.GENERAL.value
+    assert snapshot.carrier_code == "ZZ"
+    assert first.calls == ["784-83707805"]
+    assert second.calls == ["784-83707805"]

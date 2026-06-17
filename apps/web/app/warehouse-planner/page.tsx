@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
-import { Download, GripVertical, ListPlus, PanelRightClose, PanelRightOpen, RefreshCw, Save, Trash2 } from "lucide-react";
+import { Download, GripVertical, ListPlus, PanelRightClose, PanelRightOpen, RefreshCw, Save, Trash2, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -17,13 +17,15 @@ import type {
   CarrierAgent,
   User,
   WarehousePlannerCandidate,
+  WarehousePlannerBulkImportResult,
   WarehousePlannerCandidates,
   WarehousePlannerCommitResult,
   WarehousePlannerRow,
   WarehousePlannerRowResult,
   WarehousePlannerValidateResult,
   WarehouseReceipt,
-  TableColumnPreference
+  TableColumnPreference,
+  PlannerChannel
 } from "@/lib/types";
 
 type RightPanelMode = "candidates" | "receipts";
@@ -51,6 +53,7 @@ const PLANNER_SPLIT_PREFERENCE_KEY = "warehouse-planner:split-width";
 const DEFAULT_MAIN_PANE_PERCENT = 68;
 const MIN_MAIN_PANE_PERCENT = 44;
 const MAX_MAIN_PANE_PERCENT = 82;
+const PLANNER_CHANNELS: PlannerChannel[] = ["AMS", "LHR"];
 
 const BATCH_FIELDS: Array<{ key: PlannerField; label: string; kind: "select" | "text" | "number" | "date" | "boolean" }> = [
   { key: "carrier_agent_id", label: "航代", kind: "select" },
@@ -72,10 +75,15 @@ function rowKey(row: Pick<WarehousePlannerRow, "source_type" | "source_id">) {
   return `${row.source_type}:${row.source_id}`;
 }
 
-function candidateToRow(item: WarehousePlannerCandidate): WarehousePlannerRow {
+function normalizePlannerChannel(value?: string | null): PlannerChannel {
+  return value === "LHR" ? "LHR" : "AMS";
+}
+
+function candidateToRow(item: WarehousePlannerCandidate, channel: PlannerChannel = "AMS"): WarehousePlannerRow {
   return {
     source_type: item.source_type,
     source_id: item.source_id,
+    planning_channel: channel,
     waybill_no: item.waybill_no || "",
     carrier_agent_id: item.carrier_agent_id ?? null,
     planned_flight_no: item.planned_flight_no || "",
@@ -103,7 +111,10 @@ function formatDecimal(value?: string | number | null) {
 }
 
 function sourceLabel(value: WarehousePlannerRow["source_type"]) {
-  return value === "waybill" ? "正式提单" : "预排仓";
+  if (value === "waybill") return "正式提单";
+  if (value === "prebooking") return "预排仓";
+  if (value === "import_waybill") return "导入提单";
+  return "导入预排仓";
 }
 
 function channelTags(tags?: string[] | null) {
@@ -124,12 +135,14 @@ export default function WarehousePlannerPage() {
   const saveTimerRef = useRef<number | null>(null);
   const splitSaveTimerRef = useRef<number | null>(null);
   const plannerLayoutRef = useRef<HTMLDivElement>(null);
+  const plannerImportInputRef = useRef<HTMLInputElement>(null);
   const [rows, setRows] = useState<WarehousePlannerRow[]>([]);
   const [loadedDraft, setLoadedDraft] = useState(false);
   const [loadedSplitPreference, setLoadedSplitPreference] = useState(false);
   const [mainPanePercent, setMainPanePercent] = useState(DEFAULT_MAIN_PANE_PERCENT);
   const [resizingSplit, setResizingSplit] = useState(false);
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
+  const [activePlannerChannel, setActivePlannerChannel] = useState<PlannerChannel>("AMS");
   const [candidates, setCandidates] = useState<WarehousePlannerCandidates | null>(null);
   const [selectedCandidates, setSelectedCandidates] = useState<Set<string>>(new Set());
   const [selectedReceipts, setSelectedReceipts] = useState<Set<number>>(new Set());
@@ -149,12 +162,25 @@ export default function WarehousePlannerPage() {
   const [validationResult, setValidationResult] = useState<WarehousePlannerValidateResult | null>(null);
   const [commitResult, setCommitResult] = useState<WarehousePlannerCommitResult | null>(null);
   const [rowErrors, setRowErrors] = useState<Record<string, WarehousePlannerRowResult>>({});
+  const [plannerImportOpen, setPlannerImportOpen] = useState(false);
+  const [plannerImportResult, setPlannerImportResult] = useState<WarehousePlannerBulkImportResult | null>(null);
+  const [plannerImportError, setPlannerImportError] = useState("");
+  const [uploadingPlannerImport, setUploadingPlannerImport] = useState(false);
 
   const allCandidates = useMemo(
     () => [...(candidates?.waybills || []), ...(candidates?.prebookings || [])],
     [candidates]
   );
   const rowKeySet = useMemo(() => new Set(rows.map(rowKey)), [rows]);
+  const channelRows = useMemo(
+    () => ({
+      AMS: rows.filter((row) => normalizePlannerChannel(row.planning_channel) === "AMS"),
+      LHR: rows.filter((row) => normalizePlannerChannel(row.planning_channel) === "LHR")
+    }),
+    [rows]
+  );
+  const activeRows = channelRows[activePlannerChannel];
+  const activeSelectedRows = useMemo(() => activeRows.filter((row) => selectedRows.has(rowKey(row))), [activeRows, selectedRows]);
   const selectedRowKeys = useMemo(() => [...selectedRows], [selectedRows]);
   const selectedRowCount = selectedRows.size;
   const customsStaff = useMemo(
@@ -176,7 +202,7 @@ export default function WarehousePlannerPage() {
       apiClient.get<CarrierAgent[]>("/carrier-agents"),
       apiClient.get<User[]>("/users")
     ]);
-    setRows(draft.rows || []);
+    setRows((draft.rows || []).map((row) => ({ ...row, planning_channel: normalizePlannerChannel(row.planning_channel) })));
     setCandidates(candidateData);
     setAgents(agentData.filter((item) => item.enabled));
     setUsers(userData);
@@ -284,10 +310,21 @@ export default function WarehousePlannerPage() {
     });
   }
 
-  function addCandidates(items: WarehousePlannerCandidate[]) {
+  function toggleActiveChannelSelection(checked: boolean) {
+    const activeKeys = new Set(activeRows.map(rowKey));
+    setSelectedRows((prev) => {
+      const next = new Set([...prev].filter((key) => !activeKeys.has(key)));
+      if (checked) {
+        for (const key of activeKeys) next.add(key);
+      }
+      return next;
+    });
+  }
+
+  function addCandidates(items: WarehousePlannerCandidate[], channel: PlannerChannel = activePlannerChannel) {
     setRows((prev) => {
       const existing = new Set(prev.map(rowKey));
-      const additions = items.map(candidateToRow).filter((row) => !existing.has(rowKey(row)));
+      const additions = items.map((item) => candidateToRow(item, channel)).filter((row) => !existing.has(rowKey(row)));
       return [...prev, ...additions];
     });
     setSelectedCandidates(new Set());
@@ -454,17 +491,67 @@ export default function WarehousePlannerPage() {
     URL.revokeObjectURL(url);
   }
 
+  async function uploadPlannerImportFile(file: File | null | undefined) {
+    if (!file) return;
+    setPlannerImportOpen(true);
+    setUploadingPlannerImport(true);
+    setPlannerImportError("");
+    setPlannerImportResult(null);
+    setMessage("");
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const result = await apiClient.postForm<WarehousePlannerBulkImportResult>("/warehouse-planner/bulk-import", formData);
+      setPlannerImportResult(result);
+      setRows((prev) => {
+        const existing = new Set(prev.map(rowKey));
+        const additions = result.rows
+          .filter((row) => !existing.has(rowKey(row)))
+          .map((row) => ({ ...row, planning_channel: activePlannerChannel }));
+        return [...prev, ...additions];
+      });
+      setMessage(`批量导入完成：导入 ${result.imported_count} 行，跳过 ${result.skipped_count} 行，提示 ${result.warnings.length} 条。`);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "批量导入排仓草稿失败。";
+      setPlannerImportError(errorMessage);
+      setMessage(errorMessage);
+    } finally {
+      setUploadingPlannerImport(false);
+    }
+  }
+
   function renderSelectValue(value?: number | null) {
     return value === null || value === undefined ? CLEAR_VALUE : String(value);
   }
 
   return (
     <>
+      <input
+        ref={plannerImportInputRef}
+        type="file"
+        accept=".xlsx"
+        className="hidden"
+        onChange={(event) => {
+          const file = event.currentTarget.files?.[0];
+          event.currentTarget.value = "";
+          void uploadPlannerImportFile(file);
+        }}
+      />
       <PageHeader
         title="排仓编辑器"
         description="把正式提单和预排仓放在同一个工作台中安排出仓与入仓号。"
         action={
           <div className="flex flex-wrap gap-2">
+            <Button asChild variant="secondary">
+              <a href="/templates/waybill-bulk-import-template.xlsx" download="批量上传提单号_模板.xlsx">
+                <Download className="h-4 w-4" />
+                下载模板
+              </a>
+            </Button>
+            <Button variant="secondary" disabled={uploadingPlannerImport} onClick={() => plannerImportInputRef.current?.click()}>
+              <Upload className="h-4 w-4" />
+              {uploadingPlannerImport ? "上传中..." : "批量上传"}
+            </Button>
             <Button variant="secondary" onClick={() => void loadAll()}>
               <RefreshCw className="h-4 w-4" />
               刷新
@@ -496,6 +583,7 @@ export default function WarehousePlannerPage() {
             action={
               <div className="flex flex-wrap items-center justify-end gap-2">
                 <span className="text-sm text-slate-500">已选 {selectedRowCount} 条</span>
+                <span className="text-sm text-slate-500">当前 {activePlannerChannel}: {activeRows.length} 条</span>
                 <Button variant="secondary" disabled={!selectedRowCount} onClick={() => setBatchOpen(true)}>
                   <ListPlus className="h-4 w-4" />
                   批量编辑
@@ -507,17 +595,29 @@ export default function WarehousePlannerPage() {
               </div>
             }
           >
+          <div className="mb-3 grid max-w-sm grid-cols-2 gap-2">
+            {PLANNER_CHANNELS.map((channel) => (
+              <Button
+                key={channel}
+                type="button"
+                variant={activePlannerChannel === channel ? "default" : "secondary"}
+                onClick={() => setActivePlannerChannel(channel)}
+              >
+                {channel}（{channelRows[channel].length}）
+              </Button>
+            ))}
+          </div>
           <div
             className="min-h-64 min-w-0 rounded-md border border-dashed border-slate-300 bg-slate-50/50 p-2"
             onDragOver={(event) => event.preventDefault()}
             onDrop={onDropIntoRows}
           >
-            {rows.length ? (
+            {activeRows.length ? (
               <div className="w-full max-w-full overflow-x-auto rounded-md border border-slate-200 bg-white">
                 <Table className="min-w-[1900px]">
                   <THead>
                     <TR>
-                      <TH className="w-10"><input type="checkbox" checked={rows.length > 0 && selectedRows.size === rows.length} onChange={(event) => setSelectedRows(event.target.checked ? new Set(rows.map(rowKey)) : new Set())} /></TH>
+                      <TH className="w-10"><input type="checkbox" checked={activeRows.length > 0 && activeSelectedRows.length === activeRows.length} onChange={(event) => toggleActiveChannelSelection(event.target.checked)} /></TH>
                       <TH>来源</TH>
                       <TH>航代</TH>
                       <TH>计划航班</TH>
@@ -538,7 +638,7 @@ export default function WarehousePlannerPage() {
                     </TR>
                   </THead>
                   <TBody>
-                    {rows.map((row) => {
+                    {activeRows.map((row) => {
                       const key = rowKey(row);
                       const error = rowErrors[key];
                       return (
@@ -607,7 +707,19 @@ export default function WarehousePlannerPage() {
                           <TD><Input className="h-9 min-w-24" value={row.departure_port || ""} onChange={(event) => updateRow(key, { departure_port: event.target.value })} /></TD>
                           <TD><Input className="h-9 min-w-24" value={row.destination_port || ""} onChange={(event) => updateRow(key, { destination_port: event.target.value })} /></TD>
                           <TD><Input className="h-9 min-w-40" value={row.planned_route_text || ""} onChange={(event) => updateRow(key, { planned_route_text: event.target.value })} /></TD>
-                          <TD><Button variant="danger" size="sm" onClick={() => removeRow(key)}><Trash2 className="h-4 w-4" /></Button></TD>
+                          <TD>
+                            <div className="flex min-w-32 items-center gap-2">
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => updateRow(key, { planning_channel: activePlannerChannel === "AMS" ? "LHR" : "AMS" })}
+                              >
+                                移到 {activePlannerChannel === "AMS" ? "LHR" : "AMS"}
+                              </Button>
+                              <Button variant="danger" size="sm" onClick={() => removeRow(key)}><Trash2 className="h-4 w-4" /></Button>
+                            </div>
+                          </TD>
                         </TR>
                       );
                     })}
@@ -906,6 +1018,108 @@ export default function WarehousePlannerPage() {
           <div className="mt-5 flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setBatchOpen(false)}>取消</Button>
             <Button onClick={applyBatchEdit}>应用到已选</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={plannerImportOpen} onOpenChange={setPlannerImportOpen}>
+        <DialogContent className="w-[min(900px,calc(100vw-32px))]">
+          <DialogTitle>批量上传排仓草稿</DialogTitle>
+          <div className="mt-3 space-y-4 text-sm">
+            {uploadingPlannerImport ? (
+              <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600">正在解析上传文件...</div>
+            ) : null}
+            {plannerImportError ? (
+              <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-red-700">{plannerImportError}</div>
+            ) : null}
+            {plannerImportResult ? (
+              <>
+                <div className="grid gap-2 sm:grid-cols-4">
+                  <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                    <div className="text-xs text-slate-500">文件</div>
+                    <div className="mt-1 font-medium text-slate-900">{plannerImportResult.file_name}</div>
+                  </div>
+                  <div className="rounded-md border border-green-200 bg-green-50 px-3 py-2 text-green-700">
+                    <div className="text-xs">导入</div>
+                    <div className="mt-1 font-semibold">{plannerImportResult.imported_count} 行</div>
+                  </div>
+                  <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                    <div className="text-xs text-slate-500">跳过空行</div>
+                    <div className="mt-1 font-semibold text-slate-900">{plannerImportResult.skipped_count} 行</div>
+                  </div>
+                  <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-700">
+                    <div className="text-xs">提示</div>
+                    <div className="mt-1 font-semibold">{plannerImportResult.warnings.length} 条</div>
+                  </div>
+                </div>
+                <div>
+                  <div className="mb-2 font-medium text-slate-900">已加入编辑区</div>
+                  <div className="max-h-44 overflow-auto rounded-md border border-slate-200">
+                    <Table>
+                      <THead><TR><TH>来源</TH><TH>提单号</TH><TH>航代</TH><TH>起飞日期</TH></TR></THead>
+                      <TBody>
+                        {plannerImportResult.rows.map((row) => (
+                          <TR key={`${row.source_type}-${row.source_id}`}>
+                            <TD>{sourceLabel(row.source_type)}</TD>
+                            <TD>{compact(row.waybill_no) || "-"}</TD>
+                            <TD>{agents.find((agent) => agent.id === row.carrier_agent_id)?.agent_name || "-"}</TD>
+                            <TD>{compact(row.planned_flight_date) || "-"}</TD>
+                          </TR>
+                        ))}
+                        {!plannerImportResult.rows.length ? (
+                          <TR><TD colSpan={4} className="text-center text-slate-400">没有可导入行</TD></TR>
+                        ) : null}
+                      </TBody>
+                    </Table>
+                  </div>
+                </div>
+                {plannerImportResult.warnings.length ? (
+                  <div>
+                    <div className="mb-2 font-medium text-amber-700">需要补充或确认的字段</div>
+                    <div className="max-h-44 overflow-auto rounded-md border border-amber-200">
+                      <Table>
+                        <THead><TR><TH>行号</TH><TH>字段</TH><TH>原值</TH><TH>原因</TH></TR></THead>
+                        <TBody>
+                          {plannerImportResult.warnings.map((item, index) => (
+                            <TR key={`${item.row_number}-${item.field}-${index}`}>
+                              <TD>{item.row_number}</TD>
+                              <TD>{item.field}</TD>
+                              <TD>{compact(item.raw_value) || "-"}</TD>
+                              <TD>{item.message}</TD>
+                            </TR>
+                          ))}
+                        </TBody>
+                      </Table>
+                    </div>
+                  </div>
+                ) : null}
+                {plannerImportResult.errors.length ? (
+                  <div>
+                    <div className="mb-2 font-medium text-red-700">未导入错误</div>
+                    <div className="max-h-36 overflow-auto rounded-md border border-red-200">
+                      <Table>
+                        <THead><TR><TH>行号</TH><TH>提单号</TH><TH>原因</TH></TR></THead>
+                        <TBody>
+                          {plannerImportResult.errors.map((item, index) => (
+                            <TR key={`${item.row_number || "file"}-${index}`}>
+                              <TD>{item.row_number ?? "-"}</TD>
+                              <TD>{compact(item.waybill_no) || "-"}</TD>
+                              <TD>{item.message}</TD>
+                            </TR>
+                          ))}
+                        </TBody>
+                      </Table>
+                    </div>
+                  </div>
+                ) : null}
+              </>
+            ) : null}
+          </div>
+          <div className="mt-5 flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setPlannerImportOpen(false)}>关闭</Button>
+            <Button disabled={uploadingPlannerImport} onClick={() => plannerImportInputRef.current?.click()}>
+              继续上传
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

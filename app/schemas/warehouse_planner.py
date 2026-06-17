@@ -11,19 +11,22 @@ from app.schemas.carrier import CarrierAgentOut
 from app.schemas.user import UserSummaryOut
 
 
-PlannerSourceType = Literal["waybill", "prebooking"]
+PlannerSourceType = Literal["waybill", "prebooking", "import_waybill", "import_prebooking"]
 PlannerCommitMode = Literal["all_or_none", "success_only"]
+PlannerChannel = Literal["AMS", "LHR"]
 
 
 class WarehousePlannerRow(BaseModel):
     source_type: PlannerSourceType
     source_id: int
+    planning_channel: PlannerChannel = "AMS"
     waybill_no: str | None = Field(default=None, max_length=64)
     carrier_agent_id: int | None = None
     planned_flight_no: str | None = Field(default=None, max_length=32)
     planned_flight_date: date | None = None
     outbound_date: date | None = None
     receipt_ids: list[int] = Field(default_factory=list)
+    consignee_contact_id: int | None = None
     customs_staff_id: int | None = None
     booked_volume: Decimal | None = None
     booked_weight: Decimal | None = None
@@ -122,6 +125,28 @@ class WarehousePlannerCommitResult(BaseModel):
     results: list[WarehousePlannerRowResult]
     remaining_rows: list[WarehousePlannerRow] = Field(default_factory=list)
     skipped_due_to_all_or_none: bool = False
+
+
+class WarehousePlannerBulkImportWarning(BaseModel):
+    row_number: int
+    field: str
+    raw_value: str | None = None
+    message: str
+
+
+class WarehousePlannerBulkImportError(BaseModel):
+    row_number: int | None = None
+    waybill_no: str | None = None
+    message: str
+
+
+class WarehousePlannerBulkImportResult(BaseModel):
+    file_name: str
+    imported_count: int
+    skipped_count: int
+    rows: list[WarehousePlannerRow] = Field(default_factory=list)
+    warnings: list[WarehousePlannerBulkImportWarning] = Field(default_factory=list)
+    errors: list[WarehousePlannerBulkImportError] = Field(default_factory=list)
 
 
 def model_to_jsonable(value: Any) -> Any:

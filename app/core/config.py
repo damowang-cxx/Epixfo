@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     fiftyone_tracking_lang: str = "cn"
     fiftyone_tracking_allow_stale_on_error: bool = True
     warehouse_file_storage_dir: str = "./runtime/warehouse-files"
+    airline_file_storage_dir: str = "./runtime/airline-files"
 
     model_config = SettingsConfigDict(
         env_file=".env",

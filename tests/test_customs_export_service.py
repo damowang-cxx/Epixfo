@@ -5,8 +5,12 @@ from decimal import Decimal
 from io import BytesIO
 from types import SimpleNamespace
 
+import pytest
 from openpyxl import load_workbook
 
+from app.api.v1.waybills import general_cargo_export
+from app.core.exceptions import AppHTTPException
+from app.models.enums import UserRoleCode
 from app.services.customs_export_service import CustomsExportService
 
 
@@ -21,6 +25,12 @@ class FakeBoxRepository:
 def _make_service(boxes):
     service = CustomsExportService.__new__(CustomsExportService)
     service.boxes = FakeBoxRepository(boxes)
+    return service
+
+
+def _make_monthly_service(rows):
+    service = CustomsExportService.__new__(CustomsExportService)
+    service._list_monthly_general_cargo_rows = lambda year, month: rows
     return service
 
 
@@ -43,6 +53,15 @@ def _make_waybill(**overrides):
             planned_flight_date=date(2026, 5, 22),
             planned_route_text="CAN- DWC - AMS",
         ),
+    }
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
+def _make_receipt(**overrides):
+    defaults = {
+        "warehouse_no": "WH-001",
+        "source_document": SimpleNamespace(file_name="WH-001.xlsx"),
     }
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
@@ -182,6 +201,85 @@ def test_customs_export_uses_calculated_dimensions_without_cbm_suffix() -> None:
     assert inbound[2][6].value == "0.076"
     assert inbound[3][5].value == "118.421"
     assert inbound[3][6].value == "0.076"
+
+
+def test_monthly_general_cargo_export_includes_source_columns_and_summary() -> None:
+    waybill = _make_waybill(waybill_no="176-00000001")
+    receipt = _make_receipt()
+    box = SimpleNamespace(
+        box_no="BOX-GENERAL",
+        warehouse_waybill_no="WH-GENERAL-1",
+        goods_name="GENERAL GOODS",
+        quantity=2,
+        weight=Decimal("5.000"),
+        original_volume_info="50*40*40",
+        volume=Decimal("0.200"),
+        weight_volume_ratio=Decimal("25.000"),
+        is_general_cargo=True,
+        items=[
+            SimpleNamespace(warehouse_waybill_no="WH-GENERAL-1", goods_name="GENERAL A", quantity=1, weight=Decimal("2.000")),
+            SimpleNamespace(warehouse_waybill_no="WH-GENERAL-2", goods_name="GENERAL B", quantity=1, weight=Decimal("3.000")),
+        ],
+    )
+
+    workbook = _load_export(_make_monthly_service([(waybill, receipt, box)]).build_monthly_general_cargo_export(2026, 6))
+    sheet = workbook["普货汇总"]
+
+    assert workbook.sheetnames == ["普货汇总"]
+    assert [cell.value for cell in sheet[1]] == [
+        "主提单号",
+        "入仓号文件",
+        "外箱条码",
+        "运单号",
+        "品名",
+        "数量",
+        "重量",
+        "收货体积信息",
+        "收货重量/方",
+    ]
+    assert [cell.value for cell in sheet[2]] == [
+        "176-00000001",
+        "WH-001.xlsx",
+        "BOX-GENERAL",
+        "WH-GENERAL-1",
+        "GENERAL A",
+        1,
+        "2",
+        "50*40*40",
+        "0.200",
+    ]
+    assert [cell.value for cell in sheet[3]] == [
+        "176-00000001",
+        "WH-001.xlsx",
+        None,
+        "WH-GENERAL-2",
+        "GENERAL B",
+        1,
+        "3",
+        None,
+        None,
+    ]
+    assert [cell.value for cell in sheet[4]][5:9] == ["合计", "5", "25.000", "0.200"]
+    for cell in sheet[4][5:9]:
+        assert cell.fill.fill_type == "solid"
+        assert cell.fill.fgColor.rgb.endswith("FFF2CC")
+
+
+def test_monthly_general_cargo_export_empty_month_still_has_summary() -> None:
+    workbook = _load_export(_make_monthly_service([]).build_monthly_general_cargo_export(2026, 6))
+    sheet = workbook["普货汇总"]
+
+    assert sheet.max_row == 2
+    assert [cell.value for cell in sheet[2]][5:9] == ["合计", "0", "0.000", "0.000"]
+
+
+def test_general_cargo_export_route_rejects_non_route_roles() -> None:
+    user = SimpleNamespace(is_superuser=False, roles=[SimpleNamespace(code=UserRoleCode.CUSTOMER_SERVICE)])
+
+    with pytest.raises(AppHTTPException) as exc_info:
+        general_cargo_export(year=2026, month=6, current_user=user, db=SimpleNamespace())
+
+    assert exc_info.value.status_code == 403
 
 
 def test_customs_export_outputs_notify_party_only_when_different() -> None:
