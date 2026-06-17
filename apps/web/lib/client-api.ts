@@ -108,5 +108,10 @@ export const apiClient = {
     request<T>(path, {
       method: "DELETE"
     }),
+  deleteWithBody: <T>(path: string, body?: unknown) =>
+    request<T>(path, {
+      method: "DELETE",
+      body: body === undefined ? undefined : JSON.stringify(body)
+    }),
   download
 };

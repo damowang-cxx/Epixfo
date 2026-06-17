@@ -60,7 +60,7 @@ function convertDraftFrom(item: WaybillPrebooking): ConvertDraft {
   return {
     waybill_no: item.waybill_no || "",
     carrier_agent_id: String(item.carrier_agent_id || ""),
-    departure_port: item.departure_port || "",
+    departure_port: item.departure_port || "CAN",
     destination_port: item.destination_port || "",
     planned_flight_info: item.planned_flight_no ? `${item.planned_flight_no}/${String(new Date(item.planned_flight_date).getDate()).padStart(2, "0")}` : "",
     outbound_date: item.outbound_date || "",

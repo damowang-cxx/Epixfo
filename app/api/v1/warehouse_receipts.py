@@ -17,6 +17,8 @@ from app.schemas.box import (
     BoxVolumeRecalculationResult,
     WarehouseFileUploadResult,
     WarehouseReceiptBindRequest,
+    WarehouseReceiptBatchDeleteRequest,
+    WarehouseReceiptBatchDeleteResult,
     WarehouseReceiptListOut,
     WarehouseReceiptOrderRequest,
 )
@@ -83,6 +85,15 @@ async def upload_unbound_warehouse_file(
         content=content,
         current_user=current_user,
     )
+
+
+@router.delete("/unbound/batch", response_model=WarehouseReceiptBatchDeleteResult)
+def batch_delete_unbound_warehouse_receipts(
+    payload: WarehouseReceiptBatchDeleteRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return WarehouseFileService(db).batch_delete_unbound_receipts(payload.unique_receipt_ids, current_user)
 
 
 @router.get("/{receipt_id}/boxes", response_model=list[BoxOut])

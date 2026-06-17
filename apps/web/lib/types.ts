@@ -375,6 +375,24 @@ export interface WarehouseFileUploadResult {
   prohibited_goods_issues: WarehouseProhibitedGoodsIssue[];
 }
 
+export interface WarehouseReceiptBatchDeleteItem {
+  id: number;
+  warehouse_no?: string | null;
+}
+
+export interface WarehouseReceiptBatchDeleteError {
+  id: number;
+  warehouse_no?: string | null;
+  message: string;
+}
+
+export interface WarehouseReceiptBatchDeleteResult {
+  success_count: number;
+  failed_count: number;
+  deleted_receipts: WarehouseReceiptBatchDeleteItem[];
+  errors: WarehouseReceiptBatchDeleteError[];
+}
+
 export type PlannerSourceType = "waybill" | "prebooking" | "import_waybill" | "import_prebooking";
 export type PlannerCommitMode = "all_or_none" | "success_only";
 export type PlannerChannel = "AMS" | "LHR";

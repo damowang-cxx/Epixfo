@@ -130,6 +130,7 @@ def test_create_waybill_parses_planned_flight_info_and_monitor_window(monkeypatc
 
     assert waybill.plan.planned_flight_no == "QR8943"
     assert waybill.plan.planned_flight_date == date(2026, 6, 1)
+    assert waybill.departure_port == "CAN"
     assert waybill.first_monitor_at.date() == date(2026, 5, 29)
     assert service.db.committed is True
 

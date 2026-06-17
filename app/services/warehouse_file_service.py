@@ -34,6 +34,9 @@ from app.schemas.box import (
     WarehouseFileImportError,
     WarehouseFileUploadResult,
     WarehouseProhibitedGoodsIssue,
+    WarehouseReceiptBatchDeleteError,
+    WarehouseReceiptBatchDeleteItem,
+    WarehouseReceiptBatchDeleteResult,
     WarehouseReceiptListOut,
     WarehouseUploadIntegrityIssue,
 )
@@ -108,6 +111,17 @@ class WarehouseFileParseResult:
 class WarehouseChannelReviewResult:
     review: WarehouseChannelReviewOut
     issues: list[WarehouseChannelReviewIssue]
+
+
+def _http_exception_message(exc: HTTPException) -> str:
+    detail = exc.detail
+    if isinstance(detail, dict):
+        message = detail.get("message") or detail.get("error_code")
+        if isinstance(message, str):
+            return message
+    if isinstance(detail, str):
+        return detail
+    return "warehouse_receipt_delete_failed"
 
 
 class WarehouseFileService:
@@ -1127,7 +1141,59 @@ class WarehouseFileService:
 
     def delete_unbound_receipt(self, receipt_id: int, current_user: User) -> None:
         PermissionService.assert_waybill_write(current_user)
-        receipt = self.boxes.get_receipt_by_id(receipt_id)
+        self._delete_unbound_receipt(receipt_id)
+        self.db.commit()
+
+    def batch_delete_unbound_receipts(
+        self,
+        receipt_ids: list[int],
+        current_user: User,
+    ) -> WarehouseReceiptBatchDeleteResult:
+        PermissionService.assert_waybill_write(current_user)
+        seen: set[int] = set()
+        unique_receipt_ids: list[int] = []
+        for receipt_id in receipt_ids:
+            if receipt_id in seen:
+                continue
+            seen.add(receipt_id)
+            unique_receipt_ids.append(receipt_id)
+        deleted: list[WarehouseReceiptBatchDeleteItem] = []
+        errors: list[WarehouseReceiptBatchDeleteError] = []
+        for receipt_id in unique_receipt_ids:
+            receipt = self.boxes.get_receipt_by_id(receipt_id)
+            warehouse_no = receipt.warehouse_no if receipt is not None else None
+            try:
+                self._delete_unbound_receipt(receipt_id, receipt=receipt)
+                self.db.commit()
+                deleted.append(WarehouseReceiptBatchDeleteItem(id=receipt_id, warehouse_no=warehouse_no))
+            except HTTPException as exc:
+                self.db.rollback()
+                errors.append(
+                    WarehouseReceiptBatchDeleteError(
+                        id=receipt_id,
+                        warehouse_no=warehouse_no,
+                        message=_http_exception_message(exc),
+                    )
+                )
+            except Exception as exc:
+                self.db.rollback()
+                errors.append(
+                    WarehouseReceiptBatchDeleteError(
+                        id=receipt_id,
+                        warehouse_no=warehouse_no,
+                        message=str(exc) or "warehouse_receipt_delete_failed",
+                    )
+                )
+
+        return WarehouseReceiptBatchDeleteResult(
+            success_count=len(deleted),
+            failed_count=len(errors),
+            deleted_receipts=deleted,
+            errors=errors,
+        )
+
+    def _delete_unbound_receipt(self, receipt_id: int, *, receipt: WarehouseReceipt | None = None) -> WarehouseReceipt:
+        receipt = receipt or self.boxes.get_receipt_by_id(receipt_id)
         if receipt is None:
             raise bad_request("warehouse_receipt_not_found")
         if receipt.waybill_id is not None:
@@ -1137,7 +1203,7 @@ class WarehouseFileService:
         for box in self.boxes.list_by_receipt_id(receipt.id):
             self.db.delete(box)
         self.db.delete(receipt)
-        self.db.commit()
+        return receipt
 
     def batch_bind_boxes(self, box_ids: list[int], target_waybill_id: int, current_user: User) -> BoxBatchOperationResult:
         return self.batch_transfer_boxes(

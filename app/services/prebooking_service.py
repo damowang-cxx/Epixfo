@@ -20,6 +20,7 @@ from app.services.waybill_service import WaybillService
 from app.utils.pagination import normalize_pagination
 
 
+DEFAULT_DEPARTURE_PORT = "CAN"
 PREBOOKING_FIELDS = {
     "carrier_agent_id",
     "planned_flight_date",
@@ -277,6 +278,8 @@ class PrebookingService:
         for key, value in defaults.items():
             if data.get(key) in (None, "") and value is not None:
                 data[key] = value
+        if data.get("departure_port") in (None, ""):
+            data["departure_port"] = DEFAULT_DEPARTURE_PORT
         return data
 
     def _validate_convert_payload(self, data: dict) -> None:
@@ -288,7 +291,6 @@ class PrebookingService:
             "planned_route_text": "planned_route_required",
             "booked_weight": "booked_weight_required",
             "booked_volume": "booked_volume_required",
-            "quotation": "quotation_required",
         }
         missing = [code for key, code in required.items() if data.get(key) in (None, "")]
         has_flight_info = bool(data.get("planned_flight_info"))

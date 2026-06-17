@@ -81,6 +81,39 @@ class WarehouseReceiptOrderRequest(BaseModel):
         return result
 
 
+class WarehouseReceiptBatchDeleteRequest(BaseModel):
+    receipt_ids: list[int] = Field(min_length=1)
+
+    @property
+    def unique_receipt_ids(self) -> list[int]:
+        seen: set[int] = set()
+        result: list[int] = []
+        for receipt_id in self.receipt_ids:
+            if receipt_id in seen:
+                continue
+            seen.add(receipt_id)
+            result.append(receipt_id)
+        return result
+
+
+class WarehouseReceiptBatchDeleteItem(BaseModel):
+    id: int
+    warehouse_no: str | None = None
+
+
+class WarehouseReceiptBatchDeleteError(BaseModel):
+    id: int
+    warehouse_no: str | None = None
+    message: str
+
+
+class WarehouseReceiptBatchDeleteResult(BaseModel):
+    success_count: int
+    failed_count: int
+    deleted_receipts: list[WarehouseReceiptBatchDeleteItem] = Field(default_factory=list)
+    errors: list[WarehouseReceiptBatchDeleteError] = Field(default_factory=list)
+
+
 class WarehouseReceiptBindPrebookingRequest(BaseModel):
     receipt_id: int
 

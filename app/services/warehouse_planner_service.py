@@ -47,6 +47,7 @@ from app.utils.datetime_utils import local_now
 
 ACTIVE_EXCLUDED_STATUSES = {WaybillLifecycleStatus.PICKED_UP, WaybillLifecycleStatus.VOIDED}
 IMPORT_SOURCE_TYPES = {"import_waybill", "import_prebooking"}
+DEFAULT_DEPARTURE_PORT = "CAN"
 PLANNER_EXPORT_HEADERS = [
     "排仓栏位",
     "来源",
@@ -463,6 +464,8 @@ class WarehousePlannerService:
     @staticmethod
     def _required_formal_waybill_errors(data: dict[str, Any]) -> list[WarehousePlannerRowError]:
         errors: list[WarehousePlannerRowError] = []
+        if data.get("departure_port") in (None, ""):
+            data["departure_port"] = DEFAULT_DEPARTURE_PORT
         required = {
             "waybill_no": "waybill_no_required",
             "carrier_agent_id": "carrier_agent_required",
@@ -471,7 +474,6 @@ class WarehousePlannerService:
             "planned_route_text": "planned_route_required",
             "booked_weight": "booked_weight_required",
             "booked_volume": "booked_volume_required",
-            "quotation": "quotation_required",
         }
         for field, message in required.items():
             if data.get(field) in (None, ""):

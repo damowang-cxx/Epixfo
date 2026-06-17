@@ -67,7 +67,7 @@ const fields: FieldMeta[] = [
   { key: "booked_weight", label: "订舱重量", type: "number", requiredOnCreate: true },
   { key: "booked_volume", label: "订舱方数", type: "number", requiredOnCreate: true },
   { key: "density", label: "密度", type: "number" },
-  { key: "quotation", label: "报价", requiredOnCreate: true },
+  { key: "quotation", label: "报价" },
   { key: "air_freight_cost", label: "航空费", type: "number" },
   { key: "other_charge", label: "其他费用", type: "number" },
   { key: "payment_date", label: "付款日期", type: "date" },
@@ -92,7 +92,7 @@ function dateTimeInput(value?: string | null) {
 function initialState(waybill?: Waybill): FormState {
   return {
     waybill_no: waybill?.waybill_no || "",
-    departure_port: waybill?.departure_port || "",
+    departure_port: waybill ? waybill.departure_port || "" : "CAN",
     destination_port: waybill?.destination_port || "",
     carrier_agent_id: waybill?.carrier_agent_id?.toString() || "",
     warehouse_no: waybill?.warehouse_no || "",

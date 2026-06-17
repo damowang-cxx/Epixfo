@@ -47,6 +47,7 @@ def test_convert_payload_inherits_prebooking_outbound_date() -> None:
     )
 
     assert merged["outbound_date"] == date(2026, 5, 30)
+    assert merged["departure_port"] == "CAN"
 
 
 def test_convert_payload_can_override_outbound_date() -> None:

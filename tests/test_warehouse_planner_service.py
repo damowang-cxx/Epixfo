@@ -79,11 +79,9 @@ def test_validate_prebooking_requires_formal_waybill_fields() -> None:
     assert result.invalid_count == 1
     messages = {error.message for error in result.results[0].errors}
     assert "waybill_no_required" in messages
-    assert "departure_port_required" in messages
     assert "destination_port_required" in messages
     assert "planned_route_required" in messages
     assert "booked_weight_required" in messages
-    assert "quotation_required" in messages
 
 
 def test_validate_import_prebooking_requires_waybill_before_commit() -> None:
@@ -96,8 +94,6 @@ def test_validate_import_prebooking_requires_waybill_before_commit() -> None:
         planned_flight_date=date(2026, 6, 1),
         booked_volume=Decimal("12.000"),
         booked_weight=Decimal("1000"),
-        quotation="38.6",
-        departure_port="CAN",
         destination_port="AMS",
         planned_route_text="CAN-AMS",
     )

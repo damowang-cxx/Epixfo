@@ -25,6 +25,7 @@ import type {
   WarehouseFileImportError,
   WarehouseFileUploadResult,
   WarehouseProhibitedGoodsIssue,
+  WarehouseReceiptBatchDeleteResult,
   WarehouseUploadIntegrityIssue,
   WarehouseReceipt,
   Waybill
@@ -286,6 +287,7 @@ export default function WarehouseReceiptsPage() {
   const [allReceipts, setAllReceipts] = useState<WarehouseReceipt[]>([]);
   const [expandedReceiptId, setExpandedReceiptId] = useState<number | null>(null);
   const [boxesByReceipt, setBoxesByReceipt] = useState<Record<number, CargoBox[]>>({});
+  const [selectedReceiptIds, setSelectedReceiptIds] = useState<Set<number>>(new Set());
   const [selectedReceiptBoxIds, setSelectedReceiptBoxIds] = useState<Set<number>>(new Set());
   const [receiptSelectionAnchor, setReceiptSelectionAnchor] = useState<number | null>(null);
   const [scatterData, setScatterData] = useState<PageResponse<CargoBox> | null>(null);
@@ -592,6 +594,14 @@ export default function WarehouseReceiptsPage() {
         delete next[item.id];
         return next;
       });
+      setSelectedReceiptIds((prev) => {
+        if (!prev.has(item.id)) return prev;
+        const next = new Set(prev);
+        next.delete(item.id);
+        return next;
+      });
+      setSelectedReceiptBoxIds(new Set());
+      setReceiptSelectionAnchor(null);
       if (expandedReceiptId === item.id) setExpandedReceiptId(null);
       setReceipts((prev) =>
         prev
@@ -605,6 +615,70 @@ export default function WarehouseReceiptsPage() {
       refreshAll();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "删除入仓号失败。");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function toggleReceiptSelection(receiptId: number, checked: boolean) {
+    setSelectedReceiptIds((prev) => {
+      const next = new Set(prev);
+      if (checked) {
+        next.add(receiptId);
+      } else {
+        next.delete(receiptId);
+      }
+      return next;
+    });
+  }
+
+  async function batchDeleteReceipts() {
+    const receiptIds = Array.from(selectedReceiptIds);
+    if (!receiptIds.length) return;
+    if (!window.confirm(`确认永久删除选中的 ${receiptIds.length} 个未绑定入仓号及其所有外箱明细吗？`)) return;
+    setSaving(true);
+    setMessage("");
+    try {
+      const result = await apiClient.deleteWithBody<WarehouseReceiptBatchDeleteResult>("/warehouse-receipts/unbound/batch", {
+        receipt_ids: receiptIds
+      });
+      const deletedIds = new Set(result.deleted_receipts.map((item) => item.id));
+      setBoxesByReceipt((prev) => {
+        const next = { ...prev };
+        deletedIds.forEach((id) => {
+          delete next[id];
+        });
+        return next;
+      });
+      setSelectedReceiptIds((prev) => {
+        const next = new Set(prev);
+        deletedIds.forEach((id) => next.delete(id));
+        return next;
+      });
+      setSelectedReceiptBoxIds(new Set());
+      setReceiptSelectionAnchor(null);
+      if (expandedReceiptId !== null && deletedIds.has(expandedReceiptId)) setExpandedReceiptId(null);
+      setReceipts((prev) =>
+        prev
+          ? {
+              ...prev,
+              items: prev.items.filter((row) => !deletedIds.has(row.id)),
+              total: Math.max(0, prev.total - result.success_count)
+            }
+          : prev
+      );
+      const errorPreview = result.errors
+        .slice(0, 3)
+        .map((item) => `${item.warehouse_no || item.id}: ${item.message}`)
+        .join("；");
+      setMessage(
+        result.failed_count
+          ? `批量删除完成：成功 ${result.success_count} 个，失败 ${result.failed_count} 个。${errorPreview}`
+          : `已删除 ${result.success_count} 个未绑定入仓号。`
+      );
+      refreshAll();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "批量删除入仓号失败。");
     } finally {
       setSaving(false);
     }
@@ -827,6 +901,30 @@ export default function WarehouseReceiptsPage() {
       <div className="grid gap-4 xl:grid-cols-[1.25fr_0.75fr]">
         <Panel title="未绑定入仓号文件">
           <div className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
+              <span className="text-slate-600">已选 {selectedReceiptIds.size} 个入仓号</span>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={!selectedReceiptIds.size || saving}
+                  onClick={() => void batchDeleteReceipts()}
+                >
+                  <Trash2 className="h-4 w-4 text-red-600" />
+                  批量删除
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  disabled={!selectedReceiptIds.size || saving}
+                  onClick={() => setSelectedReceiptIds(new Set())}
+                >
+                  取消选择
+                </Button>
+              </div>
+            </div>
             {(receipts?.items || []).length ? (
               (receipts?.items || []).map((receipt) => {
                 const expanded = expandedReceiptId === receipt.id;
@@ -869,6 +967,14 @@ export default function WarehouseReceiptsPage() {
                         >
                           <GripVertical className="h-4 w-4" />
                         </Button>
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 rounded border-slate-300"
+                          checked={selectedReceiptIds.has(receipt.id)}
+                          aria-label={`选择入仓号 ${receipt.warehouse_no}`}
+                          onClick={(event) => event.stopPropagation()}
+                          onChange={(event) => toggleReceiptSelection(receipt.id, event.target.checked)}
+                        />
                         <button
                           type="button"
                           className="flex min-w-0 items-center gap-2 text-left"

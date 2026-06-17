@@ -290,9 +290,9 @@ export default function WaybillDetailPage() {
     try {
       const uploaded = await apiClient.postForm<WaybillAirlineFile>(`/waybills/${id}/airline-file`, formData);
       setWaybill((current) => (current ? { ...current, airline_file: uploaded } : current));
-      setMessage("航司对接文件已上传。");
+      setMessage("提单文件已上传。");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "航司对接文件上传失败。");
+      setMessage(error instanceof Error ? error.message : "提单文件上传失败。");
     } finally {
       setAirlineFileUploading(false);
       if (airlineFileInputRef.current) airlineFileInputRef.current.value = "";
@@ -307,7 +307,7 @@ export default function WaybillDetailPage() {
       const { blob, filename } = await apiClient.download(`/waybills/${id}/airline-file/download`);
       downloadBlob(blob, filename || waybill.airline_file.original_file_name || `airline-file-${waybill.waybill_no}.pdf`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "航司对接文件下载失败。");
+      setMessage(error instanceof Error ? error.message : "提单文件下载失败。");
     } finally {
       setAirlineFileDownloading(false);
     }
@@ -315,15 +315,15 @@ export default function WaybillDetailPage() {
 
   async function deleteAirlineFile() {
     if (!id || !waybill?.airline_file || !canEditBoxes) return;
-    if (!window.confirm("确认删除当前航司对接文件？")) return;
+    if (!window.confirm("确认删除当前提单文件？")) return;
     setAirlineFileDeleting(true);
     setMessage("");
     try {
       await apiClient.delete<void>(`/waybills/${id}/airline-file`);
       setWaybill((current) => (current ? { ...current, airline_file: null } : current));
-      setMessage("航司对接文件已删除。");
+      setMessage("提单文件已删除。");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "航司对接文件删除失败。");
+      setMessage(error instanceof Error ? error.message : "提单文件删除失败。");
     } finally {
       setAirlineFileDeleting(false);
     }
@@ -413,13 +413,13 @@ export default function WaybillDetailPage() {
                 {waybill.airline_file ? (
                   <Button type="button" variant="secondary" size="sm" disabled={airlineFileDownloading} onClick={() => void downloadAirlineFile()}>
                     <Download className="h-4 w-4" />
-                    {airlineFileDownloading ? "下载中..." : "下载航司对接文件"}
+                    {airlineFileDownloading ? "下载中..." : "下载提单文件"}
                   </Button>
                 ) : null}
                 {canEditBoxes ? (
                   <Button type="button" variant="secondary" size="sm" disabled={airlineFileUploading} onClick={() => airlineFileInputRef.current?.click()}>
                     <Upload className="h-4 w-4" />
-                    {airlineFileUploading ? "上传中..." : waybill.airline_file ? "替换航司对接文件" : "上传航司对接文件"}
+                    {airlineFileUploading ? "上传中..." : waybill.airline_file ? "替换提单文件" : "上传提单文件"}
                   </Button>
                 ) : null}
                 {canEditBoxes && waybill.airline_file ? (
@@ -438,7 +438,7 @@ export default function WaybillDetailPage() {
                 ["航代", waybill.agent],
                 ["入仓号", waybill.warehouse_no],
                 [
-                  "航司对接文件",
+                  "提单文件",
                   waybill.airline_file
                     ? `${waybill.airline_file.original_file_name}（${formatDateTime(waybill.airline_file.uploaded_at)}）`
                     : "未上传"

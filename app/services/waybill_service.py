@@ -42,6 +42,7 @@ from app.utils.waybill_utils import normalize_waybill_no, validate_waybill_no
 
 PLAN_FIELDS = {"planned_flight_no", "planned_flight_date", "planned_destination", "planned_route_text"}
 PLAN_INPUT_FIELDS = PLAN_FIELDS | {"planned_flight_info"}
+DEFAULT_DEPARTURE_PORT = "CAN"
 WAYBILL_BULK_UPDATE_FIELDS = {
     "customs_staff_id",
     "outbound_date",
@@ -102,6 +103,8 @@ class WaybillService:
             exclude=PLAN_INPUT_FIELDS | {"waybill_no", "carrier_agent_id", "consignee_contact_id", "consignee"},
             exclude_none=True,
         )
+        if not waybill_data.get("departure_port"):
+            waybill_data["departure_port"] = DEFAULT_DEPARTURE_PORT
         waybill = AirWaybill(
             **waybill_data,
             waybill_no=waybill_no,

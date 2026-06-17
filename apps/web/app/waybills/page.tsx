@@ -734,11 +734,11 @@ export default function WaybillsPage() {
     try {
       const result = await apiClient.postForm<WaybillAirlineFileBatchUploadResult>("/waybills/airline-files/batch", formData);
       setAirlineUploadResult(result);
-      setMessage(`航司对接文件上传完成：成功 ${result.success_count} 个，失败 ${result.failed_count} 个。`);
+      setMessage(`提单文件上传完成：成功 ${result.success_count} 个，失败 ${result.failed_count} 个。`);
       load();
       loadCounts();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "航司对接文件上传失败。");
+      setMessage(error instanceof Error ? error.message : "提单文件上传失败。");
     } finally {
       setAirlineUploading(false);
       if (airlineFileInputRef.current) airlineFileInputRef.current.value = "";
@@ -1138,7 +1138,7 @@ export default function WaybillsPage() {
                 />
                 <Button type="button" variant="secondary" disabled={airlineUploading} onClick={() => airlineFileInputRef.current?.click()}>
                   <Upload className="h-4 w-4" />
-                  {airlineUploading ? "上传中..." : "上传航司对接文件"}
+                  {airlineUploading ? "上传中..." : "上传提单文件"}
                 </Button>
               </>
             ) : null}
@@ -1433,7 +1433,7 @@ export default function WaybillsPage() {
       </Panel>
       <Dialog open={Boolean(airlineUploadResult)} onOpenChange={(open) => !open && setAirlineUploadResult(null)}>
         <DialogContent className="w-[min(900px,calc(100vw-32px))]">
-          <DialogTitle className="pr-10 text-base font-semibold text-slate-900">航司对接文件上传结果</DialogTitle>
+          <DialogTitle className="pr-10 text-base font-semibold text-slate-900">提单文件上传结果</DialogTitle>
           {airlineUploadResult ? (
             <div className="grid gap-4 lg:grid-cols-2">
               <section className="rounded-md border border-emerald-200 bg-emerald-50/60">

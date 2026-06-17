@@ -17,9 +17,11 @@ _ = (CarrierAgent, ConsigneeContact)
 class FakeDb:
     def __init__(self) -> None:
         self.committed = False
+        self.rollback_count = 0
         self.refreshed = None
         self.added = []
         self.deleted = None
+        self.deleted_objects = []
 
     def commit(self):
         self.committed = True
@@ -34,9 +36,13 @@ class FakeDb:
 
     def delete(self, obj):
         self.deleted = obj
+        self.deleted_objects.append(obj)
 
     def flush(self):
         return None
+
+    def rollback(self):
+        self.rollback_count += 1
 
 
 class FakeBoxRepository:
@@ -933,6 +939,60 @@ def test_delete_box_removes_box_and_commits() -> None:
 
     assert service.db.deleted is service.boxes.box
     assert service.db.committed is True
+
+
+def test_batch_delete_unbound_receipts_deletes_valid_receipts() -> None:
+    service = WarehouseFileService.__new__(WarehouseFileService)
+    service.db = FakeDb()
+    service.boxes = FakeBoxRepository()
+    receipt_a = WarehouseReceipt(warehouse_no="WH-A", total_quantity=1)
+    receipt_a.id = 101
+    receipt_b = WarehouseReceipt(warehouse_no="WH-B", total_quantity=1)
+    receipt_b.id = 102
+    service.boxes.receipts_by_no = {receipt_a.warehouse_no: receipt_a, receipt_b.warehouse_no: receipt_b}
+    box_a = SimpleNamespace(id=1, warehouse_receipt_id=101)
+    box_b = SimpleNamespace(id=2, warehouse_receipt_id=102)
+    service.boxes.boxes_list = [box_a, box_b]
+    user = SimpleNamespace(id=5, is_superuser=True, roles=[])
+
+    result = service.batch_delete_unbound_receipts([101, 102, 101], user)
+
+    assert result.success_count == 2
+    assert result.failed_count == 0
+    assert [item.id for item in result.deleted_receipts] == [101, 102]
+    assert box_a in service.db.deleted_objects
+    assert box_b in service.db.deleted_objects
+    assert receipt_a in service.db.deleted_objects
+    assert receipt_b in service.db.deleted_objects
+    assert service.db.rollback_count == 0
+
+
+def test_batch_delete_unbound_receipts_reports_bound_receipt_failure() -> None:
+    service = WarehouseFileService.__new__(WarehouseFileService)
+    service.db = FakeDb()
+    service.boxes = FakeBoxRepository()
+    receipt_a = WarehouseReceipt(warehouse_no="WH-A", total_quantity=1)
+    receipt_a.id = 101
+    receipt_b = WarehouseReceipt(warehouse_no="WH-B", waybill_id=7, total_quantity=1)
+    receipt_b.id = 102
+    service.boxes.receipts_by_no = {receipt_a.warehouse_no: receipt_a, receipt_b.warehouse_no: receipt_b}
+    box_a = SimpleNamespace(id=1, warehouse_receipt_id=101)
+    box_b = SimpleNamespace(id=2, warehouse_receipt_id=102)
+    service.boxes.boxes_list = [box_a, box_b]
+    user = SimpleNamespace(id=5, is_superuser=True, roles=[])
+
+    result = service.batch_delete_unbound_receipts([101, 102], user)
+
+    assert result.success_count == 1
+    assert result.failed_count == 1
+    assert result.deleted_receipts[0].id == 101
+    assert result.errors[0].id == 102
+    assert result.errors[0].message == "warehouse_receipt_bound_to_waybill"
+    assert box_a in service.db.deleted_objects
+    assert receipt_a in service.db.deleted_objects
+    assert box_b not in service.db.deleted_objects
+    assert receipt_b not in service.db.deleted_objects
+    assert service.db.rollback_count == 1
 
 
 def test_recalculate_box_volumes_scales_single_item_boxes_to_target_volume() -> None:
