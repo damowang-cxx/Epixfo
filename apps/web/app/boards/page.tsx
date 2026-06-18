@@ -35,6 +35,10 @@ function sumBookedVolume(waybills: WaybillBoard["waybills"]) {
   }, 0);
 }
 
+function boardTotalBookedVolume(board: WaybillBoard, waybills: WaybillBoard["waybills"] = board.waybills) {
+  return board.booked_volume ?? sumBookedVolume(waybills);
+}
+
 function mergeWaybillInput(current: string, waybillNos: string[]) {
   const merged: string[] = [];
   const seen = new Set<string>();
@@ -265,7 +269,7 @@ export default function BoardsPage() {
                   ...item,
                   waybills,
                   member_count: waybills.length,
-                  total_booked_volume: sumBookedVolume(waybills)
+                  total_booked_volume: boardTotalBookedVolume(item, waybills)
                 };
               })
             }

@@ -65,6 +65,79 @@ class ParsedPlannerImportFile:
     errors: list[ParsedPlannerImportError] = field(default_factory=list)
 
 
+@dataclass
+class ParsedPlannerBoardGroup:
+    group_id: str
+    order: int
+    booked_volume: Decimal | None
+    booked_weight: Decimal | None
+
+
+class PlannerWorksheetMergeContext:
+    def __init__(self, worksheet, header_map: dict[str, int], header_row_number: int, source_id_base: int) -> None:
+        self.worksheet = worksheet
+        self.header_map = header_map
+        self.header_row_number = header_row_number
+        self.merged_parent: dict[tuple[int, int], tuple[int, int]] = {}
+        for merged_range in worksheet.merged_cells.ranges:
+            if merged_range.max_row <= header_row_number:
+                continue
+            for row in range(merged_range.min_row, merged_range.max_row + 1):
+                for column in range(merged_range.min_col, merged_range.max_col + 1):
+                    self.merged_parent[(row, column)] = (merged_range.min_row, merged_range.min_col)
+        self.board_groups_by_row = self._collect_board_groups(source_id_base)
+
+    def row_values(self, row_number: int, header_count: int) -> list[Any]:
+        return [self.value_by_index(row_number, index) for index in range(header_count)]
+
+    def value_by_index(self, row_number: int, index: int) -> Any:
+        column_number = index + 1
+        parent_row, parent_column = self.merged_parent.get((row_number, column_number), (row_number, column_number))
+        return self.worksheet.cell(parent_row, parent_column).value
+
+    def value(self, row_number: int, header: str) -> Any:
+        index = self.header_map.get(header)
+        if index is None:
+            return None
+        return self.value_by_index(row_number, index)
+
+    def board_group_for_row(self, row_number: int) -> ParsedPlannerBoardGroup | None:
+        return self.board_groups_by_row.get(row_number)
+
+    def _collect_board_groups(self, source_id_base: int) -> dict[int, ParsedPlannerBoardGroup]:
+        volume_column = self.header_map.get("方数")
+        if volume_column is None:
+            return {}
+        volume_column += 1
+        weight_column = self.header_map.get("订舱重量")
+        weight_column = weight_column + 1 if weight_column is not None else None
+        groups: dict[int, ParsedPlannerBoardGroup] = {}
+        for merged_range in self.worksheet.merged_cells.ranges:
+            if merged_range.max_row <= self.header_row_number or merged_range.min_row == merged_range.max_row:
+                continue
+            if not (merged_range.min_col <= volume_column <= merged_range.max_col):
+                continue
+            booked_weight: Decimal | None = None
+            if weight_column is not None:
+                for weight_range in self.worksheet.merged_cells.ranges:
+                    if (
+                        weight_range.min_row == merged_range.min_row
+                        and weight_range.max_row == merged_range.max_row
+                        and weight_range.min_col <= weight_column <= weight_range.max_col
+                    ):
+                        booked_weight = _decimal_or_none(self.value(merged_range.min_row, "订舱重量"))
+                        break
+            group = ParsedPlannerBoardGroup(
+                group_id=f"import-board-{source_id_base}-{merged_range.min_row}-{merged_range.max_row}",
+                order=merged_range.min_row,
+                booked_volume=_decimal_or_none(self.value(merged_range.min_row, "方数")),
+                booked_weight=booked_weight,
+            )
+            for row_number in range(merged_range.min_row, merged_range.max_row + 1):
+                groups[row_number] = group
+        return groups
+
+
 def _normalize_header(value: Any) -> str:
     return re.sub(r"\s+", "", str(value or "")).strip()
 
@@ -224,10 +297,12 @@ class WaybillImportTemplateParser:
             raise bad_request("waybill_import_header_not_found")
 
         parsed = ParsedPlannerImportFile()
+        merge_context = PlannerWorksheetMergeContext(worksheet, header_map, header_row_number, source_id_base)
         imported_index = 0
         for row_number in range(header_row_number + 1, worksheet.max_row + 1):
-            values = [cell.value for cell in worksheet[row_number]]
-            if not any(_clean_text(value) for value in values):
+            raw_values = [cell.value for cell in worksheet[row_number]]
+            values = merge_context.row_values(row_number, len(headers))
+            if not any(_clean_text(value) for value in raw_values):
                 parsed.skipped_count += 1
                 continue
             imported_index += 1
@@ -235,6 +310,7 @@ class WaybillImportTemplateParser:
                 row_number,
                 values,
                 header_map,
+                board_group=merge_context.board_group_for_row(row_number),
                 source_id=-(source_id_base + imported_index),
             )
             parsed.warnings.extend(warnings)
@@ -343,6 +419,7 @@ class WaybillImportTemplateParser:
         values: list[Any],
         header_map: dict[str, int],
         *,
+        board_group: ParsedPlannerBoardGroup | None,
         source_id: int,
     ) -> tuple[WarehousePlannerRow | None, list[ParsedPlannerImportWarning], list[ParsedPlannerImportError]]:
         warnings: list[ParsedPlannerImportWarning] = []
@@ -408,6 +485,11 @@ class WaybillImportTemplateParser:
         else:
             include_tc = _bool_or_none(cell("报价"))
 
+        if board_group and board_group.booked_volume is None and _clean_text(cell("方数")):
+            warning("方数", cell("方数"), "invalid_board_volume")
+        if board_group and board_group.booked_weight is None and _clean_text(cell("订舱重量")):
+            warning("订舱重量", cell("订舱重量"), "invalid_board_weight")
+
         try:
             row = WarehousePlannerRow(
                 source_type=source_type,
@@ -419,8 +501,12 @@ class WaybillImportTemplateParser:
                 receipt_ids=[],
                 consignee_contact_id=lookup_optional(self.consignees_by_name, cell("收件人"), "收件人"),
                 customs_staff_id=lookup_optional(self.users_by_name, cell("资料数据"), "资料数据"),
-                booked_volume=decimal_optional(cell("方数"), "方数"),
-                booked_weight=decimal_optional(cell("订舱重量"), "订舱重量"),
+                board_group_id=board_group.group_id if board_group else None,
+                board_group_order=board_group.order if board_group else None,
+                board_booked_volume=board_group.booked_volume if board_group else None,
+                board_booked_weight=board_group.booked_weight if board_group else None,
+                booked_volume=None if board_group else decimal_optional(cell("方数"), "方数"),
+                booked_weight=None if board_group and board_group.booked_weight is not None else decimal_optional(cell("订舱重量"), "订舱重量"),
                 density=decimal_optional(cell("密度"), "密度"),
                 quotation=_clean_text(cell("报价")),
                 include_tc=include_tc,

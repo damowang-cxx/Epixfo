@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
-import { Download, GripVertical, ListPlus, PanelRightClose, PanelRightOpen, RefreshCw, Save, Trash2, Upload } from "lucide-react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { Download, GripVertical, ListPlus, PanelRightClose, PanelRightOpen, RefreshCw, RotateCcw, Save, Trash2, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -49,11 +49,55 @@ type PlannerField =
 const CLEAR_VALUE = "__clear__";
 const CANDIDATE_DRAG_TYPE = "application/x-warehouse-planner-candidates";
 const RECEIPT_DRAG_TYPE = "application/x-warehouse-planner-receipts";
+const PLANNER_ROW_DRAG_TYPE = "application/x-warehouse-planner-rows";
 const PLANNER_SPLIT_PREFERENCE_KEY = "warehouse-planner:split-width";
+const PLANNER_COLUMNS_PREFERENCE_KEY = "warehouse-planner:columns";
 const DEFAULT_MAIN_PANE_PERCENT = 68;
 const MIN_MAIN_PANE_PERCENT = 44;
 const MAX_MAIN_PANE_PERCENT = 82;
 const PLANNER_CHANNELS: PlannerChannel[] = ["AMS", "LHR"];
+
+const DEFAULT_PLANNER_COLUMN_ORDER = [
+  "source",
+  "carrier_agent",
+  "planned_flight_no",
+  "waybill_no",
+  "outbound_date",
+  "receipts",
+  "customs_staff",
+  "booked_volume",
+  "planned_flight_date",
+  "booked_weight",
+  "density",
+  "quotation",
+  "include_tc",
+  "departure_port",
+  "destination_port",
+  "planned_route_text",
+  "actions"
+] as const;
+
+type PlannerColumnKey = (typeof DEFAULT_PLANNER_COLUMN_ORDER)[number];
+
+const PLANNER_COLUMN_LABELS: Record<PlannerColumnKey, string> = {
+  source: "来源",
+  carrier_agent: "航代",
+  planned_flight_no: "计划航班",
+  waybill_no: "提单号",
+  outbound_date: "出仓日期",
+  receipts: "入仓号/入仓文件",
+  customs_staff: "指定清关人员",
+  booked_volume: "订舱方数/板总方数",
+  planned_flight_date: "约定航班起飞日期",
+  booked_weight: "订舱重量",
+  density: "密度",
+  quotation: "报价",
+  include_tc: "含T",
+  departure_port: "始发港",
+  destination_port: "目的港",
+  planned_route_text: "航程",
+  actions: "操作"
+};
 
 const BATCH_FIELDS: Array<{ key: PlannerField; label: string; kind: "select" | "text" | "number" | "date" | "boolean" }> = [
   { key: "carrier_agent_id", label: "航代", kind: "select" },
@@ -131,6 +175,134 @@ function preferenceToMainPanePercent(preference?: TableColumnPreference | null) 
   return clampMainPanePercent(value);
 }
 
+function normalizePlannerColumnOrder(order?: string[] | null): PlannerColumnKey[] {
+  const validColumns = new Set<string>(DEFAULT_PLANNER_COLUMN_ORDER);
+  const seen = new Set<string>();
+  const normalized: PlannerColumnKey[] = [];
+  for (const column of order || []) {
+    if (!validColumns.has(column) || seen.has(column)) continue;
+    seen.add(column);
+    normalized.push(column as PlannerColumnKey);
+  }
+  for (const column of DEFAULT_PLANNER_COLUMN_ORDER) {
+    if (!seen.has(column)) normalized.push(column);
+  }
+  return normalized;
+}
+
+function reorderPlannerColumns(
+  order: PlannerColumnKey[],
+  draggedKey: PlannerColumnKey,
+  targetKey: PlannerColumnKey,
+  insertAfter: boolean,
+): PlannerColumnKey[] {
+  if (draggedKey === targetKey) return order;
+  const withoutDragged = order.filter((column) => column !== draggedKey);
+  const targetIndex = withoutDragged.indexOf(targetKey);
+  if (targetIndex < 0) return order;
+  const insertIndex = targetIndex + (insertAfter ? 1 : 0);
+  return [
+    ...withoutDragged.slice(0, insertIndex),
+    draggedKey,
+    ...withoutDragged.slice(insertIndex)
+  ];
+}
+
+interface BoardCellSpan {
+  render: boolean;
+  rowSpan: number;
+}
+
+function clearBoardGroup(row: WarehousePlannerRow): WarehousePlannerRow {
+  return {
+    ...row,
+    board_group_id: null,
+    board_group_order: null,
+    board_booked_volume: null,
+    board_booked_weight: null
+  };
+}
+
+function normalizeBoardGroups(rows: WarehousePlannerRow[]) {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    if (row.board_group_id) counts.set(row.board_group_id, (counts.get(row.board_group_id) || 0) + 1);
+  }
+  return rows.map((row) => (row.board_group_id && (counts.get(row.board_group_id) || 0) < 2 ? clearBoardGroup(row) : row));
+}
+
+function placeGroupAtFirstOccurrence(rows: WarehousePlannerRow[], groupId: string) {
+  const firstIndex = rows.findIndex((row) => row.board_group_id === groupId);
+  if (firstIndex < 0) return rows;
+  const groupRows = rows.filter((row) => row.board_group_id === groupId);
+  const next: WarehousePlannerRow[] = [];
+  let inserted = false;
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
+    if (row.board_group_id === groupId) {
+      if (!inserted && index === firstIndex) {
+        next.push(...groupRows);
+        inserted = true;
+      }
+      continue;
+    }
+    next.push(row);
+  }
+  return next;
+}
+
+function buildBoardCellSpans(rows: WarehousePlannerRow[], kind: "volume" | "weight") {
+  const spans = new Map<string, BoardCellSpan>();
+  let index = 0;
+  while (index < rows.length) {
+    const row = rows[index];
+    const groupId = row.board_group_id;
+    const useGroupCell = Boolean(groupId && (kind === "volume" || row.board_booked_weight !== null && row.board_booked_weight !== undefined && row.board_booked_weight !== ""));
+    if (!groupId || !useGroupCell) {
+      index += 1;
+      continue;
+    }
+    let end = index + 1;
+    while (end < rows.length && rows[end].board_group_id === groupId) end += 1;
+    const span = end - index;
+    if (span > 1) {
+      spans.set(rowKey(rows[index]), { render: true, rowSpan: span });
+      for (let skipIndex = index + 1; skipIndex < end; skipIndex += 1) {
+        spans.set(rowKey(rows[skipIndex]), { render: false, rowSpan: 0 });
+      }
+    }
+    index = end;
+  }
+  return spans;
+}
+
+function sumNumeric(values: Array<string | number | null | undefined>) {
+  let total = 0;
+  let hasValue = false;
+  for (const value of values) {
+    if (value === null || value === undefined || value === "") continue;
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) continue;
+    total += numeric;
+    hasValue = true;
+  }
+  return hasValue ? Number(total.toFixed(3)) : null;
+}
+
+interface PlannerColumnRenderArgs {
+  row: WarehousePlannerRow;
+  key: string;
+  error?: WarehousePlannerRowResult;
+  volumeSpan?: BoardCellSpan;
+  weightSpan?: BoardCellSpan;
+}
+
+interface PlannerTableColumn {
+  key: PlannerColumnKey;
+  label: string;
+  render: (args: PlannerColumnRenderArgs) => ReactNode;
+}
+
 export default function WarehousePlannerPage() {
   const saveTimerRef = useRef<number | null>(null);
   const splitSaveTimerRef = useRef<number | null>(null);
@@ -141,7 +313,10 @@ export default function WarehousePlannerPage() {
   const [loadedSplitPreference, setLoadedSplitPreference] = useState(false);
   const [mainPanePercent, setMainPanePercent] = useState(DEFAULT_MAIN_PANE_PERCENT);
   const [resizingSplit, setResizingSplit] = useState(false);
+  const [plannerColumnOrder, setPlannerColumnOrder] = useState<PlannerColumnKey[]>(() => normalizePlannerColumnOrder());
+  const [draggingPlannerColumn, setDraggingPlannerColumn] = useState<PlannerColumnKey | null>(null);
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
+  const [rowSortDragKey, setRowSortDragKey] = useState<string | null>(null);
   const [activePlannerChannel, setActivePlannerChannel] = useState<PlannerChannel>("AMS");
   const [candidates, setCandidates] = useState<WarehousePlannerCandidates | null>(null);
   const [selectedCandidates, setSelectedCandidates] = useState<Set<string>>(new Set());
@@ -183,6 +358,8 @@ export default function WarehousePlannerPage() {
   const activeSelectedRows = useMemo(() => activeRows.filter((row) => selectedRows.has(rowKey(row))), [activeRows, selectedRows]);
   const selectedRowKeys = useMemo(() => [...selectedRows], [selectedRows]);
   const selectedRowCount = selectedRows.size;
+  const activeVolumeSpans = useMemo(() => buildBoardCellSpans(activeRows, "volume"), [activeRows]);
+  const activeWeightSpans = useMemo(() => buildBoardCellSpans(activeRows, "weight"), [activeRows]);
   const customsStaff = useMemo(
     () => users.filter((item) => item.is_active && item.roles.some((role) => role.code === "customs_staff")),
     [users]
@@ -202,7 +379,7 @@ export default function WarehousePlannerPage() {
       apiClient.get<CarrierAgent[]>("/carrier-agents"),
       apiClient.get<User[]>("/users")
     ]);
-    setRows((draft.rows || []).map((row) => ({ ...row, planning_channel: normalizePlannerChannel(row.planning_channel) })));
+    setRows(normalizeBoardGroups((draft.rows || []).map((row) => ({ ...row, planning_channel: normalizePlannerChannel(row.planning_channel) }))));
     setCandidates(candidateData);
     setAgents(agentData.filter((item) => item.enabled));
     setUsers(userData);
@@ -233,6 +410,32 @@ export default function WarehousePlannerPage() {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiClient
+      .get<TableColumnPreference>(`/user-preferences/table-columns/${encodeURIComponent(PLANNER_COLUMNS_PREFERENCE_KEY)}`)
+      .then((preference) => {
+        if (!cancelled) setPlannerColumnOrder(normalizePlannerColumnOrder(preference.column_order));
+      })
+      .catch(() => {
+        if (!cancelled) setPlannerColumnOrder(normalizePlannerColumnOrder());
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const savePlannerColumnOrder = useCallback(async (nextOrder: PlannerColumnKey[]) => {
+    try {
+      await apiClient.put<TableColumnPreference>(
+        `/user-preferences/table-columns/${encodeURIComponent(PLANNER_COLUMNS_PREFERENCE_KEY)}`,
+        { column_order: nextOrder }
+      );
+    } catch (error) {
+      setMessage(error instanceof Error ? `排仓编辑区列顺序保存失败：${error.message}` : "排仓编辑区列顺序保存失败。");
+    }
   }, []);
 
   useEffect(() => {
@@ -301,8 +504,103 @@ export default function WarehousePlannerPage() {
     });
   }
 
+  function updateBoardGroup(groupId: string, changes: Partial<WarehousePlannerRow>) {
+    setRows((prev) => prev.map((row) => (row.board_group_id === groupId ? { ...row, ...changes } : row)));
+    setRowErrors((prev) => {
+      const next = { ...prev };
+      for (const row of rows) {
+        if (row.board_group_id === groupId) delete next[rowKey(row)];
+      }
+      return next;
+    });
+  }
+
+  function removeFromBoardGroup(key: string) {
+    setRows((prev) => normalizeBoardGroups(prev.map((row) => (rowKey(row) === key ? clearBoardGroup(row) : row))));
+  }
+
+  function addSelectedRowsToBoardGroup(groupId: string) {
+    const groupRows = rows.filter((row) => row.board_group_id === groupId);
+    const groupSource = groupRows[0];
+    if (!groupSource) return;
+    const candidateKeys = new Set(activeSelectedRows.map(rowKey));
+    setRows((prev) => {
+      const next = prev.map((row) => {
+        if (!candidateKeys.has(rowKey(row)) || row.board_group_id === groupId) return row;
+        return {
+          ...row,
+          board_group_id: groupId,
+          board_group_order: groupSource.board_group_order ?? 0,
+          board_booked_volume: groupSource.board_booked_volume ?? null,
+          board_booked_weight: groupSource.board_booked_weight ?? null,
+          booked_volume: null,
+          booked_weight: groupSource.board_booked_weight !== null && groupSource.board_booked_weight !== undefined ? null : row.booked_weight
+        };
+      });
+      return normalizeBoardGroups(placeGroupAtFirstOccurrence(next, groupId));
+    });
+  }
+
+  function mergeSelectedRowsAsBoard() {
+    const selectedActiveRows = activeRows.filter((row) => selectedRows.has(rowKey(row)));
+    if (selectedActiveRows.length < 2) return;
+    const groupId = `manual-board-${Date.now()}`;
+    const boardVolume =
+      selectedActiveRows.find((row) => row.board_booked_volume !== null && row.board_booked_volume !== undefined)?.board_booked_volume ??
+      sumNumeric(selectedActiveRows.map((row) => row.booked_volume));
+    const boardWeight =
+      selectedActiveRows.find((row) => row.board_booked_weight !== null && row.board_booked_weight !== undefined)?.board_booked_weight ??
+      sumNumeric(selectedActiveRows.map((row) => row.booked_weight));
+    const selectedKeys = new Set(selectedActiveRows.map(rowKey));
+    setRows((prev) => {
+      const next = prev.map((row) => {
+        if (!selectedKeys.has(rowKey(row))) return row;
+        return {
+          ...row,
+          board_group_id: groupId,
+          board_group_order: Date.now(),
+          board_booked_volume: boardVolume,
+          board_booked_weight: boardWeight,
+          booked_volume: null,
+          booked_weight: boardWeight !== null && boardWeight !== undefined ? null : row.booked_weight
+        };
+      });
+      return normalizeBoardGroups(placeGroupAtFirstOccurrence(next, groupId));
+    });
+  }
+
+  function moveRowOrGroupToChannel(key: string, channel: PlannerChannel) {
+    const targetRow = rows.find((row) => rowKey(row) === key);
+    if (!targetRow?.board_group_id) {
+      updateRow(key, { planning_channel: channel });
+      return;
+    }
+    updateBoardGroup(targetRow.board_group_id, { planning_channel: channel });
+  }
+
+  function handlePlannerColumnDrop(event: DragEvent<HTMLTableCellElement>, targetKey: PlannerColumnKey) {
+    event.preventDefault();
+    if (!draggingPlannerColumn || draggingPlannerColumn === targetKey) {
+      setDraggingPlannerColumn(null);
+      return;
+    }
+    const rect = event.currentTarget.getBoundingClientRect();
+    const insertAfter = event.clientX > rect.left + rect.width / 2;
+    const nextOrder = reorderPlannerColumns(plannerColumnOrder, draggingPlannerColumn, targetKey, insertAfter);
+    setPlannerColumnOrder(nextOrder);
+    setDraggingPlannerColumn(null);
+    void savePlannerColumnOrder(nextOrder);
+  }
+
+  function resetPlannerColumnOrder() {
+    const nextOrder = normalizePlannerColumnOrder();
+    setPlannerColumnOrder(nextOrder);
+    setMessage("已恢复排仓编辑区默认列顺序。");
+    void savePlannerColumnOrder([]);
+  }
+
   function removeRow(key: string) {
-    setRows((prev) => prev.filter((row) => rowKey(row) !== key));
+    setRows((prev) => normalizeBoardGroups(prev.filter((row) => rowKey(row) !== key)));
     setSelectedRows((prev) => {
       const next = new Set(prev);
       next.delete(key);
@@ -353,6 +651,66 @@ export default function WarehousePlannerPage() {
     event.dataTransfer.effectAllowed = "move";
   }
 
+  function onPlannerRowSortDragStart(event: DragEvent<HTMLElement>, row: WarehousePlannerRow) {
+    event.stopPropagation();
+    const key = rowKey(row);
+    const activeKeys = activeRows.map(rowKey);
+    const activeSelectedKeys = activeKeys.filter((item) => selectedRows.has(item));
+    const expandedSelectedKeys = new Set(activeSelectedKeys);
+    for (const selectedRow of activeRows.filter((item) => selectedRows.has(rowKey(item)) && item.board_group_id)) {
+      for (const groupRow of activeRows.filter((item) => item.board_group_id === selectedRow.board_group_id)) {
+        expandedSelectedKeys.add(rowKey(groupRow));
+      }
+    }
+    const groupKeys = row.board_group_id ? activeRows.filter((item) => item.board_group_id === row.board_group_id).map(rowKey) : [];
+    const dragKeys = selectedRows.has(key) && expandedSelectedKeys.size ? [...expandedSelectedKeys] : groupKeys.length ? groupKeys : [key];
+    setRowSortDragKey(key);
+    event.dataTransfer.setData(PLANNER_ROW_DRAG_TYPE, JSON.stringify(dragKeys));
+    event.dataTransfer.effectAllowed = "move";
+  }
+
+  function movePlannerRowsBefore(dragKeys: string[], targetKey: string, channel: PlannerChannel) {
+    setRows((prev) => {
+      const activeKeys = prev
+        .filter((row) => normalizePlannerChannel(row.planning_channel) === channel)
+        .map(rowKey);
+      const activeKeySet = new Set(activeKeys);
+      if (!activeKeySet.has(targetKey)) return prev;
+      const movingKeySet = new Set(dragKeys.filter((key) => key !== targetKey && activeKeySet.has(key)));
+      if (!movingKeySet.size) return prev;
+      const movingRows = prev.filter((row) => movingKeySet.has(rowKey(row)));
+      const remainingActiveRows = prev.filter(
+        (row) => normalizePlannerChannel(row.planning_channel) === channel && !movingKeySet.has(rowKey(row))
+      );
+      const targetIndex = remainingActiveRows.findIndex((row) => rowKey(row) === targetKey);
+      if (targetIndex < 0) return prev;
+      const reorderedActiveRows = [
+        ...remainingActiveRows.slice(0, targetIndex),
+        ...movingRows,
+        ...remainingActiveRows.slice(targetIndex)
+      ];
+      const nextActiveRows = [...reorderedActiveRows];
+      return prev.map((row) => (normalizePlannerChannel(row.planning_channel) === channel ? nextActiveRows.shift() || row : row));
+    });
+  }
+
+  function onPlannerRowDrop(event: DragEvent<HTMLTableRowElement>, targetRow: WarehousePlannerRow) {
+    const rowPayload = event.dataTransfer.getData(PLANNER_ROW_DRAG_TYPE);
+    if (rowPayload) {
+      event.preventDefault();
+      event.stopPropagation();
+      try {
+        movePlannerRowsBefore(JSON.parse(rowPayload) as string[], rowKey(targetRow), normalizePlannerChannel(targetRow.planning_channel));
+      } catch {
+        setMessage("移动排仓条目失败，请重新拖动。");
+      } finally {
+        setRowSortDragKey(null);
+      }
+      return;
+    }
+    onDropReceipts(event, rowKey(targetRow));
+  }
+
   async function persistPlannerReceiptOrder(nextReceipts: WarehouseReceipt[]) {
     setCandidates((prev) => (prev ? { ...prev, unbound_receipts: nextReceipts } : prev));
     setReceiptOrderSaving(true);
@@ -401,7 +759,7 @@ export default function WarehousePlannerPage() {
     addCandidates(allCandidates.filter((item) => keys.includes(rowKey(item))));
   }
 
-  function onDropReceipts(event: DragEvent<HTMLDivElement>, targetKey?: string) {
+  function onDropReceipts(event: DragEvent<HTMLElement>, targetKey?: string) {
     const raw = event.dataTransfer.getData(RECEIPT_DRAG_TYPE);
     if (!raw) return;
     event.preventDefault();
@@ -429,7 +787,25 @@ export default function WarehousePlannerPage() {
     if (field?.kind === "boolean") value = batchValue === "true";
     if (field?.kind === "select") value = batchValue === CLEAR_VALUE || batchValue === "" ? null : Number(batchValue);
     if (field?.kind === "date") value = batchValue || null;
-    setRows((prev) => prev.map((row) => (keys.includes(rowKey(row)) ? { ...row, [batchField]: value } : row)));
+    setRows((prev) => {
+      if (batchField === "booked_volume" || batchField === "booked_weight") {
+        const selectedKeySet = new Set(keys);
+        const selectedGroupIds = new Set(
+          prev
+            .filter((row) => selectedKeySet.has(rowKey(row)) && row.board_group_id)
+            .map((row) => row.board_group_id as string)
+        );
+        return prev.map((row) => {
+          const selected = selectedKeySet.has(rowKey(row));
+          const grouped = row.board_group_id && selectedGroupIds.has(row.board_group_id);
+          if (batchField === "booked_volume" && grouped) return { ...row, board_booked_volume: value as number | null, booked_volume: null };
+          if (batchField === "booked_weight" && grouped) return { ...row, board_booked_weight: value as number | null, booked_weight: null };
+          if (!selected) return row;
+          return { ...row, [batchField]: value };
+        });
+      }
+      return prev.map((row) => (keys.includes(rowKey(row)) ? { ...row, [batchField]: value } : row));
+    });
     setBatchOpen(false);
     setBatchValue("");
   }
@@ -457,7 +833,7 @@ export default function WarehousePlannerPage() {
     try {
       const result = await apiClient.post<WarehousePlannerCommitResult>("/warehouse-planner/commit", { rows, mode });
       setCommitResult(result);
-      setRows(result.remaining_rows || []);
+      setRows(normalizeBoardGroups(result.remaining_rows || []));
       setSelectedRows(new Set());
       setRowErrors(Object.fromEntries(result.results.filter((item) => item.status === "failed").map((item) => [`${item.source_type}:${item.source_id}`, item])));
       await loadAll();
@@ -508,7 +884,7 @@ export default function WarehousePlannerPage() {
         const additions = result.rows
           .filter((row) => !existing.has(rowKey(row)))
           .map((row) => ({ ...row, planning_channel: activePlannerChannel }));
-        return [...prev, ...additions];
+        return normalizeBoardGroups([...prev, ...additions]);
       });
       setMessage(`批量导入完成：导入 ${result.imported_count} 行，跳过 ${result.skipped_count} 行，提示 ${result.warnings.length} 条。`);
     } catch (error) {
@@ -523,6 +899,220 @@ export default function WarehousePlannerPage() {
   function renderSelectValue(value?: number | null) {
     return value === null || value === undefined ? CLEAR_VALUE : String(value);
   }
+
+  const plannerColumnDefinitions: Record<PlannerColumnKey, PlannerTableColumn> = {
+    source: {
+      key: "source",
+      label: PLANNER_COLUMN_LABELS.source,
+      render: ({ row, error }) => (
+        <TD>
+          <div className="font-medium text-slate-900">{sourceLabel(row.source_type)}</div>
+          {error ? <div className="mt-1 text-xs text-red-600">{error.errors.map((item) => item.message).join("；")}</div> : null}
+        </TD>
+      )
+    },
+    carrier_agent: {
+      key: "carrier_agent",
+      label: PLANNER_COLUMN_LABELS.carrier_agent,
+      render: ({ row, key }) => (
+        <TD>
+          <Select value={renderSelectValue(row.carrier_agent_id)} onValueChange={(value) => updateRow(key, { carrier_agent_id: value === CLEAR_VALUE ? null : Number(value) })}>
+            <SelectTrigger className="h-9 min-w-36"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value={CLEAR_VALUE}>未选择</SelectItem>
+              {agents.map((agent) => <SelectItem key={agent.id} value={String(agent.id)}>{agent.agent_name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </TD>
+      )
+    },
+    planned_flight_no: {
+      key: "planned_flight_no",
+      label: PLANNER_COLUMN_LABELS.planned_flight_no,
+      render: ({ row, key }) => (
+        <TD><Input className="h-9 min-w-28" value={row.planned_flight_no || ""} onChange={(event) => updateRow(key, { planned_flight_no: event.target.value })} /></TD>
+      )
+    },
+    waybill_no: {
+      key: "waybill_no",
+      label: PLANNER_COLUMN_LABELS.waybill_no,
+      render: ({ row, key }) => (
+        <TD><Input className="h-9 min-w-36" value={row.waybill_no || ""} onChange={(event) => updateRow(key, { waybill_no: event.target.value })} /></TD>
+      )
+    },
+    outbound_date: {
+      key: "outbound_date",
+      label: PLANNER_COLUMN_LABELS.outbound_date,
+      render: ({ row, key }) => (
+        <TD><Input className="h-9 min-w-36" type="date" value={row.outbound_date || ""} onChange={(event) => updateRow(key, { outbound_date: event.target.value || null })} /></TD>
+      )
+    },
+    receipts: {
+      key: "receipts",
+      label: PLANNER_COLUMN_LABELS.receipts,
+      render: ({ row, key }) => (
+        <TD>
+          <div className="flex min-w-56 flex-wrap gap-1">
+            {(row.receipt_ids || []).map((receiptId) => {
+              const receipt = receiptMap.get(receiptId);
+              return (
+                <span
+                  key={receiptId}
+                  title={receipt?.uploaded_at ? `上传时间：${formatDateTime(receipt.uploaded_at)}` : undefined}
+                >
+                  <Badge variant="default" className="gap-1">
+                    {receipt?.warehouse_no || `#${receiptId}`}
+                    <button type="button" onClick={() => updateRow(key, { receipt_ids: row.receipt_ids.filter((id) => id !== receiptId) })}>×</button>
+                  </Badge>
+                </span>
+              );
+            })}
+            {!row.receipt_ids?.length ? <span className="text-xs text-slate-400">拖入入仓号</span> : null}
+          </div>
+        </TD>
+      )
+    },
+    customs_staff: {
+      key: "customs_staff",
+      label: PLANNER_COLUMN_LABELS.customs_staff,
+      render: ({ row, key }) => (
+        <TD>
+          <Select value={renderSelectValue(row.customs_staff_id)} onValueChange={(value) => updateRow(key, { customs_staff_id: value === CLEAR_VALUE ? null : Number(value) })}>
+            <SelectTrigger className="h-9 min-w-36"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value={CLEAR_VALUE}>未指定</SelectItem>
+              {customsStaff.map((item) => <SelectItem key={item.id} value={String(item.id)}>{item.display_name || item.username}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </TD>
+      )
+    },
+    booked_volume: {
+      key: "booked_volume",
+      label: PLANNER_COLUMN_LABELS.booked_volume,
+      render: ({ row, key, volumeSpan }) => {
+        if (volumeSpan && !volumeSpan.render) return null;
+        if (row.board_group_id && volumeSpan?.render) {
+          return (
+            <TD rowSpan={volumeSpan.rowSpan} className="bg-purple-50/70 align-top">
+              <div className="min-w-36 space-y-2">
+                <Input
+                  className="h-9"
+                  type="number"
+                  step="0.001"
+                  value={row.board_booked_volume ?? ""}
+                  onChange={(event) => updateBoardGroup(row.board_group_id as string, { board_booked_volume: event.target.value, booked_volume: null })}
+                />
+                <div className="flex flex-wrap items-center gap-2 text-xs text-purple-700">
+                  <span>同板 {volumeSpan.rowSpan} 票</span>
+                  <button type="button" className="font-medium hover:underline" onClick={() => addSelectedRowsToBoardGroup(row.board_group_id as string)}>
+                    加入选中
+                  </button>
+                </div>
+              </div>
+            </TD>
+          );
+        }
+        return <TD><Input className="h-9 min-w-28" type="number" step="0.001" value={row.booked_volume ?? ""} onChange={(event) => updateRow(key, { booked_volume: event.target.value })} /></TD>;
+      }
+    },
+    planned_flight_date: {
+      key: "planned_flight_date",
+      label: PLANNER_COLUMN_LABELS.planned_flight_date,
+      render: ({ row, key }) => (
+        <TD><Input className="h-9 min-w-36" type="date" value={row.planned_flight_date || ""} onChange={(event) => updateRow(key, { planned_flight_date: event.target.value || null })} /></TD>
+      )
+    },
+    booked_weight: {
+      key: "booked_weight",
+      label: PLANNER_COLUMN_LABELS.booked_weight,
+      render: ({ row, key, weightSpan }) => {
+        if (weightSpan && !weightSpan.render) return null;
+        if (row.board_group_id && weightSpan?.render) {
+          return (
+            <TD rowSpan={weightSpan.rowSpan} className="bg-purple-50/70 align-top">
+              <Input
+                className="h-9 min-w-28"
+                type="number"
+                step="0.001"
+                value={row.board_booked_weight ?? ""}
+                onChange={(event) => updateBoardGroup(row.board_group_id as string, { board_booked_weight: event.target.value, booked_weight: null })}
+              />
+            </TD>
+          );
+        }
+        return <TD><Input className="h-9 min-w-28" type="number" step="0.001" value={row.booked_weight ?? ""} onChange={(event) => updateRow(key, { booked_weight: event.target.value })} /></TD>;
+      }
+    },
+    density: {
+      key: "density",
+      label: PLANNER_COLUMN_LABELS.density,
+      render: ({ row, key }) => (
+        <TD><Input className="h-9 min-w-24" type="number" step="0.001" value={row.density ?? ""} onChange={(event) => updateRow(key, { density: event.target.value })} /></TD>
+      )
+    },
+    quotation: {
+      key: "quotation",
+      label: PLANNER_COLUMN_LABELS.quotation,
+      render: ({ row, key }) => (
+        <TD><Input className="h-9 min-w-24" value={row.quotation || ""} onChange={(event) => updateRow(key, { quotation: event.target.value })} /></TD>
+      )
+    },
+    include_tc: {
+      key: "include_tc",
+      label: PLANNER_COLUMN_LABELS.include_tc,
+      render: ({ row, key }) => (
+        <TD className="text-center"><input type="checkbox" checked={Boolean(row.include_tc)} onChange={(event) => updateRow(key, { include_tc: event.target.checked })} /></TD>
+      )
+    },
+    departure_port: {
+      key: "departure_port",
+      label: PLANNER_COLUMN_LABELS.departure_port,
+      render: ({ row, key }) => (
+        <TD><Input className="h-9 min-w-24" value={row.departure_port || ""} onChange={(event) => updateRow(key, { departure_port: event.target.value })} /></TD>
+      )
+    },
+    destination_port: {
+      key: "destination_port",
+      label: PLANNER_COLUMN_LABELS.destination_port,
+      render: ({ row, key }) => (
+        <TD><Input className="h-9 min-w-24" value={row.destination_port || ""} onChange={(event) => updateRow(key, { destination_port: event.target.value })} /></TD>
+      )
+    },
+    planned_route_text: {
+      key: "planned_route_text",
+      label: PLANNER_COLUMN_LABELS.planned_route_text,
+      render: ({ row, key }) => (
+        <TD><Input className="h-9 min-w-40" value={row.planned_route_text || ""} onChange={(event) => updateRow(key, { planned_route_text: event.target.value })} /></TD>
+      )
+    },
+    actions: {
+      key: "actions",
+      label: PLANNER_COLUMN_LABELS.actions,
+      render: ({ row, key }) => (
+        <TD>
+          <div className="flex min-w-36 flex-wrap items-center gap-2">
+            {row.board_group_id ? (
+              <Button type="button" variant="secondary" size="sm" onClick={() => removeFromBoardGroup(key)}>
+                移出板组
+              </Button>
+            ) : null}
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => moveRowOrGroupToChannel(key, activePlannerChannel === "AMS" ? "LHR" : "AMS")}
+            >
+              移到 {activePlannerChannel === "AMS" ? "LHR" : "AMS"}
+            </Button>
+            <Button variant="danger" size="sm" onClick={() => removeRow(key)}><Trash2 className="h-4 w-4" /></Button>
+          </div>
+        </TD>
+      )
+    }
+  };
+
+  const orderedPlannerColumns = plannerColumnOrder.map((column) => plannerColumnDefinitions[column]);
 
   return (
     <>
@@ -584,6 +1174,14 @@ export default function WarehousePlannerPage() {
               <div className="flex flex-wrap items-center justify-end gap-2">
                 <span className="text-sm text-slate-500">已选 {selectedRowCount} 条</span>
                 <span className="text-sm text-slate-500">当前 {activePlannerChannel}: {activeRows.length} 条</span>
+                <Button variant="secondary" onClick={resetPlannerColumnOrder}>
+                  <RotateCcw className="h-4 w-4" />
+                  恢复默认列
+                </Button>
+                <Button variant="secondary" disabled={activeSelectedRows.length < 2} onClick={mergeSelectedRowsAsBoard}>
+                  <ListPlus className="h-4 w-4" />
+                  合并选中为板
+                </Button>
                 <Button variant="secondary" disabled={!selectedRowCount} onClick={() => setBatchOpen(true)}>
                   <ListPlus className="h-4 w-4" />
                   批量编辑
@@ -617,24 +1215,29 @@ export default function WarehousePlannerPage() {
                 <Table className="min-w-[1900px]">
                   <THead>
                     <TR>
+                      <TH className="w-10" />
                       <TH className="w-10"><input type="checkbox" checked={activeRows.length > 0 && activeSelectedRows.length === activeRows.length} onChange={(event) => toggleActiveChannelSelection(event.target.checked)} /></TH>
-                      <TH>来源</TH>
-                      <TH>航代</TH>
-                      <TH>计划航班</TH>
-                      <TH>提单号</TH>
-                      <TH>出仓日期</TH>
-                      <TH>入仓号/入仓文件</TH>
-                      <TH>指定清关人员</TH>
-                      <TH>订舱方数/板总方数</TH>
-                      <TH>约定航班起飞日期</TH>
-                      <TH>订舱重量</TH>
-                      <TH>密度</TH>
-                      <TH>报价</TH>
-                      <TH>含T</TH>
-                      <TH>始发港</TH>
-                      <TH>目的港</TH>
-                      <TH>航程</TH>
-                      <TH>操作</TH>
+                      {orderedPlannerColumns.map((column) => (
+                        <TH
+                          key={column.key}
+                          draggable
+                          className={cn(
+                            "cursor-grab select-none whitespace-nowrap active:cursor-grabbing",
+                            draggingPlannerColumn === column.key && "bg-purple-50 text-purple-700"
+                          )}
+                          title="拖动调整列顺序"
+                          onDragStart={(event) => {
+                            event.dataTransfer.effectAllowed = "move";
+                            event.dataTransfer.setData("text/plain", column.key);
+                            setDraggingPlannerColumn(column.key);
+                          }}
+                          onDragOver={(event) => event.preventDefault()}
+                          onDrop={(event) => handlePlannerColumnDrop(event, column.key)}
+                          onDragEnd={() => setDraggingPlannerColumn(null)}
+                        >
+                          {column.label}
+                        </TH>
+                      ))}
                     </TR>
                   </THead>
                   <TBody>
@@ -644,82 +1247,35 @@ export default function WarehousePlannerPage() {
                       return (
                         <TR
                           key={key}
-                          className={cn(error && "bg-red-50")}
+                          className={cn(error && "bg-red-50", rowSortDragKey === key && "opacity-50")}
                           onDragOver={(event) => event.preventDefault()}
-                          onDrop={(event) => onDropReceipts(event, key)}
+                          onDrop={(event) => onPlannerRowDrop(event, row)}
                         >
+                          <TD>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 cursor-grab text-slate-400 active:cursor-grabbing"
+                              draggable
+                              aria-label="拖动排序排仓条目"
+                              onDragStart={(event) => onPlannerRowSortDragStart(event, row)}
+                              onDragEnd={() => setRowSortDragKey(null)}
+                            >
+                              <GripVertical className="h-4 w-4" />
+                            </Button>
+                          </TD>
                           <TD><input type="checkbox" checked={selectedRows.has(key)} onChange={(event) => setSelectedRows((prev) => {
                             const next = new Set(prev);
                             if (event.target.checked) next.add(key);
                             else next.delete(key);
                             return next;
                           })} /></TD>
-                          <TD>
-                            <div className="font-medium text-slate-900">{sourceLabel(row.source_type)}</div>
-                            {error ? <div className="mt-1 text-xs text-red-600">{error.errors.map((item) => item.message).join("；")}</div> : null}
-                          </TD>
-                          <TD>
-                            <Select value={renderSelectValue(row.carrier_agent_id)} onValueChange={(value) => updateRow(key, { carrier_agent_id: value === CLEAR_VALUE ? null : Number(value) })}>
-                              <SelectTrigger className="h-9 min-w-36"><SelectValue /></SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value={CLEAR_VALUE}>未选择</SelectItem>
-                                {agents.map((agent) => <SelectItem key={agent.id} value={String(agent.id)}>{agent.agent_name}</SelectItem>)}
-                              </SelectContent>
-                            </Select>
-                          </TD>
-                          <TD><Input className="h-9 min-w-28" value={row.planned_flight_no || ""} onChange={(event) => updateRow(key, { planned_flight_no: event.target.value })} /></TD>
-                          <TD><Input className="h-9 min-w-36" value={row.waybill_no || ""} onChange={(event) => updateRow(key, { waybill_no: event.target.value })} /></TD>
-                          <TD><Input className="h-9 min-w-36" type="date" value={row.outbound_date || ""} onChange={(event) => updateRow(key, { outbound_date: event.target.value || null })} /></TD>
-                          <TD>
-                            <div className="flex min-w-56 flex-wrap gap-1">
-                              {(row.receipt_ids || []).map((receiptId) => {
-                                const receipt = receiptMap.get(receiptId);
-                                return (
-                                  <span
-                                    key={receiptId}
-                                    title={receipt?.uploaded_at ? `上传时间：${formatDateTime(receipt.uploaded_at)}` : undefined}
-                                  >
-                                    <Badge variant="default" className="gap-1">
-                                      {receipt?.warehouse_no || `#${receiptId}`}
-                                      <button type="button" onClick={() => updateRow(key, { receipt_ids: row.receipt_ids.filter((id) => id !== receiptId) })}>×</button>
-                                    </Badge>
-                                  </span>
-                                );
-                              })}
-                              {!row.receipt_ids?.length ? <span className="text-xs text-slate-400">拖入入仓号</span> : null}
-                            </div>
-                          </TD>
-                          <TD>
-                            <Select value={renderSelectValue(row.customs_staff_id)} onValueChange={(value) => updateRow(key, { customs_staff_id: value === CLEAR_VALUE ? null : Number(value) })}>
-                              <SelectTrigger className="h-9 min-w-36"><SelectValue /></SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value={CLEAR_VALUE}>未指定</SelectItem>
-                                {customsStaff.map((item) => <SelectItem key={item.id} value={String(item.id)}>{item.display_name || item.username}</SelectItem>)}
-                              </SelectContent>
-                            </Select>
-                          </TD>
-                          <TD><Input className="h-9 min-w-28" type="number" step="0.001" value={row.booked_volume ?? ""} onChange={(event) => updateRow(key, { booked_volume: event.target.value })} /></TD>
-                          <TD><Input className="h-9 min-w-36" type="date" value={row.planned_flight_date || ""} onChange={(event) => updateRow(key, { planned_flight_date: event.target.value || null })} /></TD>
-                          <TD><Input className="h-9 min-w-28" type="number" step="0.001" value={row.booked_weight ?? ""} onChange={(event) => updateRow(key, { booked_weight: event.target.value })} /></TD>
-                          <TD><Input className="h-9 min-w-24" type="number" step="0.001" value={row.density ?? ""} onChange={(event) => updateRow(key, { density: event.target.value })} /></TD>
-                          <TD><Input className="h-9 min-w-24" value={row.quotation || ""} onChange={(event) => updateRow(key, { quotation: event.target.value })} /></TD>
-                          <TD className="text-center"><input type="checkbox" checked={Boolean(row.include_tc)} onChange={(event) => updateRow(key, { include_tc: event.target.checked })} /></TD>
-                          <TD><Input className="h-9 min-w-24" value={row.departure_port || ""} onChange={(event) => updateRow(key, { departure_port: event.target.value })} /></TD>
-                          <TD><Input className="h-9 min-w-24" value={row.destination_port || ""} onChange={(event) => updateRow(key, { destination_port: event.target.value })} /></TD>
-                          <TD><Input className="h-9 min-w-40" value={row.planned_route_text || ""} onChange={(event) => updateRow(key, { planned_route_text: event.target.value })} /></TD>
-                          <TD>
-                            <div className="flex min-w-32 items-center gap-2">
-                              <Button
-                                type="button"
-                                variant="secondary"
-                                size="sm"
-                                onClick={() => updateRow(key, { planning_channel: activePlannerChannel === "AMS" ? "LHR" : "AMS" })}
-                              >
-                                移到 {activePlannerChannel === "AMS" ? "LHR" : "AMS"}
-                              </Button>
-                              <Button variant="danger" size="sm" onClick={() => removeRow(key)}><Trash2 className="h-4 w-4" /></Button>
-                            </div>
-                          </TD>
+                          {orderedPlannerColumns.map((column) => (
+                            <Fragment key={column.key}>
+                              {column.render({ row, key, error, volumeSpan: activeVolumeSpans.get(key), weightSpan: activeWeightSpans.get(key) })}
+                            </Fragment>
+                          ))}
                         </TR>
                       );
                     })}

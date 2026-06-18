@@ -49,6 +49,8 @@ class WaybillBoard(Base, TimestampMixin):
     actual_board_no: Mapped[Optional[str]] = mapped_column(String(128))
     consignee_contact_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("consignee_contacts.id"))
     consignee_text: Mapped[Optional[str]] = mapped_column(String(255))
+    booked_volume: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 3))
+    booked_weight: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 3))
     created_by: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"))
     updated_by: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"))
 
@@ -60,7 +62,15 @@ class WaybillBoard(Base, TimestampMixin):
 
     @property
     def total_booked_volume(self) -> Decimal:
+        if self.booked_volume is not None:
+            return self.booked_volume
         return sum((item.booked_volume or Decimal("0.000") for item in self.waybills or []), Decimal("0.000"))
+
+    @property
+    def total_booked_weight(self) -> Decimal:
+        if self.booked_weight is not None:
+            return self.booked_weight
+        return sum((item.booked_weight or Decimal("0.000") for item in self.waybills or []), Decimal("0.000"))
 
 
 class WaybillPrebooking(Base, TimestampMixin):

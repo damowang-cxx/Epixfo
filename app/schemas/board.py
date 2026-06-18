@@ -16,8 +16,11 @@ class BoardSummaryOut(BaseModel):
     actual_board_no: str | None = None
     consignee_contact_id: int | None = None
     consignee_text: str | None = None
+    booked_volume: Decimal | None = None
+    booked_weight: Decimal | None = None
     member_count: int = 0
     total_booked_volume: Decimal = Decimal("0.000")
+    total_booked_weight: Decimal = Decimal("0.000")
 
 
 class BoardWaybillOut(BaseModel):

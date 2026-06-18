@@ -18,7 +18,7 @@ from sqlalchemy import exists, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.exceptions import bad_request
-from app.models import AirWaybill, CarrierAgent, User, WarehousePlanningDraft, WarehouseReceipt, WaybillPrebooking
+from app.models import AirWaybill, CarrierAgent, User, WarehousePlanningDraft, WarehouseReceipt, WaybillBoard, WaybillPrebooking
 from app.models.enums import WaybillLifecycleStatus
 from app.schemas.warehouse_planner import (
     WarehousePlannerBulkImportError,
@@ -37,6 +37,7 @@ from app.schemas.warehouse_planner import (
     WarehousePlannerValidateResult,
 )
 from app.schemas.waybill import WaybillCreate, WaybillUpdate
+from app.services.board_service import BoardService
 from app.services.permission_service import PermissionService
 from app.services.prebooking_service import PrebookingService
 from app.services.warehouse_file_service import WarehouseFileService
@@ -152,6 +153,7 @@ class WarehousePlannerService:
     def validate_rows(self, payload: WarehousePlannerRowsRequest, current_user: User) -> WarehousePlannerValidateResult:
         PermissionService.assert_waybill_write(current_user)
         results = [self._validate_row(row, current_user) for row in payload.rows]
+        self._apply_board_group_validation(payload.rows, results)
         valid_count = sum(1 for item in results if item.status == "valid")
         invalid_count = len(results) - valid_count
         return WarehousePlannerValidateResult(valid_count=valid_count, invalid_count=invalid_count, results=results)
@@ -172,22 +174,20 @@ class WarehousePlannerService:
                 skipped_due_to_all_or_none=True,
             )
 
-        valid_rows_by_key = {
-            self._row_key(row): row
-            for row, result in zip(payload.rows, validation.results, strict=False)
-            if result.status == "valid"
-        }
+        validation_by_key = {(item.source_type, item.source_id): item for item in validation.results}
+        valid_keys = {key for key, result in validation_by_key.items() if result.status == "valid"}
         results: list[WarehousePlannerRowResult] = []
         committed_keys: set[tuple[str, int]] = set()
+        units = self._commit_units(payload.rows)
 
         if payload.mode == "all_or_none":
-            current_row: WarehousePlannerRow | None = None
+            current_unit: list[WarehousePlannerRow] = []
             try:
-                for row in payload.rows:
-                    current_row = row
-                    result = self._commit_row(row, current_user)
-                    results.append(result)
-                    committed_keys.add(self._row_key(row))
+                for unit in units:
+                    current_unit = unit
+                    unit_results = self._commit_unit(unit, current_user)
+                    results.extend(unit_results)
+                    committed_keys.update(self._row_key(row) for row in unit)
                 self._save_remaining_rows(current_user, [])
                 self.db.commit()
                 return WarehousePlannerCommitResult(
@@ -198,10 +198,10 @@ class WarehousePlannerService:
                 )
             except Exception as exc:
                 self.db.rollback()
-                failed_key = self._row_key(current_row) if current_row is not None else None
+                failed_keys = {self._row_key(row) for row in current_unit}
                 failure_results = [
                     self._row_result_from_exception(row, exc)
-                    if self._row_key(row) == failed_key
+                    if self._row_key(row) in failed_keys
                     else WarehousePlannerRowResult(
                         source_type=row.source_type,
                         source_id=row.source_id,
@@ -219,20 +219,21 @@ class WarehousePlannerService:
                     skipped_due_to_all_or_none=True,
                 )
 
-        for row in payload.rows:
-            key = self._row_key(row)
-            validation_result = next((item for item in validation.results if (item.source_type, item.source_id) == key), None)
-            if key not in valid_rows_by_key:
-                results.append(self._failed_from_validation(validation_result) if validation_result else self._invalid_result(row, None, "invalid_row"))
+        for unit in units:
+            unit_keys = {self._row_key(row) for row in unit}
+            if not unit_keys.issubset(valid_keys):
+                for row in unit:
+                    validation_result = validation_by_key.get(self._row_key(row))
+                    results.append(self._failed_from_validation(validation_result) if validation_result else self._invalid_result(row, None, "invalid_row"))
                 continue
             try:
-                result = self._commit_row(row, current_user)
+                unit_results = self._commit_unit(unit, current_user)
                 self.db.commit()
-                results.append(result)
-                committed_keys.add(key)
+                results.extend(unit_results)
+                committed_keys.update(unit_keys)
             except Exception as exc:
                 self.db.rollback()
-                results.append(self._row_result_from_exception(row, exc))
+                results.extend(self._row_result_from_exception(row, exc) for row in unit)
 
         remaining_rows = [row for row in payload.rows if self._row_key(row) not in committed_keys]
         self._save_remaining_rows(current_user, remaining_rows)
@@ -386,6 +387,133 @@ class WarehousePlannerService:
         )
         return [self.warehouse_files.get_receipt_summary(item.id) for item in receipts]
 
+    def _apply_board_group_validation(
+        self,
+        rows: list[WarehousePlannerRow],
+        results: list[WarehousePlannerRowResult],
+    ) -> None:
+        result_by_key = {(item.source_type, item.source_id): item for item in results}
+        for group_id, group_rows in self._board_groups(rows).items():
+            errors: list[WarehousePlannerRowError] = []
+            channels = {normalize_channel(row.planning_channel) for row in group_rows}
+            if len(channels) > 1:
+                errors.append(WarehousePlannerRowError(field="board_group_id", message="board_group_channel_mismatch"))
+            volumes = {str(row.board_booked_volume) for row in group_rows if row.board_booked_volume is not None}
+            if not volumes:
+                errors.append(WarehousePlannerRowError(field="board_booked_volume", message="board_booked_volume_required"))
+            if len(volumes) > 1:
+                errors.append(WarehousePlannerRowError(field="board_booked_volume", message="board_booked_volume_mismatch"))
+            existing_board_ids: set[int] = set()
+            for row in group_rows:
+                if row.source_type != "waybill":
+                    continue
+                waybill = self.db.get(AirWaybill, row.source_id)
+                if waybill and waybill.board_id is not None:
+                    existing_board_ids.add(waybill.board_id)
+            if len(existing_board_ids) > 1:
+                errors.append(WarehousePlannerRowError(field="board_group_id", message="board_group_existing_board_conflict"))
+
+            has_invalid_member = any(result_by_key.get(self._row_key(row), None) and result_by_key[self._row_key(row)].status == "invalid" for row in group_rows)
+            if has_invalid_member:
+                errors.append(WarehousePlannerRowError(field="board_group_id", message="board_group_member_invalid"))
+            if not errors:
+                continue
+            for row in group_rows:
+                result = result_by_key.get(self._row_key(row))
+                if result is None:
+                    continue
+                result.status = "invalid"
+                existing_messages = {(item.field, item.message) for item in result.errors}
+                for error in errors:
+                    if (error.field, error.message) not in existing_messages:
+                        result.errors.append(error)
+
+    @staticmethod
+    def _board_groups(rows: list[WarehousePlannerRow]) -> dict[str, list[WarehousePlannerRow]]:
+        groups: dict[str, list[WarehousePlannerRow]] = {}
+        for row in rows:
+            if row.board_group_id:
+                groups.setdefault(row.board_group_id, []).append(row)
+        return {group_id: group_rows for group_id, group_rows in groups.items() if len(group_rows) > 1}
+
+    def _commit_units(self, rows: list[WarehousePlannerRow]) -> list[list[WarehousePlannerRow]]:
+        groups = self._board_groups(rows)
+        seen_groups: set[str] = set()
+        units: list[list[WarehousePlannerRow]] = []
+        for row in rows:
+            group_id = row.board_group_id
+            if group_id and group_id in groups:
+                if group_id in seen_groups:
+                    continue
+                units.append(groups[group_id])
+                seen_groups.add(group_id)
+            else:
+                units.append([row])
+        return units
+
+    def _commit_unit(self, rows: list[WarehousePlannerRow], current_user: User) -> list[WarehousePlannerRowResult]:
+        results = [self._commit_row(row, current_user) for row in rows]
+        if self._is_board_unit(rows):
+            self._bind_board_group(rows, results, current_user)
+        return results
+
+    @staticmethod
+    def _is_board_unit(rows: list[WarehousePlannerRow]) -> bool:
+        return len(rows) > 1 and bool(rows[0].board_group_id)
+
+    def _bind_board_group(
+        self,
+        rows: list[WarehousePlannerRow],
+        results: list[WarehousePlannerRowResult],
+        current_user: User,
+    ) -> None:
+        waybill_ids = [result.waybill_id for result in results if result.waybill_id is not None]
+        if len(waybill_ids) != len(rows):
+            raise bad_request("board_group_waybill_missing")
+        waybills = list(self.db.scalars(select(AirWaybill).where(AirWaybill.id.in_(waybill_ids))))
+        if len(waybills) != len(waybill_ids):
+            raise bad_request("board_group_waybill_missing")
+        existing_board_ids = {waybill.board_id for waybill in waybills if waybill.board_id is not None}
+        if len(existing_board_ids) > 1:
+            raise bad_request("board_group_existing_board_conflict")
+
+        first_row = rows[0]
+        booked_volume = first_row.board_booked_volume
+        booked_weight = first_row.board_booked_weight
+        if booked_volume is None:
+            raise bad_request("board_booked_volume_required")
+
+        if existing_board_ids:
+            board = self.db.get(WaybillBoard, next(iter(existing_board_ids)))
+            if board is None:
+                raise bad_request("board_not_found")
+        else:
+            first_waybill = waybills[0]
+            board = WaybillBoard(
+                board_no=BoardService(self.db)._generate_unique_board_no(),
+                consignee_contact_id=first_waybill.consignee_contact_id,
+                consignee_text=(first_waybill.consignee or "")[:255] or None,
+                created_by=current_user.id,
+                updated_by=current_user.id,
+            )
+            self.db.add(board)
+            self.db.flush()
+
+        target_contact_id = board.consignee_contact_id if board.consignee_contact_id is not None else waybills[0].consignee_contact_id
+        for waybill in waybills:
+            if waybill.board_id is not None and waybill.board_id != board.id:
+                raise bad_request("board_group_existing_board_conflict")
+            if waybill.consignee_contact_id != target_contact_id:
+                raise bad_request("board_group_consignee_mismatch")
+            waybill.board_id = board.id
+        if board.consignee_contact_id is None:
+            board.consignee_contact_id = target_contact_id
+            board.consignee_text = (waybills[0].consignee or "")[:255] or None
+        board.booked_volume = booked_volume
+        board.booked_weight = booked_weight
+        board.updated_by = current_user.id
+        self.db.flush()
+
     def _validate_row(self, row: WarehousePlannerRow, current_user: User) -> WarehousePlannerRowResult:
         errors: list[WarehousePlannerRowError] = []
         if row.source_type == "waybill":
@@ -441,7 +569,7 @@ class WarehousePlannerService:
 
     def _validate_prebooking_convert(self, row: WarehousePlannerRow, prebooking: WaybillPrebooking) -> list[WarehousePlannerRowError]:
         data = self._prebooking_convert_data(row, prebooking)
-        errors = self._required_formal_waybill_errors(data)
+        errors = self._required_formal_waybill_errors(data, row)
         if errors:
             return errors
         try:
@@ -452,7 +580,7 @@ class WarehousePlannerService:
 
     def _validate_import_create(self, row: WarehousePlannerRow) -> list[WarehousePlannerRowError]:
         data = self._import_create_data(row)
-        errors = self._required_formal_waybill_errors(data)
+        errors = self._required_formal_waybill_errors(data, row)
         if errors:
             return errors
         try:
@@ -462,7 +590,7 @@ class WarehousePlannerService:
         return []
 
     @staticmethod
-    def _required_formal_waybill_errors(data: dict[str, Any]) -> list[WarehousePlannerRowError]:
+    def _required_formal_waybill_errors(data: dict[str, Any], row: WarehousePlannerRow | None = None) -> list[WarehousePlannerRowError]:
         errors: list[WarehousePlannerRowError] = []
         if data.get("departure_port") in (None, ""):
             data["departure_port"] = DEFAULT_DEPARTURE_PORT
@@ -472,9 +600,11 @@ class WarehousePlannerService:
             "departure_port": "departure_port_required",
             "destination_port": "destination_port_required",
             "planned_route_text": "planned_route_required",
-            "booked_weight": "booked_weight_required",
-            "booked_volume": "booked_volume_required",
         }
+        if not (row and row.board_group_id and row.board_booked_weight is not None):
+            required["booked_weight"] = "booked_weight_required"
+        if not (row and row.board_group_id and row.board_booked_volume is not None):
+            required["booked_volume"] = "booked_volume_required"
         for field, message in required.items():
             if data.get(field) in (None, ""):
                 errors.append(WarehousePlannerRowError(field=field, message=message))
@@ -558,6 +688,8 @@ class WarehousePlannerService:
         )
 
     def _waybill_update_data(self, row: WarehousePlannerRow) -> dict[str, Any]:
+        use_board_volume = row.board_group_id and row.board_booked_volume is not None
+        use_board_weight = row.board_group_id and row.board_booked_weight is not None
         return {
             "waybill_no": row.waybill_no,
             "carrier_agent_id": row.carrier_agent_id,
@@ -565,8 +697,8 @@ class WarehousePlannerService:
             "planned_flight_date": row.planned_flight_date,
             "outbound_date": row.outbound_date,
             "customs_staff_id": row.customs_staff_id,
-            "booked_volume": row.booked_volume,
-            "booked_weight": row.booked_weight,
+            "booked_volume": None if use_board_volume else row.booked_volume,
+            "booked_weight": None if use_board_weight else row.booked_weight,
             "density": row.density,
             "quotation": row.quotation,
             "include_tc": row.include_tc,
@@ -576,6 +708,8 @@ class WarehousePlannerService:
         }
 
     def _import_create_data(self, row: WarehousePlannerRow) -> dict[str, Any]:
+        use_board_volume = row.board_group_id and row.board_booked_volume is not None
+        use_board_weight = row.board_group_id and row.board_booked_weight is not None
         return {
             "waybill_no": row.waybill_no,
             "carrier_agent_id": row.carrier_agent_id,
@@ -585,8 +719,8 @@ class WarehousePlannerService:
             "outbound_date": row.outbound_date,
             "consignee_contact_id": row.consignee_contact_id,
             "customs_staff_id": row.customs_staff_id,
-            "booked_volume": row.booked_volume,
-            "booked_weight": row.booked_weight,
+            "booked_volume": None if use_board_volume else row.booked_volume,
+            "booked_weight": None if use_board_weight else row.booked_weight,
             "density": row.density,
             "quotation": row.quotation,
             "include_tc": row.include_tc if row.include_tc is not None else False,
@@ -596,6 +730,8 @@ class WarehousePlannerService:
         }
 
     def _prebooking_convert_data(self, row: WarehousePlannerRow, prebooking: WaybillPrebooking) -> dict[str, Any]:
+        use_board_volume = row.board_group_id and row.board_booked_volume is not None
+        use_board_weight = row.board_group_id and row.board_booked_weight is not None
         return {
             "waybill_no": row.waybill_no or prebooking.waybill_no,
             "carrier_agent_id": row.carrier_agent_id if row.carrier_agent_id is not None else prebooking.carrier_agent_id,
@@ -603,8 +739,8 @@ class WarehousePlannerService:
             "planned_flight_date": row.planned_flight_date or prebooking.planned_flight_date,
             "outbound_date": row.outbound_date if row.outbound_date is not None else prebooking.outbound_date,
             "customs_staff_id": row.customs_staff_id if row.customs_staff_id is not None else prebooking.customs_staff_id,
-            "booked_volume": row.booked_volume if row.booked_volume is not None else prebooking.booked_volume,
-            "booked_weight": row.booked_weight if row.booked_weight is not None else prebooking.booked_weight,
+            "booked_volume": None if use_board_volume else row.booked_volume if row.booked_volume is not None else prebooking.booked_volume,
+            "booked_weight": None if use_board_weight else row.booked_weight if row.booked_weight is not None else prebooking.booked_weight,
             "density": row.density if row.density is not None else prebooking.density,
             "quotation": row.quotation if row.quotation is not None else prebooking.quotation,
             "include_tc": row.include_tc if row.include_tc is not None else prebooking.include_tc,
@@ -630,6 +766,8 @@ class WarehousePlannerService:
                 receipt_names.append(receipt.warehouse_no)
         agent_name = self._agent_name(row.carrier_agent_id)
         customs_name = self._user_name(row.customs_staff_id)
+        booked_volume = row.board_booked_volume if row.board_group_id and row.board_booked_volume is not None else row.booked_volume
+        booked_weight = row.board_booked_weight if row.board_group_id and row.board_booked_weight is not None else row.booked_weight
         return [
             row.planning_channel,
             _source_label(row.source_type),
@@ -639,9 +777,9 @@ class WarehousePlannerService:
             row.outbound_date.isoformat() if row.outbound_date else "",
             " / ".join(receipt_names),
             customs_name,
-            _format_decimal(row.booked_volume),
+            _format_decimal(booked_volume),
             row.planned_flight_date.isoformat() if row.planned_flight_date else "",
-            _format_decimal(row.booked_weight),
+            _format_decimal(booked_weight),
             _format_decimal(row.density),
             row.quotation,
             "是" if row.include_tc else "否",
@@ -718,6 +856,10 @@ def _format_decimal(value: Decimal | None) -> str:
         return ""
     text = format(value, "f")
     return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+def normalize_channel(value: str | None) -> str:
+    return "LHR" if value == "LHR" else "AMS"
 
 
 def _source_label(source_type: str) -> str:

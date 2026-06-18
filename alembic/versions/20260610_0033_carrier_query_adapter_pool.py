@@ -55,48 +55,46 @@ def upgrade() -> None:
         unique=False,
     )
 
-    adapters_table = sa.table(
-        "carrier_query_adapters",
-        sa.column("adapter_code", sa.String),
-        sa.column("display_name", sa.String),
-        sa.column("adapter_type", sa.String),
-        sa.column("query_method", carrier_query_method),
-        sa.column("enabled", sa.Boolean),
-        sa.column("display_order", sa.Integer),
-        sa.column("remark", sa.Text),
+    connection = op.get_bind()
+    insert_adapter = sa.text(
+        """
+        INSERT INTO carrier_query_adapters
+            (adapter_code, display_name, adapter_type, query_method, enabled, display_order, remark)
+        VALUES
+            (:adapter_code, :display_name, :adapter_type, CAST(:query_method AS carrier_query_method),
+             :enabled, :display_order, :remark)
+        """
     )
-    op.bulk_insert(
-        adapters_table,
-        [
-            {
-                "adapter_code": "cz_adapter",
-                "display_name": "南航 CZ 查询",
-                "adapter_type": "dedicated",
-                "query_method": "hybrid",
-                "enabled": True,
-                "display_order": 10,
-                "remark": "南航专属查询适配器",
-            },
-            {
-                "adapter_code": "ek_adapter",
-                "display_name": "阿联酋航空 EK 查询",
-                "adapter_type": "dedicated",
-                "query_method": "protocol",
-                "enabled": True,
-                "display_order": 20,
-                "remark": "阿联酋航空专属查询适配器",
-            },
-            {
-                "adapter_code": "general_adapter",
-                "display_name": "51tracking 通用查询",
-                "adapter_type": "general",
-                "query_method": "protocol",
-                "enabled": True,
-                "display_order": 1,
-                "remark": "通用航司查询适配器",
-            },
-        ],
-    )
+    for row in [
+        {
+            "adapter_code": "cz_adapter",
+            "display_name": "南航 CZ 查询",
+            "adapter_type": "dedicated",
+            "query_method": "hybrid",
+            "enabled": True,
+            "display_order": 10,
+            "remark": "南航专属查询适配器",
+        },
+        {
+            "adapter_code": "ek_adapter",
+            "display_name": "阿联酋航空 EK 查询",
+            "adapter_type": "dedicated",
+            "query_method": "protocol",
+            "enabled": True,
+            "display_order": 20,
+            "remark": "阿联酋航空专属查询适配器",
+        },
+        {
+            "adapter_code": "general_adapter",
+            "display_name": "51tracking 通用查询",
+            "adapter_type": "general",
+            "query_method": "protocol",
+            "enabled": True,
+            "display_order": 1,
+            "remark": "通用航司查询适配器",
+        },
+    ]:
+        connection.execute(insert_adapter, row)
 
     op.add_column("waybill_query_snapshots", sa.Column("adapter_type", sa.String(length=16), nullable=True))
     op.execute(

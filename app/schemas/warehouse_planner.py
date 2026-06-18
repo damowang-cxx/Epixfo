@@ -28,6 +28,10 @@ class WarehousePlannerRow(BaseModel):
     receipt_ids: list[int] = Field(default_factory=list)
     consignee_contact_id: int | None = None
     customs_staff_id: int | None = None
+    board_group_id: str | None = Field(default=None, max_length=64)
+    board_group_order: int | None = None
+    board_booked_volume: Decimal | None = None
+    board_booked_weight: Decimal | None = None
     booked_volume: Decimal | None = None
     booked_weight: Decimal | None = None
     density: Decimal | None = None

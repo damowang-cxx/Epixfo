@@ -169,8 +169,11 @@ export interface BoardSummary {
   actual_board_no?: string | null;
   consignee_contact_id?: number | null;
   consignee_text?: string | null;
+  booked_volume?: string | number | null;
+  booked_weight?: string | number | null;
   member_count: number;
   total_booked_volume: string | number;
+  total_booked_weight?: string | number | null;
 }
 
 export interface BoardWaybill {
@@ -409,6 +412,10 @@ export interface WarehousePlannerRow {
   receipt_ids: number[];
   consignee_contact_id?: number | null;
   customs_staff_id?: number | null;
+  board_group_id?: string | null;
+  board_group_order?: number | null;
+  board_booked_volume?: string | number | null;
+  board_booked_weight?: string | number | null;
   booked_volume?: string | number | null;
   booked_weight?: string | number | null;
   density?: string | number | null;
