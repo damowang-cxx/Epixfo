@@ -257,6 +257,7 @@ export interface WarehouseReceipt {
   weight_volume_ratio?: string | number | null;
   channel_tags: string[];
   box_count?: number;
+  general_cargo_count?: number;
   display_order?: number | null;
   uploaded_at: string;
   created_at: string;

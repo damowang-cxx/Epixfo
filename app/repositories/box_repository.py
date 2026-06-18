@@ -133,7 +133,7 @@ class BoxRepository:
         page: int,
         page_size: int,
         unbound_only: bool = False,
-    ) -> tuple[list[tuple[WarehouseReceipt, str | None, int | None, str | None, date | None, str | None, datetime | None, int]], int]:
+    ) -> tuple[list[tuple[WarehouseReceipt, str | None, int | None, str | None, date | None, str | None, datetime | None, int, int]], int]:
         uploaded_at_sort = func.coalesce(BoxDocument.uploaded_at, WarehouseReceipt.created_at)
         file_name_sort = func.coalesce(BoxDocument.file_name, WarehouseReceipt.warehouse_no)
         stmt = (
@@ -146,6 +146,7 @@ class BoxRepository:
                 BoxDocument.file_name,
                 BoxDocument.uploaded_at,
                 func.count(Box.id).label("box_count"),
+                func.count(Box.id).filter(Box.is_general_cargo.is_(True)).label("general_cargo_count"),
             )
             .outerjoin(AirWaybill, AirWaybill.id == WarehouseReceipt.waybill_id)
             .outerjoin(WaybillPrebooking, WaybillPrebooking.id == WarehouseReceipt.prebooking_id)
@@ -173,7 +174,7 @@ class BoxRepository:
         total_stmt = select(func.count()).select_from(stmt.order_by(None).subquery())
         total = int(self.db.scalar(total_stmt) or 0)
         rows = self.db.execute(stmt.offset((page - 1) * page_size).limit(page_size)).all()
-        return [(row[0], row[1], row[2], row[3], row[4], row[5], row[6], int(row[7] or 0)) for row in rows], total
+        return [(row[0], row[1], row[2], row[3], row[4], row[5], row[6], int(row[7] or 0), int(row[8] or 0)) for row in rows], total
 
     def list_unbound_receipt_models_ordered(self) -> list[WarehouseReceipt]:
         uploaded_at_sort = func.coalesce(BoxDocument.uploaded_at, WarehouseReceipt.created_at)

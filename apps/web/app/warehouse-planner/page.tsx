@@ -64,6 +64,7 @@ const DEFAULT_PLANNER_COLUMN_ORDER = [
   "waybill_no",
   "outbound_date",
   "receipts",
+  "receipt_summary",
   "customs_staff",
   "booked_volume",
   "planned_flight_date",
@@ -86,6 +87,7 @@ const PLANNER_COLUMN_LABELS: Record<PlannerColumnKey, string> = {
   waybill_no: "提单号",
   outbound_date: "出仓日期",
   receipts: "入仓号/入仓文件",
+  receipt_summary: "入仓汇总",
   customs_staff: "指定清关人员",
   booked_volume: "订舱方数/板总方数",
   planned_flight_date: "约定航班起飞日期",
@@ -154,6 +156,40 @@ function formatDecimal(value?: string | number | null) {
   return num.toFixed(3).replace(/\.?0+$/, "");
 }
 
+function formatReceiptDensity(receipt: WarehouseReceipt) {
+  const volume = Number(receipt.total_volume);
+  if (!Number.isFinite(volume) || volume <= 0) return "-";
+  return formatDecimal(receipt.weight_volume_ratio);
+}
+
+function receiptNumber(value?: string | number | null) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : 0;
+}
+
+function receiptSummary(row: WarehousePlannerRow, receiptMap: Map<number, WarehouseReceipt>) {
+  const receiptIds = row.receipt_ids || [];
+  let totalWeight = 0;
+  let totalVolume = 0;
+  let missingCount = 0;
+  for (const receiptId of receiptIds) {
+    const receipt = receiptMap.get(receiptId);
+    if (!receipt) {
+      missingCount += 1;
+      continue;
+    }
+    totalWeight += receiptNumber(receipt.total_weight);
+    totalVolume += receiptNumber(receipt.total_volume);
+  }
+  return {
+    hasReceipt: receiptIds.length > 0,
+    missingCount,
+    totalWeight,
+    totalVolume,
+    density: totalVolume > 0 ? totalWeight / totalVolume : null
+  };
+}
+
 function sourceLabel(value: WarehousePlannerRow["source_type"]) {
   if (value === "waybill") return "正式提单";
   if (value === "prebooking") return "预排仓";
@@ -179,10 +215,18 @@ function normalizePlannerColumnOrder(order?: string[] | null): PlannerColumnKey[
   const validColumns = new Set<string>(DEFAULT_PLANNER_COLUMN_ORDER);
   const seen = new Set<string>();
   const normalized: PlannerColumnKey[] = [];
-  for (const column of order || []) {
+  const providedColumns = order || [];
+  for (const column of providedColumns) {
     if (!validColumns.has(column) || seen.has(column)) continue;
     seen.add(column);
     normalized.push(column as PlannerColumnKey);
+  }
+  if (providedColumns.length && !seen.has("receipt_summary")) {
+    const receiptIndex = normalized.indexOf("receipts");
+    if (receiptIndex >= 0) {
+      normalized.splice(receiptIndex + 1, 0, "receipt_summary");
+      seen.add("receipt_summary");
+    }
   }
   for (const column of DEFAULT_PLANNER_COLUMN_ORDER) {
     if (!seen.has(column)) normalized.push(column);
@@ -347,6 +391,13 @@ export default function WarehousePlannerPage() {
     [candidates]
   );
   const rowKeySet = useMemo(() => new Set(rows.map(rowKey)), [rows]);
+  const assignedReceiptIds = useMemo(() => {
+    const ids = new Set<number>();
+    for (const row of rows) {
+      for (const receiptId of row.receipt_ids || []) ids.add(receiptId);
+    }
+    return ids;
+  }, [rows]);
   const channelRows = useMemo(
     () => ({
       AMS: rows.filter((row) => normalizePlannerChannel(row.planning_channel) === "AMS"),
@@ -972,6 +1023,32 @@ export default function WarehousePlannerPage() {
         </TD>
       )
     },
+    receipt_summary: {
+      key: "receipt_summary",
+      label: PLANNER_COLUMN_LABELS.receipt_summary,
+      render: ({ row }) => {
+        const summary = receiptSummary(row, receiptMap);
+        if (!summary.hasReceipt) {
+          return <TD><span className="text-xs text-slate-400">-</span></TD>;
+        }
+        return (
+          <TD>
+            <div className="min-w-56 space-y-1">
+              <div className="flex flex-wrap gap-1">
+                <Badge variant="gray">总方数 {formatDecimal(summary.totalVolume)}</Badge>
+                <Badge variant="gray">总重量 {formatDecimal(summary.totalWeight)}</Badge>
+                <Badge variant="gray">总密度 {summary.density === null ? "-" : formatDecimal(summary.density)}</Badge>
+              </div>
+              {summary.missingCount > 0 ? (
+                <div className="text-[11px] text-amber-600">
+                  部分入仓号未加载（{summary.missingCount} 个）
+                </div>
+              ) : null}
+            </div>
+          </TD>
+        );
+      }
+    },
     customs_staff: {
       key: "customs_staff",
       label: PLANNER_COLUMN_LABELS.customs_staff,
@@ -1212,7 +1289,7 @@ export default function WarehousePlannerPage() {
           >
             {activeRows.length ? (
               <div className="w-full max-w-full overflow-x-auto rounded-md border border-slate-200 bg-white">
-                <Table className="min-w-[1900px]">
+                <Table className="min-w-[2080px]">
                   <THead>
                     <TR>
                       <TH className="w-10" />
@@ -1379,6 +1456,7 @@ export default function WarehousePlannerPage() {
                     <div className="max-h-[calc(100vh-268px)] space-y-2 overflow-y-auto pr-1">
                       {(candidates?.unbound_receipts || []).map((receipt) => {
                         const selected = selectedReceipts.has(receipt.id);
+                        const assigned = assignedReceiptIds.has(receipt.id);
                         return (
                           <div
                             key={receipt.id}
@@ -1397,7 +1475,11 @@ export default function WarehousePlannerPage() {
                                 setReceiptSortDragId(null);
                               }
                             }}
-                            className={cn("rounded-md border bg-white p-3 text-sm", selected ? "border-purple-300 bg-purple-50" : "border-slate-200")}
+                            className={cn(
+                              "rounded-md border p-3 text-sm transition-colors",
+                              assigned ? "border-slate-200 bg-slate-100 text-slate-500" : "border-slate-200 bg-white",
+                              selected && "border-purple-300 ring-1 ring-purple-200"
+                            )}
                           >
                             <label className="flex items-start gap-2">
                               <input
@@ -1406,7 +1488,7 @@ export default function WarehousePlannerPage() {
                                 onChange={(event) => toggleReceiptSelection(receipt.id, event.target.checked)}
                               />
                               <span className="min-w-0 flex-1">
-                                <span className="flex items-center gap-2 font-semibold text-slate-900">
+                                <span className={cn("flex items-center gap-2 font-semibold", assigned ? "text-slate-500" : "text-slate-900")}>
                                   <span
                                     role="button"
                                     tabIndex={0}
@@ -1424,6 +1506,7 @@ export default function WarehousePlannerPage() {
                                     <GripVertical className="h-4 w-4" />
                                   </span>
                                   {receipt.source_file_name || receipt.warehouse_no}
+                                  {assigned ? <Badge variant="gray">已在编辑区</Badge> : null}
                                 </span>
                                 <span className="mt-1 flex flex-wrap gap-1">
                                   {channelTags(receipt.channel_tags).map((tag) => <Badge key={tag} variant="amber">{tag}</Badge>)}
@@ -1433,6 +1516,8 @@ export default function WarehousePlannerPage() {
                                   <span>上传：{formatDateTime(receipt.uploaded_at)}</span>
                                   <span>箱数：{receipt.box_count ?? 0} / 件数：{compact(receipt.total_quantity)}</span>
                                   <span>重量：{formatDecimal(receipt.total_weight)} / 方数：{formatDecimal(receipt.total_volume)}</span>
+                                  {(receipt.general_cargo_count ?? 0) > 0 ? <span>普货：{receipt.general_cargo_count}件</span> : null}
+                                  <span>密度：{formatReceiptDensity(receipt)}</span>
                                 </span>
                               </span>
                             </label>
@@ -1447,6 +1532,7 @@ export default function WarehousePlannerPage() {
                         <div className="grid grid-cols-[repeat(auto-fit,minmax(138px,1fr))] gap-2">
                           {candidates.unbound_receipts.map((receipt) => {
                             const selected = selectedReceipts.has(receipt.id);
+                            const assigned = assignedReceiptIds.has(receipt.id);
                             const fileName = receipt.source_file_name || receipt.warehouse_no;
                             return (
                               <div
@@ -1466,7 +1552,11 @@ export default function WarehousePlannerPage() {
                                     setReceiptSortDragId(null);
                                   }
                                 }}
-                                className={cn("rounded-md border bg-white p-2 text-xs", selected ? "border-purple-300 bg-purple-50" : "border-slate-200")}
+                                className={cn(
+                                  "rounded-md border p-2 text-xs transition-colors",
+                                  assigned ? "border-slate-200 bg-slate-100 text-slate-500" : "border-slate-200 bg-white",
+                                  selected && "border-purple-300 ring-1 ring-purple-200"
+                                )}
                               >
                                 <label className="block">
                                   <span className="flex items-start gap-2">
@@ -1477,7 +1567,7 @@ export default function WarehousePlannerPage() {
                                       onChange={(event) => toggleReceiptSelection(receipt.id, event.target.checked)}
                                     />
                                     <span className="min-w-0 flex-1">
-                                      <span className="flex min-w-0 items-center gap-1 font-semibold text-slate-900">
+                                      <span className={cn("flex min-w-0 items-center gap-1 font-semibold", assigned ? "text-slate-500" : "text-slate-900")}>
                                         <span
                                           role="button"
                                           tabIndex={0}
@@ -1495,12 +1585,15 @@ export default function WarehousePlannerPage() {
                                           <GripVertical className="h-3.5 w-3.5" />
                                         </span>
                                         <span className="truncate" title={fileName}>{fileName}</span>
+                                        {assigned ? <Badge variant="gray">已在编辑区</Badge> : null}
                                       </span>
                                       <span className="mt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-slate-500">
                                         <span>箱数 {receipt.box_count ?? 0}</span>
                                         <span>件数 {compact(receipt.total_quantity)}</span>
                                         <span>重量 {formatDecimal(receipt.total_weight)}</span>
                                         <span>方数 {formatDecimal(receipt.total_volume)}</span>
+                                        {(receipt.general_cargo_count ?? 0) > 0 ? <span>普货 {receipt.general_cargo_count}件</span> : <span>普货 -</span>}
+                                        <span>密度 {formatReceiptDensity(receipt)}</span>
                                       </span>
                                       <span className="mt-1 block text-slate-400">上传 {formatDateTime(receipt.uploaded_at)}</span>
                                     </span>

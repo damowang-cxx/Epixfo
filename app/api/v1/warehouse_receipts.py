@@ -1,10 +1,14 @@
 from typing import Literal
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Response, UploadFile, status
+from fastapi.responses import StreamingResponse
 
 from app.core.platform_patch import patch_platform_wmi
 
 patch_platform_wmi()
+
+from io import BytesIO
 
 from sqlalchemy.orm import Session
 
@@ -23,6 +27,7 @@ from app.schemas.box import (
     WarehouseReceiptOrderRequest,
 )
 from app.schemas.common import PageResponse
+from app.services.customs_export_service import CustomsExportService
 from app.services.permission_service import PermissionService
 from app.services.warehouse_file_service import WarehouseFileService
 
@@ -104,6 +109,22 @@ def list_receipt_boxes(
 ):
     PermissionService.assert_waybill_write(current_user)
     return WarehouseFileService(db).list_receipt_boxes(receipt_id)
+
+
+@router.get("/{receipt_id}/export")
+def export_unbound_warehouse_receipt(
+    receipt_id: int,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    PermissionService.assert_waybill_write(current_user)
+    content, filename = CustomsExportService(db).build_unbound_receipt_export(receipt_id)
+    encoded_filename = quote(filename)
+    return StreamingResponse(
+        BytesIO(content),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"},
+    )
 
 
 @router.patch("/{receipt_id}/boxes/{box_id}", response_model=BoxOut)

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Archive, Calculator, ChevronDown, ChevronRight, GripVertical, MoveRight, Pencil, RefreshCw, Trash2, Upload } from "lucide-react";
+import { Archive, Calculator, ChevronDown, ChevronRight, Download, GripVertical, MoveRight, Pencil, RefreshCw, Trash2, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -116,6 +116,12 @@ function formatDecimal(value?: string | number | null) {
   return num.toFixed(3).replace(/\.?0+$/, "");
 }
 
+function formatReceiptDensity(receipt: WarehouseReceipt) {
+  const volume = Number(receipt.total_volume);
+  if (!Number.isFinite(volume) || volume <= 0) return "-";
+  return formatDecimal(receipt.weight_volume_ratio);
+}
+
 function conflictTitle(conflict?: CargoBox["box_conflict"] | null) {
   if (!conflict) return "";
   const receiptName = conflict.source_file_name || conflict.warehouse_no || "-";
@@ -208,6 +214,17 @@ function channelLabel(value?: string | null) {
 
 function warningLabel(value: string) {
   return WARNING_LABELS[value] || value;
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 function parseConflicts(error: unknown) {
@@ -305,6 +322,7 @@ export default function WarehouseReceiptsPage() {
   const [unboundRemark, setUnboundRemark] = useState("");
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [exportingReceiptId, setExportingReceiptId] = useState<number | null>(null);
   const [receiptOrderSaving, setReceiptOrderSaving] = useState(false);
   const [receiptSortDragId, setReceiptSortDragId] = useState<number | null>(null);
   const [receiptOptionsLoading, setReceiptOptionsLoading] = useState(false);
@@ -617,6 +635,20 @@ export default function WarehouseReceiptsPage() {
       setMessage(error instanceof Error ? error.message : "删除入仓号失败。");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function exportReceipt(item: WarehouseReceipt) {
+    setExportingReceiptId(item.id);
+    setMessage("");
+    try {
+      const { blob, filename } = await apiClient.download(`/warehouse-receipts/${item.id}/export`);
+      downloadBlob(blob, filename || `${item.source_file_name || item.warehouse_no}-入仓号文件.xlsx`);
+      setMessage(`入仓号 ${item.warehouse_no} 已导出。`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "导出入仓号文件失败。");
+    } finally {
+      setExportingReceiptId(null);
     }
   }
 
@@ -993,6 +1025,8 @@ export default function WarehouseReceiptsPage() {
                       <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
                         <span>重量 {formatDecimal(receipt.total_weight)}</span>
                         <span>方数 {formatDecimal(receipt.total_volume)}</span>
+                        {(receipt.general_cargo_count ?? 0) > 0 ? <span>普货：{receipt.general_cargo_count}件</span> : null}
+                        <span>密度：{formatReceiptDensity(receipt)}</span>
                         <span>上传 {formatDateTime(receipt.uploaded_at)}</span>
                         <Button type="button" variant="secondary" size="sm" onClick={() => setBindReceiptId(receipt.id)}>
                           <Archive className="h-4 w-4" />
@@ -1007,6 +1041,16 @@ export default function WarehouseReceiptsPage() {
                         >
                           <Calculator className="h-4 w-4" />
                           方数计算
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          disabled={exportingReceiptId === receipt.id || (receipt.box_count ?? 0) <= 0}
+                          onClick={() => void exportReceipt(receipt)}
+                        >
+                          <Download className="h-4 w-4" />
+                          {exportingReceiptId === receipt.id ? "导出中..." : "导出"}
                         </Button>
                         <Button type="button" variant="ghost" size="sm" disabled={saving} onClick={() => void deleteReceipt(receipt)}>
                           <Trash2 className="h-4 w-4 text-red-600" />
@@ -1245,7 +1289,7 @@ export default function WarehouseReceiptsPage() {
                 {receiptOptionsError ? <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-4 text-sm text-rose-600">{receiptOptionsError}</div> : null}
                 {!receiptOptionsLoading && !receiptOptionsError && unboundReceiptSummaries.length ? (
                   <div className="max-h-[680px] overflow-auto">
-                    <Table className="min-w-[760px]">
+                    <Table className="min-w-[900px]">
                       <THead>
                         <TR>
                           <TH>入仓号文件名</TH>
@@ -1255,6 +1299,8 @@ export default function WarehouseReceiptsPage() {
                           <TH>件数</TH>
                           <TH>重量</TH>
                           <TH>方数</TH>
+                          <TH>普货</TH>
+                          <TH>密度</TH>
                         </TR>
                       </THead>
                       <TBody>
@@ -1284,6 +1330,8 @@ export default function WarehouseReceiptsPage() {
                               <TD>{compact(receipt.total_quantity)}</TD>
                               <TD>{formatDecimal(receipt.total_weight)}</TD>
                               <TD>{formatDecimal(receipt.total_volume)}</TD>
+                              <TD>{(receipt.general_cargo_count ?? 0) > 0 ? `${receipt.general_cargo_count}件` : "-"}</TD>
+                              <TD>{formatReceiptDensity(receipt)}</TD>
                             </TR>
                           );
                         })}

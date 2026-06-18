@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { Ban, Download, Pencil, Play, Trash2, Upload, UserCheck } from "lucide-react";
+import { Ban, Download, Pencil, Play, Trash2, Unlink, Upload, UserCheck } from "lucide-react";
 import { AlertLevelBadge, LifecycleBadge } from "@/components/ui/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -119,6 +119,7 @@ export default function WaybillDetailPage() {
   const [airlineFileUploading, setAirlineFileUploading] = useState(false);
   const [airlineFileDeleting, setAirlineFileDeleting] = useState(false);
   const [airlineFileDownloading, setAirlineFileDownloading] = useState(false);
+  const [unbindingReceiptId, setUnbindingReceiptId] = useState<number | null>(null);
 
   const load = useCallback(() => {
     if (!id) return;
@@ -326,6 +327,23 @@ export default function WaybillDetailPage() {
       setMessage(error instanceof Error ? error.message : "提单文件删除失败。");
     } finally {
       setAirlineFileDeleting(false);
+    }
+  }
+
+  async function unbindWarehouseReceipt(receiptId: number, warehouseNo?: string | null) {
+    if (!id || !canEditBoxes) return;
+    const displayName = warehouseNo || `#${receiptId}`;
+    if (!window.confirm(`确认解绑入仓号 ${displayName}？解绑后该入仓号文件会回到未绑定箱号区。`)) return;
+    setUnbindingReceiptId(receiptId);
+    setMessage("");
+    try {
+      await apiClient.delete<void>(`/waybills/${id}/warehouse-receipts/${receiptId}`);
+      setMessage(`入仓号 ${displayName} 已解绑，已回到未绑定箱号区。`);
+      load();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "解绑入仓号失败。");
+    } finally {
+      setUnbindingReceiptId(null);
     }
   }
 
@@ -544,6 +562,20 @@ export default function WaybillDetailPage() {
                         <span>重量/方 {compact(group.weightVolumeRatio)}</span>
                         <span>上传 {formatDateTime(group.uploadedAt)}</span>
                       </div>
+                      {canEditBoxes && group.receiptId ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          disabled={unbindingReceiptId === group.receiptId}
+                          onClick={() => {
+                            if (group.receiptId) void unbindWarehouseReceipt(group.receiptId, group.warehouseNo);
+                          }}
+                        >
+                          <Unlink className="h-4 w-4 text-red-600" />
+                          {unbindingReceiptId === group.receiptId ? "解绑中..." : "解绑入仓号"}
+                        </Button>
+                      ) : null}
                     </div>
                     <div className="p-3">
                       <CargoBoxesTable

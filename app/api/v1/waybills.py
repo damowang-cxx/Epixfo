@@ -227,6 +227,19 @@ def delete_waybill(waybill_id: int, current_user=Depends(get_current_user), db: 
     return Response(status_code=204)
 
 
+@router.delete("/{waybill_id}/warehouse-receipts/{receipt_id}", status_code=204)
+def unbind_waybill_warehouse_receipt(
+    waybill_id: int,
+    receipt_id: int,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    PermissionService.assert_waybill_write(current_user)
+    WaybillService(db).get_visible(waybill_id, current_user)
+    WarehouseFileService(db).unbind_receipt_from_waybill(waybill_id, receipt_id, current_user)
+    return Response(status_code=204)
+
+
 @router.post("/{waybill_id}/airline-file", response_model=WaybillAirlineFileOut)
 async def upload_airline_file(
     waybill_id: int,

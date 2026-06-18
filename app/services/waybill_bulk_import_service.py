@@ -230,10 +230,12 @@ def _bool_or_none(value: Any) -> bool | None:
     text = _clean_text(value)
     if not text:
         return None
-    lowered = text.lower()
-    if lowered in {"1", "true", "yes", "y", "是", "已通知", "通知", "含tc", "tc"}:
+    lowered = re.sub(r"\s+", "", text).lower()
+    if lowered in {"0", "false", "no", "n", "否", "不通知", "无", "不含tc", "不含t", "notc", "no-tc"}:
+        return False
+    if lowered in {"1", "true", "yes", "y", "是", "已通知", "通知", "含tc", "含t", "tc"}:
         return True
-    if lowered in {"0", "false", "no", "n", "否", "不通知", "无"}:
+    if "不含tc" in lowered or "不含t" in lowered or "notc" in lowered or "no-tc" in lowered:
         return False
     if "含tc" in lowered or lowered == "含":
         return True
@@ -363,7 +365,13 @@ class WaybillImportTemplateParser:
 
         departure_port, destination_port = self._route_ports(planned_route_text)
         warehouse_data_remark = self._warehouse_data_remark(values, header_map, headers)
-        include_tc = _bool_or_none(self._blank_after(values, header_map, "报价")) or _bool_or_none(cell("报价")) or False
+        include_tc = self._include_tc_from_warehouse_data(values, header_map)
+        if include_tc is None:
+            include_tc = _bool_or_none(self._blank_after(values, header_map, "报价"))
+        if include_tc is None:
+            include_tc = _bool_or_none(cell("报价"))
+        if include_tc is None:
+            include_tc = False
         notify_pickup = _bool_or_none(cell("通知提取")) or False
 
         delivery_time = _datetime_or_note(cell("交货时间"), "交货时间", notes)
@@ -476,13 +484,16 @@ class WaybillImportTemplateParser:
             route_text = cutoff_text
         departure_port, destination_port = self._route_ports(route_text)
 
-        include_tc: bool | None = None
+        include_tc: bool | None = self._include_tc_from_warehouse_data(values, header_map)
+        warehouse_include_tc_text = self._warehouse_data_first_value(values, header_map)
+        if _clean_text(warehouse_include_tc_text) and include_tc is None and "tc" in _normalize_lookup(warehouse_include_tc_text):
+            warning("入仓数据", warehouse_include_tc_text, "invalid_boolean")
         include_tc_text = self._blank_after(values, header_map, "报价")
-        if _clean_text(include_tc_text):
+        if include_tc is None and _clean_text(include_tc_text):
             include_tc = _bool_or_none(include_tc_text)
             if include_tc is None:
                 warning("含T", include_tc_text, "invalid_boolean")
-        else:
+        if include_tc is None:
             include_tc = _bool_or_none(cell("报价"))
 
         if board_group and board_group.booked_volume is None and _clean_text(cell("方数")):
@@ -550,6 +561,15 @@ class WaybillImportTemplateParser:
             return None
         next_index = index + 1
         return values[next_index] if next_index < len(values) else None
+
+    def _warehouse_data_first_value(self, values: list[Any], header_map: dict[str, int]) -> Any:
+        start = header_map.get("入仓数据")
+        if start is None or start >= len(values):
+            return None
+        return values[start]
+
+    def _include_tc_from_warehouse_data(self, values: list[Any], header_map: dict[str, int]) -> bool | None:
+        return _bool_or_none(self._warehouse_data_first_value(values, header_map))
 
     def _warehouse_data_remark(self, values: list[Any], header_map: dict[str, int], headers: list[str]) -> str | None:
         start = header_map.get("入仓数据")

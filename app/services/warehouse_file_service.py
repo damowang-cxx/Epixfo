@@ -17,6 +17,7 @@ from app.core.platform_patch import patch_platform_wmi
 patch_platform_wmi()
 
 from openpyxl import load_workbook
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -68,6 +69,7 @@ EUROPE_CHANNEL_TAGS = ["AMS"]
 UK_CHANNEL_TAGS = ["LHR"]
 ALL_CTT_CHANNEL_TAGS = ["MAD", "BCN", "AMS"]
 PROHIBITED_GOODS_KEYWORDS = ("香水", "perfume")
+GENERAL_CARGO_MARKERS = ("\u666e\u8d27", "\u666e\u8ca8")
 DIMENSION_VOLUME_PATTERN = re.compile(
     r"(\d+(?:\.\d+)?)\s*(?:\*|x|X|×)\s*(\d+(?:\.\d+)?)\s*(?:\*|x|X|×)\s*(\d+(?:\.\d+)?)"
 )
@@ -95,6 +97,7 @@ class ParsedWarehouseBox:
     volume: Decimal
     weight_volume_ratio: Decimal
     source_row_number: int
+    is_general_cargo: bool
     raw_data: dict[str, Any]
     items: list[ParsedWarehouseBoxItem]
 
@@ -207,7 +210,9 @@ class WarehouseFileService:
             waybill_no = waybill.waybill_no if waybill else None
         document = self.db.get(BoxDocument, receipt.source_document_id) if receipt.source_document_id else None
         prebooking = self.db.get(WaybillPrebooking, receipt.prebooking_id) if receipt.prebooking_id else None
-        box_count = len(self.boxes.list_by_receipt_id(receipt.id))
+        boxes = self.boxes.list_by_receipt_id(receipt.id)
+        box_count = len(boxes)
+        general_cargo_count = sum(1 for box in boxes if box.is_general_cargo)
         return self._receipt_list_out(
             receipt,
             waybill_no,
@@ -217,6 +222,7 @@ class WarehouseFileService:
             document.file_name if document else None,
             document.uploaded_at if document else None,
             box_count,
+            general_cargo_count,
         )
 
     def update_box_no(self, waybill_id: int, box_id: int, box_no: str, current_user: User) -> Box:
@@ -1102,6 +1108,49 @@ class WarehouseFileService:
             self.db.flush()
         return receipt
 
+    def unbind_receipt_from_waybill(
+        self,
+        waybill_id: int,
+        receipt_id: int,
+        current_user: User,
+        *,
+        auto_commit: bool = True,
+    ) -> WarehouseReceipt:
+        PermissionService.assert_waybill_write(current_user)
+        waybill = self.waybills.get(waybill_id)
+        if waybill is None:
+            raise bad_request("waybill_not_found")
+        receipt = self.boxes.get_receipt_by_id(receipt_id)
+        if receipt is None:
+            raise bad_request("warehouse_receipt_not_found")
+        if receipt.waybill_id != waybill.id:
+            raise bad_request("warehouse_receipt_not_bound_to_waybill")
+
+        receipt.waybill_id = None
+        receipt.prebooking_id = None
+        receipt.display_order = None
+        if receipt.source_document_id is not None:
+            document = self.db.get(BoxDocument, receipt.source_document_id)
+            if document is not None and document.bound_waybill_id == waybill.id:
+                document.bound_waybill_id = None
+
+        for box in self.boxes.list_by_receipt_id(receipt.id):
+            box.current_waybill_id = None
+            box.status = "unbound"
+            box.never_bound_direct_upload = False
+            box.unbound_reason = None
+            box.unbound_remark = None
+
+        waybill.warehouse_no = self._latest_bound_receipt_warehouse_no(waybill.id)
+        waybill.updated_by = current_user.id
+        self._refresh_receipt_totals(receipt)
+        if auto_commit:
+            self.db.commit()
+            self.db.refresh(receipt)
+        else:
+            self.db.flush()
+        return receipt
+
     def bind_receipt_to_prebooking(
         self,
         receipt_id: int,
@@ -1520,6 +1569,14 @@ class WarehouseFileService:
         previous.waybill_id = None
         self._refresh_receipt_totals(previous)
 
+    def _latest_bound_receipt_warehouse_no(self, waybill_id: int) -> str | None:
+        receipt = self.db.scalar(
+            select(WarehouseReceipt)
+            .where(WarehouseReceipt.waybill_id == waybill_id)
+            .order_by(WarehouseReceipt.updated_at.desc(), WarehouseReceipt.id.desc())
+        )
+        return receipt.warehouse_no if receipt is not None else None
+
     def _sync_receipt_boxes(
         self,
         receipt: WarehouseReceipt,
@@ -1561,6 +1618,7 @@ class WarehouseFileService:
             box.original_weight_volume_ratio = parsed.original_weight_volume_ratio
             box.volume = parsed.volume
             box.weight_volume_ratio = parsed.weight_volume_ratio
+            box.is_general_cargo = parsed.is_general_cargo
             box.source_row_number = parsed.source_row_number
             box.status = "bound"
             box.never_bound_direct_upload = False
@@ -1625,6 +1683,7 @@ class WarehouseFileService:
             box.original_weight_volume_ratio = parsed.original_weight_volume_ratio
             box.volume = parsed.volume
             box.weight_volume_ratio = parsed.weight_volume_ratio
+            box.is_general_cargo = parsed.is_general_cargo
             box.source_row_number = parsed.source_row_number
             box.status = "prebooked"
             box.never_bound_direct_upload = False
@@ -1689,6 +1748,7 @@ class WarehouseFileService:
             box.original_weight_volume_ratio = parsed.original_weight_volume_ratio
             box.volume = parsed.volume
             box.weight_volume_ratio = parsed.weight_volume_ratio
+            box.is_general_cargo = parsed.is_general_cargo
             box.source_row_number = parsed.source_row_number
             box.status = "unbound"
             box.never_bound_direct_upload = True
@@ -1725,6 +1785,7 @@ class WarehouseFileService:
         source_file_name: str | None,
         source_uploaded_at: datetime | None,
         box_count: int,
+        general_cargo_count: int,
     ) -> WarehouseReceiptListOut:
         prebooking_label = None
         if prebooking_id is not None:
@@ -1746,6 +1807,7 @@ class WarehouseFileService:
             weight_volume_ratio=receipt.weight_volume_ratio,
             channel_tags=list(receipt.channel_tags or []),
             box_count=box_count,
+            general_cargo_count=general_cargo_count,
             display_order=receipt.display_order,
             uploaded_at=source_uploaded_at or receipt.created_at,
             created_at=receipt.created_at,
@@ -1786,18 +1848,19 @@ def parse_warehouse_xlsx(file_name: str, content: bytes) -> WarehouseFileParseRe
         raise bad_request("warehouse_file_empty")
 
     try:
-        workbook = load_workbook(BytesIO(content), read_only=True, data_only=True)
+        workbook = load_workbook(BytesIO(content), read_only=False, data_only=True)
     except Exception as exc:
         raise bad_request("warehouse_file_invalid_xlsx") from exc
 
     worksheet = workbook.active
-    rows = worksheet.iter_rows(values_only=True)
+    rows = worksheet.iter_rows()
     header_row_number = 0
     header_values: list[Any] = []
     for row_number, row in enumerate(rows, start=1):
-        if any(_clean_text(value) for value in row):
+        row_values = [cell.value for cell in row]
+        if any(_clean_text(value) for value in row_values):
             header_row_number = row_number
-            header_values = list(row)
+            header_values = row_values
             break
     if not header_values:
         raise bad_request("warehouse_file_missing_header")
@@ -1816,7 +1879,8 @@ def parse_warehouse_xlsx(file_name: str, content: bytes) -> WarehouseFileParseRe
     last_valid_box_no: str | None = None
 
     for row_number, row in enumerate(rows, start=header_row_number + 1):
-        values = list(row)
+        row_cells = list(row)
+        values = [cell.value for cell in row_cells]
         if not any(_clean_text(value) for value in values):
             skipped_count += 1
             continue
@@ -1853,6 +1917,7 @@ def parse_warehouse_xlsx(file_name: str, content: bytes) -> WarehouseFileParseRe
             continue
 
         last_valid_box_no = box_no
+        is_general_cargo = _row_marks_general_cargo(row_cells, values, column_map)
         item = ParsedWarehouseBoxItem(
             warehouse_waybill_no=warehouse_waybill_no,
             goods_name=goods_name,
@@ -1874,6 +1939,7 @@ def parse_warehouse_xlsx(file_name: str, content: bytes) -> WarehouseFileParseRe
                 volume=volume,
                 weight_volume_ratio=Decimal("0.000"),
                 source_row_number=row_number,
+                is_general_cargo=is_general_cargo,
                 raw_data=raw_data,
                 items=[],
             )
@@ -1881,6 +1947,7 @@ def parse_warehouse_xlsx(file_name: str, content: bytes) -> WarehouseFileParseRe
             box_order.append(box_no)
 
         parsed_box.items.append(item)
+        parsed_box.is_general_cargo = parsed_box.is_general_cargo or is_general_cargo
         if quantity is not None:
             parsed_box.quantity = (parsed_box.quantity or 0) + quantity
         parsed_box.weight = (parsed_box.weight + weight).quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
@@ -2225,6 +2292,38 @@ def _format_no_valid_rows_error(errors: list[WarehouseFileImportError]) -> str:
     details = "；".join(f"第 {item.row_number} 行（{item.message}）" for item in errors[:5])
     suffix = f"；另 {len(errors) - 5} 行" if len(errors) > 5 else ""
     return f"没有有效货物行，失败行：{details}{suffix}"
+
+
+def _row_marks_general_cargo(row_cells: list[Any], values: list[Any], column_map: dict[str, int]) -> bool:
+    return _row_has_general_cargo_fill(row_cells, values, column_map) or _row_has_general_cargo_marker(values, column_map)
+
+
+def _row_has_general_cargo_marker(values: list[Any], column_map: dict[str, int]) -> bool:
+    if not column_map:
+        return False
+    weight_volume_index = column_map.get("original_weight_volume_ratio")
+    marker_index = (weight_volume_index if weight_volume_index is not None else max(column_map.values())) + 1
+    marker_text = _clean_text(_value_at(values, marker_index))
+    return any(marker in marker_text for marker in GENERAL_CARGO_MARKERS)
+
+
+def _row_has_general_cargo_fill(row_cells: list[Any], values: list[Any], column_map: dict[str, int]) -> bool:
+    effective_indices = [
+        index
+        for index in sorted(set(column_map.values()))
+        if _clean_text(_value_at(values, index))
+    ]
+    if not effective_indices:
+        return False
+    return all(index < len(row_cells) and _cell_has_non_default_fill(row_cells[index]) for index in effective_indices)
+
+
+def _cell_has_non_default_fill(cell: Any) -> bool:
+    fill = getattr(cell, "fill", None)
+    if fill is None:
+        return False
+    fill_type = getattr(fill, "fill_type", None) or getattr(fill, "patternType", None)
+    return bool(fill_type and fill_type != "none")
 
 
 def _build_column_map(header_values: list[Any]) -> dict[str, int]:

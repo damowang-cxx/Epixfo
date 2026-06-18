@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 from io import BytesIO
 from typing import Any
 
@@ -17,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import selectinload
 
+from app.core.exceptions import bad_request
 from app.models import AirWaybill, Box, WarehouseReceipt, WaybillPlan
 from app.models.enums import WaybillLifecycleStatus
 from app.repositories.box_repository import BoxRepository
@@ -57,6 +58,27 @@ class CustomsExportService:
         stream = BytesIO()
         workbook.save(stream)
         return stream.getvalue()
+
+    def build_unbound_receipt_export(self, receipt_id: int) -> tuple[bytes, str]:
+        receipt = self.db.scalar(
+            select(WarehouseReceipt)
+            .options(selectinload(WarehouseReceipt.source_document))
+            .where(WarehouseReceipt.id == receipt_id)
+        )
+        if receipt is None:
+            raise bad_request("warehouse_receipt_not_found")
+        if receipt.waybill_id is not None or receipt.prebooking_id is not None:
+            raise bad_request("warehouse_receipt_not_unbound")
+
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "入仓号文件"
+        self._write_unbound_receipt_export_sheet(sheet, self.boxes.list_by_receipt_id(receipt.id))
+
+        stream = BytesIO()
+        workbook.save(stream)
+        source_name = _receipt_file_name(receipt) or receipt.warehouse_no
+        return stream.getvalue(), f"{source_name}-入仓号文件.xlsx"
 
     def _list_monthly_general_cargo_rows(self, year: int, month: int) -> list[tuple[AirWaybill, WarehouseReceipt, Box]]:
         start_date = date(year, month, 1)
@@ -191,10 +213,70 @@ class CustomsExportService:
         self._append_general_cargo_summary_row(sheet, total_weight, total_volume)
         self._finish_table(sheet, widths=[20, 28, 18, 20, 28, 10, 12, 16, 16])
 
+    def _write_unbound_receipt_export_sheet(self, sheet: Worksheet, boxes: list[Box]) -> None:
+        headers = ["外箱条码", "运单号", "品名", "数量", "重量", "收货体积信息", "收货重量/方", "标记"]
+        sheet.append(headers)
+        self._style_header(sheet, len(headers))
+        total_weight = Decimal("0.000")
+        total_volume = Decimal("0.000")
+
+        ordered_boxes = [box for box in boxes if not getattr(box, "is_general_cargo", False)]
+        ordered_boxes.extend(box for box in boxes if getattr(box, "is_general_cargo", False))
+
+        for box in ordered_boxes:
+            is_general_cargo = bool(getattr(box, "is_general_cargo", False))
+            marker = "普货" if is_general_cargo else ""
+            items = list(box.items or [])
+            if not items:
+                total_weight += _to_decimal(box.weight) or Decimal("0.000")
+                total_volume += _to_decimal(box.volume) or Decimal("0.000")
+                sheet.append(
+                    [
+                        box.box_no,
+                        box.warehouse_waybill_no,
+                        box.goods_name,
+                        box.quantity,
+                        _format_decimal_trim(box.weight),
+                        _format_box_volume_info(box),
+                        _format_decimal_3(box.volume),
+                        marker,
+                    ]
+                )
+                if is_general_cargo:
+                    self._highlight_current_row(sheet, 8, GENERAL_CARGO_FILL)
+                continue
+
+            total_volume += _to_decimal(box.volume) or Decimal("0.000")
+            for index, item in enumerate(items):
+                is_first = index == 0
+                total_weight += _to_decimal(item.weight) or Decimal("0.000")
+                sheet.append(
+                    [
+                        box.box_no if is_first else "",
+                        item.warehouse_waybill_no,
+                        item.goods_name,
+                        item.quantity,
+                        _format_decimal_trim(item.weight),
+                        _format_box_volume_info(box) if is_first else "",
+                        _format_decimal_3(box.volume) if is_first else "",
+                        marker,
+                    ]
+                )
+                if is_general_cargo:
+                    self._highlight_current_row(sheet, 8, GENERAL_CARGO_FILL)
+
+        self._append_unbound_receipt_summary_row(sheet, total_weight, total_volume)
+        self._finish_table(sheet, widths=[18, 20, 28, 10, 12, 16, 16, 12])
+
     @staticmethod
     def _highlight_general_cargo_row(sheet: Worksheet) -> None:
         for cell in sheet[sheet.max_row][:7]:
             cell.fill = GENERAL_CARGO_FILL
+
+    @staticmethod
+    def _highlight_current_row(sheet: Worksheet, columns: int, fill: PatternFill) -> None:
+        for cell in sheet[sheet.max_row][:columns]:
+            cell.fill = fill
 
     @staticmethod
     def _append_inbound_summary_row(sheet: Worksheet, total_weight: Decimal, total_volume: Decimal) -> None:
@@ -243,6 +325,31 @@ class CustomsExportService:
             ]
         )
         for cell in sheet[sheet.max_row][5:9]:
+            cell.fill = SUMMARY_FILL
+            cell.font = Font(bold=True)
+
+    @staticmethod
+    def _append_unbound_receipt_summary_row(sheet: Worksheet, total_weight: Decimal, total_volume: Decimal) -> None:
+        total_weight = total_weight.quantize(DECIMAL_001)
+        total_volume = total_volume.quantize(DECIMAL_001)
+        total_density = (
+            (total_weight / total_volume).quantize(DECIMAL_001)
+            if total_volume > 0
+            else Decimal("0.000")
+        )
+        sheet.append(
+            [
+                "",
+                "",
+                "",
+                "总计",
+                _format_decimal_trim(total_weight),
+                _format_decimal_3(total_density),
+                _format_decimal_3(total_volume),
+                "",
+            ]
+        )
+        for cell in sheet[sheet.max_row][3:7]:
             cell.fill = SUMMARY_FILL
             cell.font = Font(bold=True)
 
@@ -411,10 +518,7 @@ def _extract_dimensions_text(value: Any) -> str:
 
 def _format_dimension_part(value: str) -> str:
     decimal = Decimal(value)
-    text = format(decimal, "f")
-    if "." in text:
-        text = text.rstrip("0").rstrip(".")
-    return text or "0"
+    return str(decimal.to_integral_value(rounding=ROUND_DOWN))
 
 
 def _to_decimal(value: Decimal | int | float | str | None) -> Decimal | None:
