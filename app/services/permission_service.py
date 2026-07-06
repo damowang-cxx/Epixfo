@@ -81,7 +81,11 @@ class PermissionService:
 
     @classmethod
     def redact_waybill(cls, data: dict, user: User) -> dict:
-        if cls.has_role(user, UserRoleCode.CUSTOMER_SERVICE) and not cls.has_role(user, UserRoleCode.ADMIN):
+        roles = cls.role_codes(user)
+        can_view_internal = bool(roles.intersection({UserRoleCode.ADMIN.value, UserRoleCode.ROUTE_STAFF.value}))
+        if cls.has_role(user, UserRoleCode.CUSTOMER_SERVICE) and not can_view_internal:
             for field in SENSITIVE_WAYBILL_FIELDS:
                 data[field] = None
+        elif not can_view_internal:
+            data["internal_remark"] = None
         return data

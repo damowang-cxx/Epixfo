@@ -524,6 +524,7 @@ class WaybillImportTemplateParser:
                 departure_port=departure_port,
                 destination_port=destination_port,
                 planned_route_text=route_text,
+                internal_remark=_clean_text(cell("内部备注")) or None,
                 source_updated_at=local_now(),
             )
         except Exception as exc:

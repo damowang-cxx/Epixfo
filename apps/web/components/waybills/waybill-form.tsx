@@ -57,13 +57,13 @@ type FieldMeta = {
 
 const fields: FieldMeta[] = [
   { key: "waybill_no", label: "提单号", readonlyOnEdit: true, requiredOnCreate: true },
-  { key: "departure_port", label: "始发港", requiredOnCreate: true },
-  { key: "destination_port", label: "目的港", requiredOnCreate: true },
+  { key: "departure_port", label: "始发港" },
+  { key: "destination_port", label: "目的港" },
   { key: "warehouse_no", label: "入仓号" },
   { key: "outbound_date", label: "出仓日期", type: "date" },
   { key: "planned_flight_info", label: "计划航班信息", requiredOnCreate: true },
   { key: "planned_destination", label: "计划目的港" },
-  { key: "planned_route_text", label: "人工计划航程", requiredOnCreate: true },
+  { key: "planned_route_text", label: "人工计划航程" },
   { key: "booked_weight", label: "订舱重量", type: "number", requiredOnCreate: true },
   { key: "booked_volume", label: "订舱方数", type: "number", requiredOnCreate: true },
   { key: "density", label: "密度", type: "number" },

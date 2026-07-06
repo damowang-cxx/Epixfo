@@ -51,6 +51,17 @@ def _workbook_bytes(rows: list[list[object]]) -> bytes:
     return buffer.getvalue()
 
 
+def _workbook_bytes_with_headers(headers: list[str], rows: list[list[object]]) -> bytes:
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.append(headers)
+    for row in rows:
+        worksheet.append(row)
+    buffer = BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
 def test_waybill_import_parser_maps_template_columns() -> None:
     content = _workbook_bytes(
         [
@@ -178,6 +189,17 @@ def test_waybill_import_parser_planner_mode_is_lenient() -> None:
     assert ("资料数据", "lookup_not_found") in messages
     assert ("航班信息", "invalid_planned_flight_info") in messages
     assert ("订舱重量", "invalid_decimal") in messages
+
+
+def test_waybill_import_parser_planner_mode_reads_internal_remark() -> None:
+    headers = ["提单号", "航班信息", "内部备注"]
+    content = _workbook_bytes_with_headers(headers, [["176-29600664", "", "仅管理员可见"]])
+
+    result = WaybillImportTemplateParser().parse_planner(content, source_id_base=1000)
+
+    assert result.errors == []
+    assert len(result.rows) == 1
+    assert result.rows[0].internal_remark == "仅管理员可见"
 
 
 def test_waybill_import_parser_requires_template_headers() -> None:

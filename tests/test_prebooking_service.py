@@ -58,3 +58,13 @@ def test_convert_payload_can_override_outbound_date() -> None:
     )
 
     assert merged["outbound_date"] == date(2026, 6, 3)
+
+
+def test_convert_payload_can_explicitly_clear_internal_remark() -> None:
+    service = PrebookingService.__new__(PrebookingService)
+    merged = service._merge_convert_payload(
+        _prebooking(internal_remark="original note"),
+        WaybillCreate(waybill_no="176-29600664", internal_remark=None),
+    )
+
+    assert merged["internal_remark"] is None

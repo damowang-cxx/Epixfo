@@ -21,8 +21,7 @@ function parseDimensions(value?: string | null) {
 }
 
 function formatDimension(value: number) {
-  const rounded = Math.round(value * 100) / 100;
-  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2).replace(/\.?0+$/, "");
+  return String(Math.max(1, Math.round(value)));
 }
 
 export function formatCalculatedVolumeInfo(item: CargoBox) {

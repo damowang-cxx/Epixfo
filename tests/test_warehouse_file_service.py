@@ -995,7 +995,7 @@ def test_batch_delete_unbound_receipts_reports_bound_receipt_failure() -> None:
     assert service.db.rollback_count == 1
 
 
-def test_recalculate_box_volumes_scales_single_item_boxes_to_target_volume() -> None:
+def test_recalculate_box_volumes_fits_single_item_boxes_to_target_range_with_integer_dimensions() -> None:
     waybill = SimpleNamespace(id=7, waybill_no="784-00000001", warehouse_no="AMS-IN-001")
     service = WarehouseFileService.__new__(WarehouseFileService)
     service.db = FakeDb()
@@ -1007,20 +1007,27 @@ def test_recalculate_box_volumes_scales_single_item_boxes_to_target_volume() -> 
     ]
     user = SimpleNamespace(id=5, is_superuser=True, roles=[])
 
-    result = service.recalculate_box_volumes(7, Decimal("9.500"), user)
+    result = service.recalculate_box_volumes(7, Decimal("9.400"), user)
 
     assert result.adjusted is True
     assert str(result.old_total_volume) == "10.000"
     assert str(result.original_total_volume) == "10.000"
     assert str(result.fixed_total_volume) == "4.000"
     assert str(result.adjustable_total_volume) == "6.000"
-    assert str(result.new_total_volume) == "9.500"
-    assert [str(box.volume) for box in service.boxes.boxes_list] == ["5.500", "4.000"]
-    assert str(service.boxes.boxes_list[0].weight_volume_ratio) == "1.818"
-    assert service.boxes.boxes_list[0].raw_data["volume_recalculation"]["target_volume"] == "9.500"
-    assert service.boxes.boxes_list[0].raw_data["volume_recalculation"]["base_volume"] == "6.000"
-    assert service.boxes.boxes_list[0].raw_data["volume_recalculation"]["calculated_volume_info"].endswith("(5.5)")
-    assert "*" in service.boxes.boxes_list[0].raw_data["volume_recalculation"]["calculated_volume_info"]
+    assert Decimal("9.400") <= result.new_total_volume <= Decimal("9.900")
+    assert Decimal("5.400") <= service.boxes.boxes_list[0].volume <= Decimal("5.900")
+    assert str(service.boxes.boxes_list[1].volume) == "4.000"
+    assert str(service.boxes.boxes_list[0].weight_volume_ratio) == str(
+        (Decimal("10.000") / service.boxes.boxes_list[0].volume).quantize(Decimal("0.001"))
+    )
+    recalculation = service.boxes.boxes_list[0].raw_data["volume_recalculation"]
+    assert recalculation["source"] == "target_volume_integer_dimensions"
+    assert recalculation["target_volume"] == "9.400"
+    assert recalculation["target_volume_upper"] == "9.900"
+    assert recalculation["base_volume"] == "6.000"
+    dimension_text = recalculation["calculated_volume_info"].split("(", 1)[0]
+    assert all(part.isdigit() for part in dimension_text.split("*"))
+    assert recalculation["integer_dimensions"] == [int(part) for part in dimension_text.split("*")]
     assert service.boxes.boxes_list[1].raw_data["volume_recalculation"]["adjustable"] is False
     assert service.boxes.boxes_list[1].raw_data["volume_recalculation"]["calculated_volume_info"] == "100*100*400(4)"
     assert service.db.committed is True
@@ -1033,27 +1040,107 @@ def test_recalculate_box_volumes_scales_single_item_boxes_to_target_volume() -> 
     assert service.db.committed is True
 
 
-def test_recalculate_box_volumes_rejects_target_below_multi_item_fixed_volume() -> None:
+def test_recalculate_box_volumes_accepts_target_range_when_exact_integer_fit_is_unnecessary() -> None:
     waybill = SimpleNamespace(id=7, waybill_no="784-00000001", warehouse_no="AMS-IN-001")
     service = WarehouseFileService.__new__(WarehouseFileService)
     service.db = FakeDb()
     service.boxes = FakeBoxRepository()
     service.waybills = FakeWaybillRepository(waybill)
     service.boxes.boxes_list = [
-        _fake_box(4, "BOX-001", "10.000", "6.000"),
-        _fake_box(5, "BOX-002", "5.000", "4.000", items_count=2),
+        _fake_box(4, "BOX-001", "10.000", "1.930", original_volume_info="100*100*193"),
+        _fake_box(5, "BOX-002", "10.000", "1.940", original_volume_info="100*100*194"),
+    ]
+    user = SimpleNamespace(id=5, is_superuser=True, roles=[])
+
+    result = service.recalculate_box_volumes(7, Decimal("4.000"), user)
+
+    assert result.adjusted is True
+    assert str(result.old_total_volume) == "3.870"
+    assert Decimal("4.000") <= result.new_total_volume <= Decimal("4.500")
+    for box in service.boxes.boxes_list:
+        info = box.raw_data["volume_recalculation"]["calculated_volume_info"]
+        dimension_text = info.split("(", 1)[0]
+        assert all(part.isdigit() for part in dimension_text.split("*"))
+
+
+def test_recalculate_box_volumes_distributes_integer_dimension_changes_across_boxes() -> None:
+    waybill = SimpleNamespace(id=7, waybill_no="784-00000001", warehouse_no="AMS-IN-001")
+    service = WarehouseFileService.__new__(WarehouseFileService)
+    service.db = FakeDb()
+    service.boxes = FakeBoxRepository()
+    service.waybills = FakeWaybillRepository(waybill)
+    service.boxes.boxes_list = [
+        _fake_box(4, "BOX-001", "10.000", "1.000", original_volume_info="100*100*100"),
+        _fake_box(5, "BOX-002", "10.000", "1.000", original_volume_info="100*100*100"),
+    ]
+    user = SimpleNamespace(id=5, is_superuser=True, roles=[])
+
+    result = service.recalculate_box_volumes(7, Decimal("2.200"), user)
+
+    assert Decimal("2.200") <= result.new_total_volume <= Decimal("2.700")
+    assert result.adjusted_box_count == 2
+    assert all(box.volume > Decimal("1.000") for box in service.boxes.boxes_list)
+
+
+def test_recalculate_box_volumes_can_shrink_integer_dimensions_for_lower_target() -> None:
+    waybill = SimpleNamespace(id=7, waybill_no="784-00000001", warehouse_no="AMS-IN-001")
+    service = WarehouseFileService.__new__(WarehouseFileService)
+    service.db = FakeDb()
+    service.boxes = FakeBoxRepository()
+    service.waybills = FakeWaybillRepository(waybill)
+    service.boxes.boxes_list = [
+        _fake_box(4, "BOX-001", "10.000", "2.000", original_volume_info="100*100*200"),
+        _fake_box(5, "BOX-002", "10.000", "2.000", original_volume_info="100*100*200"),
+    ]
+    user = SimpleNamespace(id=5, is_superuser=True, roles=[])
+
+    result = service.recalculate_box_volumes(7, Decimal("3.000"), user)
+
+    assert Decimal("3.000") <= result.new_total_volume <= Decimal("3.500")
+    assert all(box.volume < Decimal("2.000") for box in service.boxes.boxes_list)
+
+
+def test_recalculate_box_volumes_rejects_target_below_fixed_volume_upper_bound() -> None:
+    waybill = SimpleNamespace(id=7, waybill_no="784-00000001", warehouse_no="AMS-IN-001")
+    service = WarehouseFileService.__new__(WarehouseFileService)
+    service.db = FakeDb()
+    service.boxes = FakeBoxRepository()
+    service.waybills = FakeWaybillRepository(waybill)
+    service.boxes.boxes_list = [
+        _fake_box(4, "BOX-001", "10.000", "6.000", original_volume_info="100*100*600"),
+        _fake_box(5, "BOX-002", "5.000", "4.000", items_count=2, original_volume_info="100*100*400"),
     ]
     user = SimpleNamespace(id=5, is_superuser=True, roles=[])
 
     with pytest.raises(HTTPException) as exc_info:
-        service.recalculate_box_volumes(7, Decimal("3.500"), user)
+        service.recalculate_box_volumes(7, Decimal("3.499"), user)
 
     assert exc_info.value.detail["error_code"] == "target_volume_less_than_fixed_boxes"
     assert exc_info.value.detail["fixed_total_volume"] == "4.000"
+    assert exc_info.value.detail["target_volume_upper"] == "3.999"
     assert service.db.committed is False
 
 
-def test_recalculate_unbound_receipt_box_volumes_scales_receipt_boxes() -> None:
+def test_recalculate_box_volumes_rejects_unparseable_single_item_boxes_when_target_is_unmet() -> None:
+    waybill = SimpleNamespace(id=7, waybill_no="784-00000001", warehouse_no="AMS-IN-001")
+    service = WarehouseFileService.__new__(WarehouseFileService)
+    service.db = FakeDb()
+    service.boxes = FakeBoxRepository()
+    service.waybills = FakeWaybillRepository(waybill)
+    service.boxes.boxes_list = [
+        _fake_box(4, "BOX-001", "10.000", "3.870"),
+    ]
+    user = SimpleNamespace(id=5, is_superuser=True, roles=[])
+
+    with pytest.raises(HTTPException) as exc_info:
+        service.recalculate_box_volumes(7, Decimal("4.000"), user)
+
+    assert exc_info.value.detail["error_code"] == "warehouse_adjustable_volume_required"
+    assert service.boxes.boxes_list[0].volume == Decimal("3.870")
+    assert service.db.committed is False
+
+
+def test_recalculate_unbound_receipt_box_volumes_fits_receipt_boxes_to_target_range() -> None:
     waybill = SimpleNamespace(id=7, waybill_no="784-00000001", warehouse_no="AMS-IN-001")
     service = WarehouseFileService.__new__(WarehouseFileService)
     service.db = FakeDb()
@@ -1072,8 +1159,8 @@ def test_recalculate_unbound_receipt_box_volumes_scales_receipt_boxes() -> None:
     receipt.channel_tags = []
     service.boxes.receipts_by_no[receipt.warehouse_no] = receipt
     service.boxes.boxes_list = [
-        _fake_box(4, "DHL001", "10.000", "5.000"),
-        _fake_box(5, "DHL002", "5.000", "3.000", items_count=2),
+        _fake_box(4, "DHL001", "10.000", "5.000", original_volume_info="100*100*500"),
+        _fake_box(5, "DHL002", "5.000", "3.000", items_count=2, original_volume_info="100*100*300"),
     ]
     for box in service.boxes.boxes_list:
         box.current_waybill_id = None
@@ -1085,10 +1172,11 @@ def test_recalculate_unbound_receipt_box_volumes_scales_receipt_boxes() -> None:
     assert result.adjusted is True
     assert str(result.old_total_volume) == "8.000"
     assert str(result.fixed_total_volume) == "3.000"
-    assert str(result.new_total_volume) == "7.000"
-    assert [str(box.volume) for box in service.boxes.boxes_list] == ["4.000", "3.000"]
-    assert str(receipt.total_volume) == "7.000"
-    assert str(receipt.weight_volume_ratio) == "2.143"
+    assert Decimal("7.000") <= result.new_total_volume <= Decimal("7.500")
+    assert Decimal("4.000") <= service.boxes.boxes_list[0].volume <= Decimal("4.500")
+    assert str(service.boxes.boxes_list[1].volume) == "3.000"
+    assert receipt.total_volume == result.new_total_volume
+    assert receipt.weight_volume_ratio == (Decimal("15.000") / result.new_total_volume).quantize(Decimal("0.001"))
     assert service.db.committed is True
 
 

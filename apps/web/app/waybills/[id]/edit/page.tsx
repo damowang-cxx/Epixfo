@@ -7,22 +7,25 @@ import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
 import { WaybillForm } from "@/components/waybills/waybill-form";
+import { useAuth } from "@/components/layout/auth-provider";
 import { apiClient } from "@/lib/client-api";
 import type { Waybill } from "@/lib/types";
 
 export default function WaybillEditPage() {
   const params = useParams<{ id: string }>();
   const id = Array.isArray(params.id) ? params.id[0] : params.id;
+  const { hasRole, loading } = useAuth();
+  const canEditWaybill = hasRole("admin") || hasRole("route_staff");
   const [waybill, setWaybill] = useState<Waybill | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (!id) return;
+    if (!id || loading || !canEditWaybill) return;
     apiClient
       .get<Waybill>(`/waybills/${id}`)
       .then(setWaybill)
       .catch((err) => setError(err instanceof Error ? err.message : "提单加载失败"));
-  }, [id]);
+  }, [canEditWaybill, id, loading]);
 
   return (
     <>
@@ -40,9 +43,12 @@ export default function WaybillEditPage() {
           ) : null
         }
       />
+      {!loading && !canEditWaybill ? (
+        <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">无权限编辑提单。</div>
+      ) : null}
       {error ? <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div> : null}
-      {!error && !waybill ? <div className="text-sm text-slate-500">正在加载提单...</div> : null}
-      {waybill ? <WaybillForm waybill={waybill} /> : null}
+      {!loading && canEditWaybill && !error && !waybill ? <div className="text-sm text-slate-500">正在加载提单...</div> : null}
+      {canEditWaybill && waybill ? <WaybillForm waybill={waybill} /> : null}
     </>
   );
 }

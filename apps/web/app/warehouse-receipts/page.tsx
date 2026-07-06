@@ -116,6 +116,12 @@ function formatDecimal(value?: string | number | null) {
   return num.toFixed(3).replace(/\.?0+$/, "");
 }
 
+function formatTargetVolumeRange(value?: string | number | null) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return `${formatDecimal(value)}~${formatDecimal(value)}`;
+  return `${formatDecimal(num)}~${formatDecimal(num + 0.5)}`;
+}
+
 function formatReceiptDensity(receipt: WarehouseReceipt) {
   const volume = Number(receipt.total_volume);
   if (!Number.isFinite(volume) || volume <= 0) return "-";
@@ -178,9 +184,10 @@ function volumeCalculationError(error: unknown): VolumeErrorDialog {
   const details = [
     ["错误码", detail.error_code],
     ["目标方数(CBM)", detail.target_volume],
+    ["目标方数上限(CBM)", detail.target_volume_upper],
     ["原始总方数(CBM)", detail.original_total_volume],
-    ["一箱多件固定方数(CBM)", detail.fixed_total_volume],
-    ["可调整方数(CBM)", detail.adjustable_total_volume],
+    ["固定箱号方数(CBM)", detail.fixed_total_volume],
+    ["可整数调整方数(CBM)", detail.adjustable_total_volume],
     ["当前总方数(CBM)", detail.total_volume]
   ]
     .filter((item): item is [string, string | number] => item[1] !== undefined && item[1] !== null && item[1] !== "")
@@ -744,8 +751,8 @@ export default function WarehouseReceiptsPage() {
       void loadAllReceipts();
       setMessage(
         result.adjusted
-          ? `入仓号 ${volumeReceipt.warehouse_no} 方数已按目标 ${formatDecimal(result.target_volume)} CBM 等比调整：${formatDecimal(result.old_total_volume)} → ${formatDecimal(result.new_total_volume)}。一箱多件固定 ${formatDecimal(result.fixed_total_volume)} CBM，调整一箱一件 ${result.adjusted_box_count} 个。`
-          : `入仓号 ${volumeReceipt.warehouse_no} 当前总方数已等于目标 ${formatDecimal(result.target_volume)} CBM，无需调整。`
+          ? `入仓号 ${volumeReceipt.warehouse_no} 方数已按整数长宽高调整到目标区间 ${formatTargetVolumeRange(result.target_volume)} CBM：${formatDecimal(result.old_total_volume)} → ${formatDecimal(result.new_total_volume)}。固定箱号 ${formatDecimal(result.fixed_total_volume)} CBM，实际调整 ${result.adjusted_box_count} 个。`
+          : `入仓号 ${volumeReceipt.warehouse_no} 当前总方数已在目标区间 ${formatTargetVolumeRange(result.target_volume)} CBM，无需调整。`
       );
     } catch (error) {
       setVolumeReceipt(null);
@@ -1710,7 +1717,7 @@ export default function WarehouseReceiptsPage() {
               />
               {targetVolumeError ? <div className="text-xs text-red-600">{targetVolumeError}</div> : null}
             </div>
-            <div className="text-xs text-slate-500">系统只会等比调整一箱一件的箱号；一箱多件箱号保持原始方数不变。</div>
+            <div className="text-xs text-slate-500">系统会按整数长宽高调整有尺寸的一箱一件箱号；结果允许落在目标值到目标值 +0.5 CBM 区间，一箱多件或缺少长宽高的箱号保持原始方数。</div>
           </div>
           <div className="mt-5 flex justify-end gap-2">
             <Button type="button" variant="secondary" disabled={saving} onClick={() => setVolumeReceipt(null)}>

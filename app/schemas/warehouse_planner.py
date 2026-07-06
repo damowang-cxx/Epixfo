@@ -40,6 +40,7 @@ class WarehousePlannerRow(BaseModel):
     departure_port: str | None = Field(default=None, max_length=16)
     destination_port: str | None = Field(default=None, max_length=16)
     planned_route_text: str | None = Field(default=None, max_length=255)
+    internal_remark: str | None = None
     source_updated_at: datetime | None = None
 
     @field_validator("receipt_ids")
@@ -85,6 +86,7 @@ class WarehousePlannerCandidate(BaseModel):
     departure_port: str | None = None
     destination_port: str | None = None
     planned_route_text: str | None = None
+    internal_remark: str | None = None
     lifecycle_status: str | None = None
     source_updated_at: datetime
 

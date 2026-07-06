@@ -425,6 +425,7 @@ export interface WarehousePlannerRow {
   departure_port?: string | null;
   destination_port?: string | null;
   planned_route_text?: string | null;
+  internal_remark?: string | null;
   source_updated_at?: string | null;
 }
 
@@ -454,6 +455,7 @@ export interface WarehousePlannerCandidate {
   departure_port?: string | null;
   destination_port?: string | null;
   planned_route_text?: string | null;
+  internal_remark?: string | null;
   lifecycle_status?: string | null;
   source_updated_at: string;
 }

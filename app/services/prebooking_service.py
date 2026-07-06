@@ -246,6 +246,7 @@ class PrebookingService:
 
     def _merge_convert_payload(self, prebooking: WaybillPrebooking, payload: WaybillCreate) -> dict:
         data = payload.model_dump(exclude_unset=True)
+        explicit_fields = getattr(payload, "model_fields_set", set())
         defaults = {
             "carrier_agent_id": prebooking.carrier_agent_id,
             "booked_volume": prebooking.booked_volume,
@@ -276,6 +277,8 @@ class PrebookingService:
             "payment_date": prebooking.payment_date,
         }
         for key, value in defaults.items():
+            if key in {"customer_remark", "internal_remark"} and key in explicit_fields and data.get(key) is None:
+                continue
             if data.get(key) in (None, "") and value is not None:
                 data[key] = value
         if data.get("departure_port") in (None, ""):
@@ -286,9 +289,6 @@ class PrebookingService:
         required = {
             "waybill_no": "waybill_no_required",
             "carrier_agent_id": "carrier_agent_required",
-            "departure_port": "departure_port_required",
-            "destination_port": "destination_port_required",
-            "planned_route_text": "planned_route_required",
             "booked_weight": "booked_weight_required",
             "booked_volume": "booked_volume_required",
         }

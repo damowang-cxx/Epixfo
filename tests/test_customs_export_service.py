@@ -188,7 +188,7 @@ def test_customs_export_uses_calculated_dimensions_without_cbm_suffix() -> None:
         weight_volume_ratio=Decimal("118.421"),
         raw_data={
             "volume_recalculation": {
-                "calculated_volume_info": "49.15*39.32*39.32(0.076)",
+                "calculated_volume_info": "49*39*39(0.075)",
             }
         },
         items=[],
@@ -197,7 +197,7 @@ def test_customs_export_uses_calculated_dimensions_without_cbm_suffix() -> None:
     workbook = _load_export(_make_service([box]).build_waybill_export(_make_waybill()))
     inbound = workbook.active
 
-    assert inbound[2][5].value == "49.15*39.32*39.32"
+    assert inbound[2][5].value == "49*39*39"
     assert inbound[2][6].value == "0.076"
     assert inbound[3][5].value == "118.421"
     assert inbound[3][6].value == "0.076"

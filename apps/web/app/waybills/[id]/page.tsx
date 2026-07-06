@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { Ban, Download, Pencil, Play, Trash2, Unlink, Upload, UserCheck } from "lucide-react";
+import { Ban, Check, Download, Pencil, Play, Trash2, Unlink, Upload, UserCheck, X } from "lucide-react";
 import { AlertLevelBadge, LifecycleBadge } from "@/components/ui/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ import { Panel } from "@/components/ui/panel";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
+import { Textarea } from "@/components/ui/textarea";
 import { CargoBoxesTable } from "@/components/waybills/cargo-boxes-table";
 import { WaybillForm } from "@/components/waybills/waybill-form";
 import { WarehouseFileUploadButton } from "@/components/waybills/warehouse-file-upload-button";
@@ -67,6 +68,67 @@ function FieldGrid({ items }: { items: Array<[string, unknown]> }) {
           <div className="mt-1 font-medium text-slate-800">{compact(value)}</div>
         </div>
       ))}
+    </div>
+  );
+}
+
+function EditableRemarkBox({
+  label,
+  value,
+  canEdit,
+  onSave
+}: {
+  label: string;
+  value?: string | null;
+  canEdit: boolean;
+  onSave: (value: string | null) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value || "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  async function save() {
+    setSaving(true);
+    setError("");
+    try {
+      const nextValue = draft.trim() ? draft.trim() : null;
+      await onSave(nextValue);
+      setEditing(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "保存失败。");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="relative rounded-md border border-slate-100 p-3 text-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div className="text-xs text-slate-500">{label}</div>
+        {canEdit ? (
+          editing ? (
+            <div className="flex shrink-0 gap-1">
+              <Button type="button" variant="ghost" size="icon" className="h-7 w-7" disabled={saving} onClick={() => void save()} aria-label={`保存${label}`}>
+                <Check className="h-4 w-4 text-emerald-600" />
+              </Button>
+              <Button type="button" variant="ghost" size="icon" className="h-7 w-7" disabled={saving} onClick={() => { setDraft(value || ""); setError(""); setEditing(false); }} aria-label={`取消编辑${label}`}>
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+          ) : (
+            <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setDraft(value || ""); setError(""); setEditing(true); }} aria-label={`编辑${label}`}>
+              <Pencil className="h-4 w-4" />
+            </Button>
+          )
+        ) : null}
+      </div>
+      {editing ? (
+        <Textarea className="mt-2 min-h-24" value={draft} disabled={saving} onChange={(event) => setDraft(event.target.value)} />
+      ) : (
+        <div className="mt-2 whitespace-pre-wrap font-medium text-slate-800">{compact(value)}</div>
+      )}
+      {error ? <div className="mt-2 text-xs text-red-600">{error}</div> : null}
     </div>
   );
 }
@@ -168,7 +230,7 @@ export default function WaybillDetailPage() {
         groups.set(key, {
           key,
           receiptId: receipt?.id,
-          warehouseNo: receipt?.warehouse_no || waybill?.warehouse_no,
+          warehouseNo: receipt?.warehouse_no,
           totalQuantity: receipt?.total_quantity,
           totalWeight: receipt?.total_weight,
           totalVolume: receipt?.total_volume,
@@ -181,7 +243,7 @@ export default function WaybillDetailPage() {
       groups.get(key)?.boxes.push(box);
     }
     return Array.from(groups.values());
-  }, [boxes, waybill?.warehouse_no]);
+  }, [boxes]);
 
   async function triggerQuery() {
     if (!id) return;
@@ -281,6 +343,12 @@ export default function WaybillDetailPage() {
     }
   }
 
+  async function updateRemark(field: "customer_remark" | "internal_remark", value: string | null) {
+    if (!id) return;
+    const updated = await apiClient.patch<Waybill>(`/waybills/${id}`, { [field]: value });
+    setWaybill(updated);
+  }
+
   async function uploadAirlineFile(files: FileList | null) {
     const file = files?.[0];
     if (!id || !file || !canEditBoxes) return;
@@ -338,6 +406,10 @@ export default function WaybillDetailPage() {
     setMessage("");
     try {
       await apiClient.delete<void>(`/waybills/${id}/warehouse-receipts/${receiptId}`);
+      setBoxes((current) => current.filter((box) => box.warehouse_receipt_id !== receiptId));
+      setWaybill((current) =>
+        current && current.warehouse_no === warehouseNo ? { ...current, warehouse_no: null } : current
+      );
       setMessage(`入仓号 ${displayName} 已解绑，已回到未绑定箱号区。`);
       load();
     } catch (error) {
@@ -360,12 +432,14 @@ export default function WaybillDetailPage() {
                 返回列表
               </Link>
             </Button>
-            <Button asChild variant="secondary">
-              <Link href={`/waybills/${id}/edit`}>
-                <Pencil className="h-4 w-4" />
-                编辑
-              </Link>
-            </Button>
+            {canEditBoxes ? (
+              <Button asChild variant="secondary">
+                <Link href={`/waybills/${id}/edit`}>
+                  <Pencil className="h-4 w-4" />
+                  编辑
+                </Link>
+              </Button>
+            ) : null}
             <Button onClick={triggerQuery}>
               <Play className="h-4 w-4" />
               触发查询
@@ -414,7 +488,7 @@ export default function WaybillDetailPage() {
           <TabsTrigger value="events">状态事件</TabsTrigger>
           <TabsTrigger value="snapshots">查询快照</TabsTrigger>
           <TabsTrigger value="alerts">异常</TabsTrigger>
-          <TabsTrigger value="edit">编辑</TabsTrigger>
+          {canEditBoxes ? <TabsTrigger value="edit">编辑</TabsTrigger> : null}
         </TabsList>
         <TabsContent value="base">
           <Panel
@@ -484,11 +558,25 @@ export default function WaybillDetailPage() {
                 ["航空费", waybill.air_freight_cost],
                 ["其他费用", waybill.other_charge],
                 ["付款日期", waybill.payment_date],
-                ["做数据收费", waybill.data_charge],
-                ["客服备注", waybill.customer_remark],
-                ["内部备注", waybill.internal_remark]
+                ["做数据收费", waybill.data_charge]
               ]}
             />
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <EditableRemarkBox
+                label="客服备注"
+                value={waybill.customer_remark}
+                canEdit={canEditBoxes}
+                onSave={(value) => updateRemark("customer_remark", value)}
+              />
+              {canEditBoxes ? (
+                <EditableRemarkBox
+                  label="内部备注"
+                  value={waybill.internal_remark}
+                  canEdit={canEditBoxes}
+                  onSave={(value) => updateRemark("internal_remark", value)}
+                />
+              ) : null}
+            </div>
             {isAdmin ? (
               <div className="mt-4 flex flex-wrap items-center gap-2">
                 <Select value={manualStatus} onValueChange={(value) => setManualStatus(value as LifecycleStatus)}>
@@ -725,9 +813,11 @@ export default function WaybillDetailPage() {
             ) : <EmptyState title="暂无异常" description="这票提单当前没有异常记录。" />}
           </Panel>
         </TabsContent>
-        <TabsContent value="edit">
-          <WaybillForm waybill={waybill} />
-        </TabsContent>
+        {canEditBoxes ? (
+          <TabsContent value="edit">
+            <WaybillForm waybill={waybill} />
+          </TabsContent>
+        ) : null}
       </Tabs>
     </>
   );

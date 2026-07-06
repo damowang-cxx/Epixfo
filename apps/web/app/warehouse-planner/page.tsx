@@ -11,6 +11,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
+import { Textarea } from "@/components/ui/textarea";
 import { apiClient } from "@/lib/client-api";
 import { cn, compact, formatDateTime, formatOutboundDate } from "@/lib/utils";
 import type {
@@ -44,7 +45,8 @@ type PlannerField =
   | "include_tc"
   | "departure_port"
   | "destination_port"
-  | "planned_route_text";
+  | "planned_route_text"
+  | "internal_remark";
 
 const CLEAR_VALUE = "__clear__";
 const CANDIDATE_DRAG_TYPE = "application/x-warehouse-planner-candidates";
@@ -75,6 +77,7 @@ const DEFAULT_PLANNER_COLUMN_ORDER = [
   "departure_port",
   "destination_port",
   "planned_route_text",
+  "internal_remark",
   "actions"
 ] as const;
 
@@ -98,6 +101,7 @@ const PLANNER_COLUMN_LABELS: Record<PlannerColumnKey, string> = {
   departure_port: "始发港",
   destination_port: "目的港",
   planned_route_text: "航程",
+  internal_remark: "内部备注",
   actions: "操作"
 };
 
@@ -114,7 +118,8 @@ const BATCH_FIELDS: Array<{ key: PlannerField; label: string; kind: "select" | "
   { key: "include_tc", label: "含T", kind: "boolean" },
   { key: "departure_port", label: "始发港", kind: "text" },
   { key: "destination_port", label: "目的港", kind: "text" },
-  { key: "planned_route_text", label: "航程", kind: "text" }
+  { key: "planned_route_text", label: "航程", kind: "text" },
+  { key: "internal_remark", label: "内部备注", kind: "text" }
 ];
 
 function rowKey(row: Pick<WarehousePlannerRow, "source_type" | "source_id">) {
@@ -145,6 +150,7 @@ function candidateToRow(item: WarehousePlannerCandidate, channel: PlannerChannel
     departure_port: item.departure_port || "",
     destination_port: item.destination_port || "",
     planned_route_text: item.planned_route_text || "",
+    internal_remark: item.internal_remark || "",
     source_updated_at: item.source_updated_at
   };
 }
@@ -257,6 +263,13 @@ interface BoardCellSpan {
   rowSpan: number;
 }
 
+interface PlannerCommitScope {
+  allRows: WarehousePlannerRow[];
+  commitRows: WarehousePlannerRow[];
+  commitKeys: string[];
+  selectedOnly: boolean;
+}
+
 function clearBoardGroup(row: WarehousePlannerRow): WarehousePlannerRow {
   return {
     ...row,
@@ -273,6 +286,55 @@ function normalizeBoardGroups(rows: WarehousePlannerRow[]) {
     if (row.board_group_id) counts.set(row.board_group_id, (counts.get(row.board_group_id) || 0) + 1);
   }
   return rows.map((row) => (row.board_group_id && (counts.get(row.board_group_id) || 0) < 2 ? clearBoardGroup(row) : row));
+}
+
+function buildCommitScope(rows: WarehousePlannerRow[], selectedKeys: Set<string>): PlannerCommitScope {
+  if (!selectedKeys.size) {
+    return {
+      allRows: rows,
+      commitRows: rows,
+      commitKeys: rows.map(rowKey),
+      selectedOnly: false
+    };
+  }
+
+  const commitKeys = new Set<string>();
+  const selectedGroupIds = new Set(
+    rows
+      .filter((row) => selectedKeys.has(rowKey(row)) && row.board_group_id)
+      .map((row) => row.board_group_id as string)
+  );
+
+  for (const row of rows) {
+    const key = rowKey(row);
+    if (selectedKeys.has(key) || (row.board_group_id && selectedGroupIds.has(row.board_group_id))) {
+      commitKeys.add(key);
+    }
+  }
+
+  return {
+    allRows: rows,
+    commitRows: rows.filter((row) => commitKeys.has(rowKey(row))),
+    commitKeys: [...commitKeys],
+    selectedOnly: true
+  };
+}
+
+function mergeCommitRemainingRows(
+  allRows: WarehousePlannerRow[],
+  commitKeys: string[],
+  remainingRows: WarehousePlannerRow[]
+) {
+  const commitKeySet = new Set(commitKeys);
+  const remainingByKey = new Map(remainingRows.map((row) => [rowKey(row), row]));
+  return normalizeBoardGroups(
+    allRows.flatMap((row) => {
+      const key = rowKey(row);
+      if (!commitKeySet.has(key)) return [row];
+      const remaining = remainingByKey.get(key);
+      return remaining ? [remaining] : [];
+    })
+  );
 }
 
 function placeGroupAtFirstOccurrence(rows: WarehousePlannerRow[], groupId: string) {
@@ -380,6 +442,7 @@ export default function WarehousePlannerPage() {
   const [validationOpen, setValidationOpen] = useState(false);
   const [validationResult, setValidationResult] = useState<WarehousePlannerValidateResult | null>(null);
   const [commitResult, setCommitResult] = useState<WarehousePlannerCommitResult | null>(null);
+  const [commitScope, setCommitScope] = useState<PlannerCommitScope | null>(null);
   const [rowErrors, setRowErrors] = useState<Record<string, WarehousePlannerRowResult>>({});
   const [plannerImportOpen, setPlannerImportOpen] = useState(false);
   const [plannerImportResult, setPlannerImportResult] = useState<WarehousePlannerBulkImportResult | null>(null);
@@ -865,9 +928,16 @@ export default function WarehousePlannerPage() {
     setSaving(true);
     setMessage("");
     setCommitResult(null);
+    setCommitScope(null);
     try {
+      const scope = buildCommitScope(rows, selectedRows);
+      if (!scope.commitRows.length) {
+        setMessage("请选择需要录入排仓的提单。");
+        return;
+      }
       await apiClient.put("/warehouse-planner/draft", { rows });
-      const result = await apiClient.post<WarehousePlannerValidateResult>("/warehouse-planner/validate", { rows });
+      const result = await apiClient.post<WarehousePlannerValidateResult>("/warehouse-planner/validate", { rows: scope.commitRows });
+      setCommitScope(scope);
       setValidationResult(result);
       setRowErrors(Object.fromEntries(result.results.filter((item) => item.status === "invalid").map((item) => [`${item.source_type}:${item.source_id}`, item])));
       setValidationOpen(true);
@@ -879,16 +949,26 @@ export default function WarehousePlannerPage() {
   }
 
   async function commitRows(mode: "all_or_none" | "success_only") {
+    const scope = commitScope;
+    if (!scope) {
+      setMessage("请先校验需要录入排仓的提单。");
+      return;
+    }
     setSaving(true);
     setMessage("");
     try {
-      const result = await apiClient.post<WarehousePlannerCommitResult>("/warehouse-planner/commit", { rows, mode });
+      const result = await apiClient.post<WarehousePlannerCommitResult>("/warehouse-planner/commit", { rows: scope.commitRows, mode });
+      const nextRows = scope.selectedOnly
+        ? mergeCommitRemainingRows(scope.allRows, scope.commitKeys, result.remaining_rows || [])
+        : normalizeBoardGroups(result.remaining_rows || []);
+      await apiClient.put("/warehouse-planner/draft", { rows: nextRows });
       setCommitResult(result);
-      setRows(normalizeBoardGroups(result.remaining_rows || []));
+      setRows(nextRows);
       setSelectedRows(new Set());
       setRowErrors(Object.fromEntries(result.results.filter((item) => item.status === "failed").map((item) => [`${item.source_type}:${item.source_id}`, item])));
       await loadAll();
       setMessage(`录入完成：成功 ${result.success_count} 条，失败 ${result.failed_count} 条。`);
+      setCommitScope(null);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "录入排仓失败。");
     } finally {
@@ -1163,6 +1243,13 @@ export default function WarehousePlannerPage() {
         <TD><Input className="h-9 min-w-40" value={row.planned_route_text || ""} onChange={(event) => updateRow(key, { planned_route_text: event.target.value })} /></TD>
       )
     },
+    internal_remark: {
+      key: "internal_remark",
+      label: PLANNER_COLUMN_LABELS.internal_remark,
+      render: ({ row, key }) => (
+        <TD><Textarea className="min-h-20 min-w-56" value={row.internal_remark || ""} onChange={(event) => updateRow(key, { internal_remark: event.target.value })} /></TD>
+      )
+    },
     actions: {
       key: "actions",
       label: PLANNER_COLUMN_LABELS.actions,
@@ -1289,7 +1376,7 @@ export default function WarehousePlannerPage() {
           >
             {activeRows.length ? (
               <div className="w-full max-w-full overflow-x-auto rounded-md border border-slate-200 bg-white">
-                <Table className="min-w-[2080px]">
+                <Table className="min-w-[2320px]">
                   <THead>
                     <TR>
                       <TH className="w-10" />

@@ -67,7 +67,19 @@ PLANNER_EXPORT_HEADERS = [
     "始发港",
     "目的港",
     "航程",
+    "内部备注",
 ]
+
+
+def _blank_to_none(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _row_field_was_set(row: WarehousePlannerRow, field: str) -> bool:
+    return field in getattr(row, "model_fields_set", set())
 
 
 class WarehousePlannerService:
@@ -340,6 +352,7 @@ class WarehousePlannerService:
             departure_port=waybill.departure_port,
             destination_port=waybill.destination_port,
             planned_route_text=getattr(waybill.plan, "planned_route_text", None),
+            internal_remark=waybill.internal_remark,
             lifecycle_status=waybill.lifecycle_status.value if hasattr(waybill.lifecycle_status, "value") else str(waybill.lifecycle_status),
             source_updated_at=waybill.updated_at,
         )
@@ -367,6 +380,7 @@ class WarehousePlannerService:
             departure_port=prebooking.departure_port,
             destination_port=prebooking.destination_port,
             planned_route_text=prebooking.planned_route_text,
+            internal_remark=prebooking.internal_remark,
             lifecycle_status=prebooking.status,
             source_updated_at=prebooking.updated_at,
         )
@@ -597,9 +611,6 @@ class WarehousePlannerService:
         required = {
             "waybill_no": "waybill_no_required",
             "carrier_agent_id": "carrier_agent_required",
-            "departure_port": "departure_port_required",
-            "destination_port": "destination_port_required",
-            "planned_route_text": "planned_route_required",
         }
         if not (row and row.board_group_id and row.board_booked_weight is not None):
             required["booked_weight"] = "booked_weight_required"
@@ -690,7 +701,7 @@ class WarehousePlannerService:
     def _waybill_update_data(self, row: WarehousePlannerRow) -> dict[str, Any]:
         use_board_volume = row.board_group_id and row.board_booked_volume is not None
         use_board_weight = row.board_group_id and row.board_booked_weight is not None
-        return {
+        data = {
             "waybill_no": row.waybill_no,
             "carrier_agent_id": row.carrier_agent_id,
             "planned_flight_no": row.planned_flight_no,
@@ -706,11 +717,14 @@ class WarehousePlannerService:
             "destination_port": row.destination_port,
             "planned_route_text": row.planned_route_text,
         }
+        if _row_field_was_set(row, "internal_remark"):
+            data["internal_remark"] = _blank_to_none(row.internal_remark)
+        return data
 
     def _import_create_data(self, row: WarehousePlannerRow) -> dict[str, Any]:
         use_board_volume = row.board_group_id and row.board_booked_volume is not None
         use_board_weight = row.board_group_id and row.board_booked_weight is not None
-        return {
+        data = {
             "waybill_no": row.waybill_no,
             "carrier_agent_id": row.carrier_agent_id,
             "planned_flight_no": row.planned_flight_no,
@@ -728,11 +742,14 @@ class WarehousePlannerService:
             "destination_port": row.destination_port,
             "planned_route_text": row.planned_route_text,
         }
+        if _row_field_was_set(row, "internal_remark"):
+            data["internal_remark"] = _blank_to_none(row.internal_remark)
+        return data
 
     def _prebooking_convert_data(self, row: WarehousePlannerRow, prebooking: WaybillPrebooking) -> dict[str, Any]:
         use_board_volume = row.board_group_id and row.board_booked_volume is not None
         use_board_weight = row.board_group_id and row.board_booked_weight is not None
-        return {
+        data = {
             "waybill_no": row.waybill_no or prebooking.waybill_no,
             "carrier_agent_id": row.carrier_agent_id if row.carrier_agent_id is not None else prebooking.carrier_agent_id,
             "planned_flight_no": row.planned_flight_no or prebooking.planned_flight_no,
@@ -748,6 +765,9 @@ class WarehousePlannerService:
             "destination_port": row.destination_port if row.destination_port is not None else prebooking.destination_port,
             "planned_route_text": row.planned_route_text if row.planned_route_text is not None else prebooking.planned_route_text,
         }
+        if _row_field_was_set(row, "internal_remark"):
+            data["internal_remark"] = _blank_to_none(row.internal_remark)
+        return data
 
     def _save_remaining_rows(self, current_user: User, rows: list[WarehousePlannerRow]) -> None:
         draft = self._get_draft_model(current_user.id)
@@ -786,6 +806,7 @@ class WarehousePlannerService:
             row.departure_port,
             row.destination_port,
             row.planned_route_text,
+            row.internal_remark,
         ]
 
     def _agent_name(self, agent_id: int | None) -> str:

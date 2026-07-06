@@ -6,6 +6,7 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_HALF_UP
+from itertools import product
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Callable
@@ -57,6 +58,9 @@ OPTIONAL_COLUMNS = {
 }
 
 DECIMAL_001 = Decimal("0.001")
+TARGET_VOLUME_TOLERANCE = Decimal("0.500")
+MAX_DIMENSION_CANDIDATES_PER_BOX = 48
+MAX_DIMENSION_FIT_STATES = 60000
 BOX_NO_MAX_LENGTH = 128
 BOX_CONFLICT_RAW_KEY = "box_conflict"
 UNBOUND_REASONS = {"customs_inspection", "other"}
@@ -73,6 +77,21 @@ GENERAL_CARGO_MARKERS = ("\u666e\u8d27", "\u666e\u8ca8")
 DIMENSION_VOLUME_PATTERN = re.compile(
     r"(\d+(?:\.\d+)?)\s*(?:\*|x|X|×)\s*(\d+(?:\.\d+)?)\s*(?:\*|x|X|×)\s*(\d+(?:\.\d+)?)"
 )
+
+
+@dataclass(frozen=True)
+class _IntegerDimensionCandidate:
+    dimensions: tuple[int, int, int]
+    volume: Decimal
+    units: int
+    score: float
+
+
+@dataclass(frozen=True)
+class _IntegerDimensionFit:
+    volumes: dict[int, Decimal]
+    dimensions: dict[int, tuple[int, int, int]]
+    total_volume: Decimal
 
 
 @dataclass
@@ -728,8 +747,18 @@ class WarehouseFileService:
         if original_total_volume <= 0:
             raise bad_request("warehouse_volume_required")
 
-        fixed_boxes = [box for box in boxes if len(box.items or []) > 1]
-        adjustable_boxes = [box for box in boxes if len(box.items or []) <= 1]
+        target_volume_upper = (target_volume + TARGET_VOLUME_TOLERANCE).quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
+        dimensions_by_box_id: dict[int, tuple[Decimal, Decimal, Decimal]] = {}
+        fixed_boxes: list[Box] = []
+        adjustable_boxes: list[Box] = []
+        for box in boxes:
+            dimensions = _parse_dimensions_text(box.original_volume_info)
+            if len(box.items or []) > 1 or dimensions is None or base_volumes[box.id] <= 0:
+                fixed_boxes.append(box)
+                continue
+            dimensions_by_box_id[box.id] = dimensions
+            adjustable_boxes.append(box)
+
         fixed_total_volume = sum((base_volumes[box.id] for box in fixed_boxes), Decimal("0.000")).quantize(
             DECIMAL_001,
             rounding=ROUND_HALF_UP,
@@ -738,60 +767,113 @@ class WarehouseFileService:
             DECIMAL_001,
             rounding=ROUND_HALF_UP,
         )
-        adjustable_target_volume = (target_volume - fixed_total_volume).quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
-        if adjustable_target_volume < 0:
+        if fixed_total_volume > target_volume_upper:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
                     "error_code": "target_volume_less_than_fixed_boxes",
-                    "message": "目标方数小于一箱多件箱号的原始固定方数，无法只调整一箱一件箱号。",
+                    "message": "固定箱号方数已超过目标方数允许上限，无法只调整一箱一件且有长宽高的箱号。",
                     "target_volume": str(target_volume),
+                    "target_volume_upper": str(target_volume_upper),
                     "fixed_total_volume": str(fixed_total_volume),
                     "original_total_volume": str(original_total_volume),
+                    "total_volume": str(old_total_volume),
                 },
             )
-        if adjustable_target_volume > 0 and adjustable_base_total <= 0:
+
+        adjustable_target_min = max(
+            Decimal("0.000"),
+            (target_volume - fixed_total_volume).quantize(DECIMAL_001, rounding=ROUND_HALF_UP),
+        )
+        adjustable_target_max = (target_volume_upper - fixed_total_volume).quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
+        integer_fit: _IntegerDimensionFit | None = None
+        if adjustable_boxes:
+            integer_fit = _fit_integer_dimension_volumes_to_target(
+                boxes=adjustable_boxes,
+                dimensions_by_box_id=dimensions_by_box_id,
+                base_volumes=base_volumes,
+                target_min=adjustable_target_min,
+                target_max=adjustable_target_max,
+            )
+        elif target_volume <= fixed_total_volume <= target_volume_upper:
+            integer_fit = _IntegerDimensionFit(volumes={}, dimensions={}, total_volume=Decimal("0.000"))
+
+        if integer_fit is None and adjustable_base_total <= 0:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
                     "error_code": "warehouse_adjustable_volume_required",
-                    "message": "没有可用于等比调整的一箱一件箱号。",
+                    "message": "没有可用于整数长宽高调整的一箱一件箱号。",
                     "target_volume": str(target_volume),
+                    "target_volume_upper": str(target_volume_upper),
                     "fixed_total_volume": str(fixed_total_volume),
                     "adjustable_total_volume": str(adjustable_base_total),
+                    "original_total_volume": str(original_total_volume),
+                    "total_volume": str(old_total_volume),
+                },
+            )
+        if integer_fit is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error_code": "warehouse_integer_volume_fit_unavailable",
+                    "message": "无法找到满足整数长宽高且落入目标方数区间的调整方案。",
+                    "target_volume": str(target_volume),
+                    "target_volume_upper": str(target_volume_upper),
+                    "fixed_total_volume": str(fixed_total_volume),
+                    "adjustable_total_volume": str(adjustable_base_total),
+                    "original_total_volume": str(original_total_volume),
+                    "total_volume": str(old_total_volume),
                 },
             )
 
-        scaled_volumes = _scale_box_base_volumes_to_target(adjustable_boxes, base_volumes, adjustable_target_volume)
-        ratio = adjustable_target_volume / adjustable_base_total if adjustable_base_total > 0 else Decimal("0.000")
+        fitted_volumes = integer_fit.volumes
+        fitted_dimensions = integer_fit.dimensions
+        ratio = integer_fit.total_volume / adjustable_base_total if adjustable_base_total > 0 else Decimal("0.000")
         adjustable_box_ids = {box.id for box in adjustable_boxes}
+        adjusted_box_count = sum(
+            1
+            for box in adjustable_boxes
+            if fitted_volumes.get(box.id, base_volumes[box.id]) != base_volumes[box.id]
+        )
         recalculated_at = datetime.now(UTC).isoformat()
         touched_receipt_ids = {box.warehouse_receipt_id for box in boxes if box.warehouse_receipt_id is not None}
         for box in boxes:
             old_volume = box.volume or Decimal("0.000")
-            new_volume = scaled_volumes.get(box.id, base_volumes[box.id])
+            new_volume = fitted_volumes.get(box.id, base_volumes[box.id])
             box.volume = new_volume
             box.weight_volume_ratio = (
                 ((box.weight or Decimal("0.000")) / new_volume).quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
                 if new_volume > 0
                 else Decimal("0.000")
             )
+            calculated_volume_info = (
+                _calculated_volume_info_from_dimensions(fitted_dimensions[box.id], new_volume)
+                if box.id in fitted_dimensions
+                else _calculated_volume_info(box, new_volume)
+            )
             raw_data = dict(box.raw_data or {})
-            raw_data["volume_recalculation"] = {
-                "source": "target_volume_fit",
+            recalculation = {
+                "source": "target_volume_integer_dimensions",
                 "base_volume": str(base_volumes[box.id]),
                 "old_volume": str(old_volume.quantize(DECIMAL_001, rounding=ROUND_HALF_UP)),
                 "new_volume": str(new_volume),
-                "calculated_volume_info": _calculated_volume_info(box, new_volume),
+                "calculated_volume_info": calculated_volume_info,
                 "old_total_volume": str(old_total_volume),
                 "original_total_volume": str(original_total_volume),
                 "target_volume": str(target_volume),
+                "target_volume_upper": str(target_volume_upper),
                 "fixed_total_volume": str(fixed_total_volume),
-                "adjustable_target_volume": str(adjustable_target_volume),
+                "adjustable_target_volume": str(adjustable_target_min),
+                "adjustable_target_volume_upper": str(adjustable_target_max),
+                "fit_adjustable_volume": str(integer_fit.total_volume),
                 "ratio": str(ratio.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)),
                 "adjustable": box.id in adjustable_box_ids,
                 "recalculated_at": recalculated_at,
             }
+            if box.id in fitted_dimensions:
+                recalculation["integer_dimensions"] = list(fitted_dimensions[box.id])
+            raw_data["volume_recalculation"] = recalculation
             box.raw_data = raw_data
 
         for receipt_id in touched_receipt_ids:
@@ -811,7 +893,7 @@ class WarehouseFileService:
             adjustable_total_volume=adjustable_base_total,
             new_total_volume=new_total_volume,
             adjusted=new_total_volume != old_total_volume,
-            adjusted_box_count=len(adjustable_boxes),
+            adjusted_box_count=adjusted_box_count,
             fixed_box_count=len(fixed_boxes),
             boxes=updated_boxes,
         )
@@ -2157,35 +2239,214 @@ def compute_warehouse_receipt_channel_tags(box_nos: list[str | None]) -> list[st
     return []
 
 
-def _scale_box_base_volumes_to_target(
+def _fit_integer_dimension_volumes_to_target(
+    *,
     boxes: list[Box],
+    dimensions_by_box_id: dict[int, tuple[Decimal, Decimal, Decimal]],
     base_volumes: dict[int, Decimal],
-    target_volume: Decimal,
-) -> dict[int, Decimal]:
-    positive_boxes = [box for box in boxes if base_volumes.get(box.id, Decimal("0.000")) > 0]
-    result = {box.id: Decimal("0.000") for box in boxes}
-    if not positive_boxes:
-        return result
+    target_min: Decimal,
+    target_max: Decimal,
+) -> _IntegerDimensionFit | None:
+    target_min = max(Decimal("0.000"), target_min.quantize(DECIMAL_001, rounding=ROUND_HALF_UP))
+    target_max = target_max.quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
+    if target_max < target_min:
+        return None
 
-    current_total_volume = sum((base_volumes[box.id] for box in positive_boxes), Decimal("0.000"))
-    if current_total_volume <= 0:
-        return result
+    base_total = sum((base_volumes[box.id] for box in boxes), Decimal("0.000")).quantize(
+        DECIMAL_001,
+        rounding=ROUND_HALF_UP,
+    )
+    if base_total <= 0:
+        return None
 
-    ratio = target_volume / current_total_volume
-    scaled_rows: list[tuple[Box, Decimal, Decimal]] = []
-    floor_sum = Decimal("0.000")
-    for box in positive_boxes:
-        raw = base_volumes[box.id] * ratio
-        floored = raw.quantize(DECIMAL_001, rounding=ROUND_DOWN)
-        scaled_rows.append((box, floored, raw - floored))
-        floor_sum += floored
+    ideal_total = min(max(base_total, target_min), target_max)
+    ratio = ideal_total / base_total
+    candidate_lists: list[list[_IntegerDimensionCandidate]] = []
+    for box in boxes:
+        dimensions = dimensions_by_box_id.get(box.id)
+        if dimensions is None:
+            return None
+        ideal_volume = (base_volumes[box.id] * ratio).quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
+        candidates = _integer_dimension_candidates_for_box(
+            dimensions=dimensions,
+            base_volume=base_volumes[box.id],
+            ideal_volume=ideal_volume,
+            max_volume=target_max,
+        )
+        if not candidates:
+            return None
+        candidate_lists.append(candidates)
 
-    remainder_units = int(((target_volume - floor_sum) / DECIMAL_001).to_integral_value(rounding=ROUND_DOWN))
-    scaled_rows.sort(key=lambda item: item[2], reverse=True)
-    for index, (box, floored, _fraction) in enumerate(scaled_rows):
-        increment = DECIMAL_001 if index < remainder_units else Decimal("0.000")
-        result[box.id] = (floored + increment).quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
-    return result
+    min_units = _volume_units(target_min)
+    max_units = _volume_units(target_max)
+    suffix_min_units = [0] * (len(candidate_lists) + 1)
+    suffix_max_units = [0] * (len(candidate_lists) + 1)
+    for index in range(len(candidate_lists) - 1, -1, -1):
+        suffix_min_units[index] = suffix_min_units[index + 1] + min(candidate.units for candidate in candidate_lists[index])
+        suffix_max_units[index] = suffix_max_units[index + 1] + max(candidate.units for candidate in candidate_lists[index])
+    if suffix_min_units[0] > max_units or suffix_max_units[0] < min_units:
+        return None
+
+    states: dict[int, tuple[float, tuple[int, ...]]] = {0: (0.0, ())}
+    ideal_units = _volume_units(ideal_total)
+    for index, candidates in enumerate(candidate_lists):
+        next_states: dict[int, tuple[float, tuple[int, ...]]] = {}
+        remaining_min_units = suffix_min_units[index + 1]
+        remaining_max_units = suffix_max_units[index + 1]
+        for current_units, (current_score, selected_indexes) in states.items():
+            for candidate_index, candidate in enumerate(candidates):
+                next_units = current_units + candidate.units
+                if next_units + remaining_min_units > max_units:
+                    continue
+                if next_units + remaining_max_units < min_units:
+                    continue
+                next_score = current_score + candidate.score
+                previous = next_states.get(next_units)
+                if previous is None or next_score < previous[0]:
+                    next_states[next_units] = (next_score, selected_indexes + (candidate_index,))
+        if not next_states:
+            return None
+        if len(next_states) > MAX_DIMENSION_FIT_STATES:
+            expected_units = round(ideal_units * ((index + 1) / len(candidate_lists)))
+            next_states = _prune_dimension_fit_states(next_states, expected_units)
+        states = next_states
+
+    valid_states = [
+        (units, state)
+        for units, state in states.items()
+        if min_units <= units <= max_units
+    ]
+    if not valid_states:
+        return None
+
+    best_units, (_best_score, selected_indexes) = min(
+        valid_states,
+        key=lambda item: (item[1][0] + (item[0] - min_units) * 0.00000001, item[0]),
+    )
+    selected_volumes: dict[int, Decimal] = {}
+    selected_dimensions: dict[int, tuple[int, int, int]] = {}
+    for box, candidates, candidate_index in zip(boxes, candidate_lists, selected_indexes, strict=True):
+        candidate = candidates[candidate_index]
+        selected_volumes[box.id] = candidate.volume
+        selected_dimensions[box.id] = candidate.dimensions
+
+    total_volume = sum(selected_volumes.values(), Decimal("0.000")).quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
+    if _volume_units(total_volume) != best_units:
+        total_volume = (Decimal(best_units) * DECIMAL_001).quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
+    return _IntegerDimensionFit(volumes=selected_volumes, dimensions=selected_dimensions, total_volume=total_volume)
+
+
+def _integer_dimension_candidates_for_box(
+    *,
+    dimensions: tuple[Decimal, Decimal, Decimal],
+    base_volume: Decimal,
+    ideal_volume: Decimal,
+    max_volume: Decimal,
+) -> list[_IntegerDimensionCandidate]:
+    dimension_volume = _volume_from_dimensions(dimensions)
+    if dimension_volume <= 0 or ideal_volume <= 0:
+        return []
+
+    scale = Decimal(str(float(ideal_volume / dimension_volume) ** (1 / 3)))
+    centers = tuple(max(Decimal("1"), dimension * scale) for dimension in dimensions)
+    center_ints = tuple(_positive_int_dimension(center) for center in centers)
+    original_ints = tuple(_positive_int_dimension(dimension) for dimension in dimensions)
+    dimension_options: set[tuple[int, int, int]] = {original_ints, center_ints}
+
+    rounded_ranges: list[range] = []
+    for center in centers:
+        floored = max(1, int(center.to_integral_value(rounding=ROUND_DOWN)))
+        rounded_ranges.append(range(floored, floored + 2))
+    dimension_options.update(tuple(items) for items in product(*rounded_ranges))
+
+    for radius in (1, 2, 4, 6):
+        ranges = [
+            range(max(1, center - radius), center + radius + 1)
+            for center in center_ints
+        ]
+        dimension_options.update(tuple(items) for items in product(*ranges))
+
+    candidates_by_units: dict[int, _IntegerDimensionCandidate] = {}
+    for candidate_dimensions in dimension_options:
+        volume = _volume_from_integer_dimensions(candidate_dimensions)
+        if volume <= 0 or volume > max_volume:
+            continue
+        units = _volume_units(volume)
+        score = _integer_dimension_candidate_score(candidate_dimensions, dimensions, volume, base_volume, ideal_volume)
+        candidate = _IntegerDimensionCandidate(
+            dimensions=candidate_dimensions,
+            volume=volume,
+            units=units,
+            score=score,
+        )
+        previous = candidates_by_units.get(units)
+        if previous is None or candidate.score < previous.score:
+            candidates_by_units[units] = candidate
+
+    return sorted(
+        candidates_by_units.values(),
+        key=lambda item: (item.score, abs(item.volume - ideal_volume), abs(item.volume - base_volume)),
+    )[:MAX_DIMENSION_CANDIDATES_PER_BOX]
+
+
+def _integer_dimension_candidate_score(
+    candidate_dimensions: tuple[int, int, int],
+    original_dimensions: tuple[Decimal, Decimal, Decimal],
+    volume: Decimal,
+    base_volume: Decimal,
+    ideal_volume: Decimal,
+) -> float:
+    dimension_score = 0.0
+    changed_dimensions = 0
+    for candidate, original in zip(candidate_dimensions, original_dimensions, strict=True):
+        original_float = float(original)
+        if original_float <= 0:
+            continue
+        relative_delta = (candidate - original_float) / original_float
+        dimension_score += relative_delta * relative_delta
+        if Decimal(candidate) != original:
+            changed_dimensions += 1
+
+    ideal_float = float(ideal_volume) if ideal_volume > 0 else 0.0
+    ideal_score = 0.0
+    if ideal_float > 0:
+        ideal_delta = (float(volume) - ideal_float) / ideal_float
+        ideal_score = ideal_delta * ideal_delta
+
+    base_float = float(base_volume) if base_volume > 0 else 0.0
+    base_score = 0.0
+    if base_float > 0:
+        base_delta = (float(volume) - base_float) / base_float
+        base_score = base_delta * base_delta
+
+    return dimension_score + ideal_score * 0.75 + base_score * 0.001 + changed_dimensions * 0.000001
+
+
+def _prune_dimension_fit_states(
+    states: dict[int, tuple[float, tuple[int, ...]]],
+    expected_units: int,
+) -> dict[int, tuple[float, tuple[int, ...]]]:
+    ranked = sorted(
+        states.items(),
+        key=lambda item: (item[1][0] + abs(item[0] - expected_units) * 0.000001, item[1][0], item[0]),
+    )
+    return dict(ranked[:MAX_DIMENSION_FIT_STATES])
+
+
+def _volume_units(value: Decimal) -> int:
+    return int((value.quantize(DECIMAL_001, rounding=ROUND_HALF_UP) / DECIMAL_001).to_integral_value(rounding=ROUND_HALF_UP))
+
+
+def _volume_from_integer_dimensions(dimensions: tuple[int, int, int]) -> Decimal:
+    length, width, height = dimensions
+    return (Decimal(length) * Decimal(width) * Decimal(height) / Decimal("1000000")).quantize(
+        DECIMAL_001,
+        rounding=ROUND_HALF_UP,
+    )
+
+
+def _positive_int_dimension(value: Decimal) -> int:
+    return max(1, int(value.to_integral_value(rounding=ROUND_HALF_UP)))
 
 
 def _channel_prefix(box_no: str | None) -> str | None:
@@ -2221,6 +2482,11 @@ def _calculated_volume_info(box: Box, volume: Decimal) -> str | None:
     scale = Decimal(str(float(volume / original_volume) ** (1 / 3)))
     scaled_dimensions = tuple((item * scale).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) for item in dimensions)
     dimension_text = "*".join(_format_dimension_value(item) for item in scaled_dimensions)
+    return f"{dimension_text}({_format_decimal_display(volume)})"
+
+
+def _calculated_volume_info_from_dimensions(dimensions: tuple[int, int, int], volume: Decimal) -> str:
+    dimension_text = "*".join(str(item) for item in dimensions)
     return f"{dimension_text}({_format_decimal_display(volume)})"
 
 

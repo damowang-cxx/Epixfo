@@ -79,8 +79,8 @@ def test_validate_prebooking_requires_formal_waybill_fields() -> None:
     assert result.invalid_count == 1
     messages = {error.message for error in result.results[0].errors}
     assert "waybill_no_required" in messages
-    assert "destination_port_required" in messages
-    assert "planned_route_required" in messages
+    assert "destination_port_required" not in messages
+    assert "planned_route_required" not in messages
     assert "booked_weight_required" in messages
 
 
@@ -94,8 +94,6 @@ def test_validate_import_prebooking_requires_waybill_before_commit() -> None:
         planned_flight_date=date(2026, 6, 1),
         booked_volume=Decimal("12.000"),
         booked_weight=Decimal("1000"),
-        destination_port="AMS",
-        planned_route_text="CAN-AMS",
     )
 
     result = service.validate_rows(WarehousePlannerRowsRequest(rows=[row]), _route_user())
@@ -105,6 +103,44 @@ def test_validate_import_prebooking_requires_waybill_before_commit() -> None:
     assert result.results[0].source_type == "import_prebooking"
     assert result.results[0].source_id == -1
     assert {error.message for error in result.results[0].errors} == {"waybill_no_required"}
+
+
+def test_waybill_update_data_writes_internal_remark_when_present() -> None:
+    service = _service()
+    row = WarehousePlannerRow(
+        source_type="waybill",
+        source_id=5,
+        waybill_no="176-29600664",
+        internal_remark="  ops note  ",
+    )
+
+    data = service._waybill_update_data(row)
+
+    assert data["internal_remark"] == "ops note"
+
+
+def test_waybill_update_data_does_not_clear_legacy_rows_without_internal_remark() -> None:
+    service = _service()
+    row = WarehousePlannerRow(source_type="waybill", source_id=5, waybill_no="176-29600664")
+
+    data = service._waybill_update_data(row)
+
+    assert "internal_remark" not in data
+
+
+def test_prebooking_convert_data_can_clear_internal_remark() -> None:
+    service = _service()
+    prebooking = _prebooking(internal_remark="original note")
+    row = WarehousePlannerRow(
+        source_type="prebooking",
+        source_id=7,
+        waybill_no="176-29600664",
+        internal_remark="   ",
+    )
+
+    data = service._prebooking_convert_data(row, prebooking)
+
+    assert data["internal_remark"] is None
 
 
 def test_validate_rejects_receipt_bound_to_other_waybill() -> None:

@@ -3,7 +3,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Check, Download, Pencil, Plus, RotateCcw, Search, Trash2, Upload } from "lucide-react";
+import { Check, Download, Pencil, Plus, RotateCcw, Search, Trash2, Upload, X } from "lucide-react";
 import { AlertLevelBadge, LifecycleBadge, LIFECYCLE_VARIANT, type LifecycleBadgeVariant } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -13,6 +13,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Panel } from "@/components/ui/panel";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
+import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/components/layout/auth-provider";
 import { apiClient } from "@/lib/client-api";
 import { LIFECYCLE_ORDER, lifecycleLabels } from "@/lib/constants";
@@ -86,6 +87,7 @@ const DEFAULT_WAYBILL_COLUMN_ORDER = [
   "include_tc",
   "customs_staff",
   "customs_data",
+  "internal_remark",
   "agent",
   "warehouse",
   "outbound_date",
@@ -110,6 +112,7 @@ const WAYBILL_COLUMN_LABELS: Record<WaybillColumnKey, string> = {
   include_tc: "含T",
   customs_staff: "指定清关人员",
   customs_data: "清关资料",
+  internal_remark: "内部备注",
   agent: "航代",
   warehouse: "入仓号/入仓文件",
   outbound_date: "出仓日期",
@@ -186,6 +189,60 @@ const CARD_BG: Record<LifecycleBadgeVariant, string> = {
 function userDisplayName(user?: Waybill["customs_staff"]) {
   if (!user) return "";
   return user.display_name || user.username;
+}
+
+function InternalRemarkCell({
+  item,
+  disabled,
+  onSave
+}: {
+  item: Waybill;
+  disabled: boolean;
+  onSave: (item: Waybill, value: string | null) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(item.internal_remark || "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  async function save() {
+    setSaving(true);
+    setError("");
+    try {
+      await onSave(item, draft.trim() ? draft.trim() : null);
+      setEditing(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "保存失败。");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="min-w-64">
+      {editing ? (
+        <div className="space-y-2">
+          <Textarea className="min-h-20" value={draft} disabled={disabled || saving} onChange={(event) => setDraft(event.target.value)} />
+          <div className="flex items-center gap-1">
+            <Button type="button" variant="ghost" size="icon" className="h-7 w-7" disabled={disabled || saving} onClick={() => void save()} aria-label={`保存提单 ${item.waybill_no} 内部备注`}>
+              <Check className="h-4 w-4 text-emerald-600" />
+            </Button>
+            <Button type="button" variant="ghost" size="icon" className="h-7 w-7" disabled={saving} onClick={() => { setDraft(item.internal_remark || ""); setError(""); setEditing(false); }} aria-label={`取消编辑提单 ${item.waybill_no} 内部备注`}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-start justify-between gap-2">
+          <div className="whitespace-pre-wrap text-sm text-slate-700">{compact(item.internal_remark)}</div>
+          <Button type="button" variant="ghost" size="icon" className="h-7 w-7 shrink-0" disabled={disabled} onClick={() => { setDraft(item.internal_remark || ""); setError(""); setEditing(true); }} aria-label={`编辑提单 ${item.waybill_no} 内部备注`}>
+            <Pencil className="h-4 w-4" />
+          </Button>
+        </div>
+      )}
+      {error ? <div className="mt-1 text-xs text-red-600">{error}</div> : null}
+    </div>
+  );
 }
 
 function StatusCard({
@@ -955,6 +1012,19 @@ export default function WaybillsPage() {
     );
   }
 
+  async function saveInternalRemark(item: Waybill, value: string | null) {
+    setMessage("");
+    const updated = await apiClient.patch<Waybill>(`/waybills/${item.id}`, { internal_remark: value });
+    setData((current) =>
+      current
+        ? {
+            ...current,
+            items: current.items.map((row) => (row.id === updated.id ? updated : row))
+          }
+        : current
+    );
+  }
+
   const columnDefinitions: Record<WaybillColumnKey, WaybillTableColumn> = {
       waybill_no: {
         key: "waybill_no",
@@ -1051,6 +1121,15 @@ export default function WaybillsPage() {
           </TD>
         )
       },
+      internal_remark: {
+        key: "internal_remark",
+        label: WAYBILL_COLUMN_LABELS.internal_remark,
+        render: ({ item }) => (
+          <TD>
+            <InternalRemarkCell item={item} disabled={pendingDeleteIdSet.has(item.id)} onSave={saveInternalRemark} />
+          </TD>
+        )
+      },
       agent: {
         key: "agent",
         label: WAYBILL_COLUMN_LABELS.agent,
@@ -1117,7 +1196,8 @@ export default function WaybillsPage() {
       }
     };
 
-  const orderedColumns = columnOrder.map((key) => columnDefinitions[key]);
+  const visibleColumnOrder = canBulkEditWaybills ? columnOrder : columnOrder.filter((key) => key !== "internal_remark");
+  const orderedColumns = visibleColumnOrder.map((key) => columnDefinitions[key]);
 
   return (
     <>
