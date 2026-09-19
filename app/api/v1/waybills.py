@@ -38,6 +38,7 @@ from app.schemas.waybill import (
     WaybillOut,
     WaybillQuerySnapshotOut,
     WaybillStatusCount,
+    WaybillSort,
     WaybillStatusEventOut,
     WaybillUpdate,
 )
@@ -71,6 +72,7 @@ def list_waybills(
     created_at_to: datetime | None = None,
     page: int = 1,
     page_size: int = 20,
+    sort: WaybillSort = "created_at_desc",
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -78,6 +80,7 @@ def list_waybills(
         current_user,
         page=page,
         page_size=page_size,
+        sort=sort,
         waybill_no=waybill_no,
         carrier_code=carrier_code,
         destination_port=destination_port,

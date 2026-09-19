@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.models import ConsigneeNotifyParty
-from app.schemas.consignee import ConsigneeContactCreate, ConsigneeNotifyPartyUpsert
+from app.schemas.consignee import ConsigneeContactCreate, ConsigneeContactUpdate, ConsigneeNotifyPartyUpsert
 from app.services.consignee_service import ConsigneeService
 
 
@@ -124,6 +124,34 @@ def test_upsert_notify_party_returns_none_when_contact_missing() -> None:
 
     assert result is None
     assert service.db.committed is False
+
+
+def test_contact_and_notify_party_preserve_multiple_phones_over_old_limit() -> None:
+    phones = "\n".join(f"+31 20 65313{index:02d}" for index in range(6))
+    assert len(phones) > 64
+    service = _make_service(SimpleNamespace(id=7, name="Contact"))
+
+    contact = service.create_contact(ConsigneeContactCreate(consignee_id=1, name="Contact", phone=phones))
+    assert contact.phone == phones
+    service.update_contact(7, ConsigneeContactUpdate(phone=phones))
+    assert service.repo.contact.phone == phones
+
+    notify = service.upsert_notify_party(7, ConsigneeNotifyPartyUpsert(phone=phones))
+    assert notify.phone == phones
+    service.repo.notify_party = notify
+    remaining = phones.splitlines()[1:]
+    service.upsert_notify_party(7, ConsigneeNotifyPartyUpsert(phone="\n".join(remaining)))
+    assert notify.phone == "\n".join(remaining)
+
+
+def test_notify_party_phone_can_be_explicitly_cleared() -> None:
+    existing = ConsigneeNotifyParty(consignee_contact_id=7, name="Notify", phone="+31 20 123456")
+    service = _make_service(SimpleNamespace(id=7, name="Contact", phone="+31 20 654321"), existing)
+
+    result = service.upsert_notify_party(7, ConsigneeNotifyPartyUpsert(phone=None))
+
+    assert result.phone is None
+    assert service.db.committed is True
 
 
 def test_delete_contact_detaches_references_and_deletes_record() -> None:

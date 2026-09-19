@@ -27,11 +27,20 @@ from app.schemas.box import (
     WarehouseReceiptOrderRequest,
 )
 from app.schemas.common import PageResponse
+from app.schemas.destination_port import ReceiptDestinationUpdate
 from app.services.customs_export_service import CustomsExportService
 from app.services.permission_service import PermissionService
 from app.services.warehouse_file_service import WarehouseFileService
 
 router = APIRouter(prefix="/warehouse-receipts", tags=["warehouse-receipts"])
+
+
+@router.patch("/{receipt_id}/destination", response_model=WarehouseReceiptListOut)
+def update_receipt_destination(
+    receipt_id: int, payload: ReceiptDestinationUpdate,
+    current_user=Depends(get_current_user), db: Session = Depends(get_db),
+):
+    return WarehouseFileService(db).update_receipt_destination(receipt_id, payload.destination_ports, current_user)
 
 
 @router.get("", response_model=PageResponse[WarehouseReceiptListOut])

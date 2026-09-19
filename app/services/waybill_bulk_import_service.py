@@ -364,6 +364,9 @@ class WaybillImportTemplateParser:
             cutoff_text = None
 
         departure_port, destination_port = self._route_ports(planned_route_text)
+        explicit_destination = _clean_text(cell("目的港"))
+        if explicit_destination:
+            destination_port = explicit_destination.upper()
         warehouse_data_remark = self._warehouse_data_remark(values, header_map, headers)
         include_tc = self._include_tc_from_warehouse_data(values, header_map)
         if include_tc is None:
@@ -483,6 +486,9 @@ class WaybillImportTemplateParser:
         if not route_text and cutoff_text and "-" in cutoff_text and not _datetime_or_none(cutoff_text):
             route_text = cutoff_text
         departure_port, destination_port = self._route_ports(route_text)
+        explicit_destination = _clean_text(cell("目的港"))
+        if explicit_destination:
+            destination_port = explicit_destination.upper()
 
         include_tc: bool | None = self._include_tc_from_warehouse_data(values, header_map)
         warehouse_include_tc_text = self._warehouse_data_first_value(values, header_map)
@@ -505,6 +511,7 @@ class WaybillImportTemplateParser:
             row = WarehousePlannerRow(
                 source_type=source_type,
                 source_id=source_id,
+                planning_channel=destination_port or "",
                 waybill_no=waybill_no,
                 carrier_agent_id=lookup_optional(self.agents_by_name, cell("航代"), "航代"),
                 planned_flight_no=planned_flight_no,

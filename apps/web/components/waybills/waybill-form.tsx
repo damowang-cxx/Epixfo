@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Save } from "lucide-react";
 import type { FormEvent } from "react";
 import { Button } from "@/components/ui/button";
+import { DestinationPortSelect, useDestinationPorts } from "@/components/destination-ports";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -58,7 +59,7 @@ type FieldMeta = {
 const fields: FieldMeta[] = [
   { key: "waybill_no", label: "提单号", readonlyOnEdit: true, requiredOnCreate: true },
   { key: "departure_port", label: "始发港" },
-  { key: "destination_port", label: "目的港" },
+  { key: "destination_port", label: "目的港", requiredOnCreate: true },
   { key: "warehouse_no", label: "入仓号" },
   { key: "outbound_date", label: "出仓日期", type: "date" },
   { key: "planned_flight_info", label: "计划航班信息", requiredOnCreate: true },
@@ -169,6 +170,7 @@ function RequiredLabel({ field, editing }: { field: FieldMeta; editing: boolean 
 }
 
 export function WaybillForm({ waybill }: { waybill?: Waybill }) {
+  const { ports, error: portsError } = useDestinationPorts();
   const router = useRouter();
   const editing = Boolean(waybill);
   const [state, setState] = useState<FormState>(() => initialState(waybill));
@@ -233,7 +235,8 @@ export function WaybillForm({ waybill }: { waybill?: Waybill }) {
                 <div key={field.key} className="space-y-1.5">
                   <RequiredLabel field={field} editing={editing} />
                   <div className={field.key === "quotation" ? "flex items-center gap-2" : undefined}>
-                    <Input
+                    {field.key === "destination_port" ? <DestinationPortSelect ports={ports} id={field.key} value={state.destination_port}
+                      onChange={(value) => setState((prev) => ({ ...prev, destination_port: value }))} /> : <Input
                       id={field.key}
                       type={field.type || "text"}
                       placeholder={field.key === "planned_flight_info" ? "QR8943/01" : undefined}
@@ -243,7 +246,7 @@ export function WaybillForm({ waybill }: { waybill?: Waybill }) {
                       required={isRequiredOnCurrentForm(field, editing)}
                       aria-required={isRequiredOnCurrentForm(field, editing)}
                       step={field.type === "number" ? "0.001" : undefined}
-                    />
+                    />}
                     {field.key === "quotation" ? (
                       <label className="flex h-10 shrink-0 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700">
                         <input
@@ -372,7 +375,7 @@ export function WaybillForm({ waybill }: { waybill?: Waybill }) {
           </div>
         </Panel>
 
-        {error ? <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div> : null}
+        {error || portsError ? <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error || portsError}</div> : null}
 
         <div className="flex justify-end">
           <Button disabled={saving}>

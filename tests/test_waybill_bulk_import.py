@@ -62,6 +62,19 @@ def _workbook_bytes_with_headers(headers: list[str], rows: list[list[object]]) -
     return buffer.getvalue()
 
 
+def test_explicit_destination_column_overrides_route_for_both_import_paths():
+    parser = WaybillImportTemplateParser(agents_by_name={}, consignees_by_name={}, users_by_name={})
+    content = _workbook_bytes_with_headers(
+        ["提单号", "航班信息", "航程", "目的港"],
+        [["157-40742074", "QR8943/01", "CAN-AMS", " jfk "]],
+    )
+    parsed = parser.parse(content)
+    assert parsed.rows[0].payload.destination_port == "JFK"
+    planner = parser.parse_planner(content, source_id_base=1000)
+    assert planner.rows[0].destination_port == "JFK"
+    assert planner.rows[0].planning_channel == "JFK"
+
+
 def test_waybill_import_parser_maps_template_columns() -> None:
     content = _workbook_bytes(
         [

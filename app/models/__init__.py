@@ -1,6 +1,7 @@
 """SQLAlchemy ORM models package."""
 
 _MODEL_EXPORTS = {
+    "DestinationPort": ("app.models.destination_port", "DestinationPort"),
     "AuditLog": ("app.models.audit", "AuditLog"),
     "Box": ("app.models.box", "Box"),
     "BoxDocument": ("app.models.box", "BoxDocument"),

@@ -25,7 +25,7 @@ type ContactDraft = {
   name: string;
   address: string;
   email: string;
-  phone: string;
+  phones: string[];
   taxInfo: string;
   remark: string;
 };
@@ -34,7 +34,7 @@ type NotifyPartyDraft = {
   name: string;
   address: string;
   email: string;
-  phone: string;
+  phones: string[];
   taxInfo: string;
   remark: string;
   enabled: boolean;
@@ -45,11 +45,58 @@ function emptyConsigneeDraft(): ConsigneeDraft {
 }
 
 function emptyContactDraft(): ContactDraft {
-  return { name: "", address: "", email: "", phone: "", taxInfo: "", remark: "" };
+  return { name: "", address: "", email: "", phones: [""], taxInfo: "", remark: "" };
 }
 
 function emptyNotifyPartyDraft(defaultName = ""): NotifyPartyDraft {
-  return { name: defaultName, address: "", email: "", phone: "", taxInfo: "", remark: "", enabled: true };
+  return { name: defaultName, address: "", email: "", phones: [""], taxInfo: "", remark: "", enabled: true };
+}
+
+function splitPhones(value?: string | null): string[] {
+  const phones = (value || "").split(/\r?\n/).map((phone) => phone.trim()).filter(Boolean);
+  return phones.length ? phones : [""];
+}
+
+function joinPhones(phones: string[]): string | null {
+  return phones.map((phone) => phone.trim()).filter(Boolean).join("\n") || null;
+}
+
+function PhoneInputs({ phones, onChange, label, disabled }: {
+  phones: string[];
+  onChange: (phones: string[]) => void;
+  label: string;
+  disabled: boolean;
+}) {
+  return (
+    <div role="group" aria-label={label} className="min-w-0 space-y-2">
+      {phones.map((phone, index) => (
+        <div key={index} className="flex items-center gap-1">
+          <Input
+            type="tel"
+            aria-label={`${label} ${index + 1}`}
+            className="min-w-0 flex-1"
+            value={phone}
+            disabled={disabled}
+            onChange={(event) => onChange(phones.map((value, phoneIndex) => phoneIndex === index ? event.target.value : value))}
+            placeholder="+31 20 6531312"
+          />
+          {phones.length > 1 ? (
+            <Button type="button" size="icon" variant="ghost" disabled={disabled}
+              title={`删除${label} ${index + 1}`} aria-label={`删除${label} ${index + 1}`}
+              onClick={() => onChange(phones.filter((_, phoneIndex) => phoneIndex !== index))}>
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          ) : null}
+          {index === 0 ? (
+            <Button type="button" size="icon" variant="secondary" disabled={disabled}
+              title={`增加${label}`} aria-label={`增加${label}`} onClick={() => onChange([...phones, ""])}>
+              <Plus className="h-4 w-4" />
+            </Button>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function contactDraftFromItem(item: ConsigneeContact): ContactDraft {
@@ -57,7 +104,7 @@ function contactDraftFromItem(item: ConsigneeContact): ContactDraft {
     name: item.name || "",
     address: item.address || "",
     email: item.email || "",
-    phone: item.phone || "",
+    phones: splitPhones(item.phone),
     taxInfo: item.tax_info || "",
     remark: item.remark || ""
   };
@@ -68,7 +115,7 @@ function notifyDraftFromItem(item: ConsigneeNotifyParty): NotifyPartyDraft {
     name: item.name || "",
     address: item.address || "",
     email: item.email || "",
-    phone: item.phone || "",
+    phones: splitPhones(item.phone),
     taxInfo: item.tax_info || "",
     remark: item.remark || "",
     enabled: item.enabled
@@ -234,7 +281,7 @@ export default function ConsigneesPage() {
         name: contactDraft.name.trim(),
         address: contactDraft.address.trim() || null,
         email: contactDraft.email.trim() || null,
-        phone: contactDraft.phone.trim() || null,
+        phone: joinPhones(contactDraft.phones),
         tax_info: contactDraft.taxInfo.trim() || null,
         remark: contactDraft.remark.trim() || null
       };
@@ -327,7 +374,7 @@ export default function ConsigneesPage() {
         name: notifyDraft.name.trim() || null,
         address: notifyDraft.address.trim() || null,
         email: notifyDraft.email.trim() || null,
-        phone: notifyDraft.phone.trim() || null,
+        phone: joinPhones(notifyDraft.phones),
         tax_info: notifyDraft.taxInfo.trim() || null,
         remark: notifyDraft.remark.trim() || null,
         enabled: notifyDraft.enabled
@@ -498,10 +545,11 @@ export default function ConsigneesPage() {
                     </div>
                     <div>
                       <Label>电话</Label>
-                      <Input
-                        value={contactDraft.phone}
-                        onChange={(event) => setContactDraft((prev) => ({ ...prev, phone: event.target.value }))}
-                        placeholder="+31 20 6531312"
+                      <PhoneInputs
+                        label="收件人电话"
+                        phones={contactDraft.phones}
+                        disabled={savingContact}
+                        onChange={(phones) => setContactDraft((prev) => ({ ...prev, phones }))}
                       />
                     </div>
                     <div className="md:col-span-2">
@@ -588,12 +636,12 @@ export default function ConsigneesPage() {
                               {item.email}
                             </span>
                           ) : null}
-                          {item.phone ? (
-                            <span className="inline-flex items-center gap-1">
-                              <Phone className="h-3.5 w-3.5" />
-                              {item.phone}
+                          {item.phone ? splitPhones(item.phone).map((phone, index) => (
+                            <span key={index} className="inline-flex min-w-0 items-start gap-1">
+                              <Phone className="h-3.5 w-3.5 shrink-0" />
+                              <span className="break-all">{phone}</span>
                             </span>
-                          ) : null}
+                          )) : null}
                         </div>
                         {item.tax_info ? (
                           <div
@@ -657,7 +705,7 @@ export default function ConsigneesPage() {
       </div>
 
       <Dialog open={Boolean(notifyContact)} onOpenChange={(open) => !open && closeNotifyDialog()}>
-        <DialogContent className="w-[min(920px,calc(100vw-32px))]">
+        <DialogContent className="max-h-[calc(100dvh-32px)] w-[min(1040px,calc(100vw-32px))] overflow-y-auto">
           <DialogTitle className="pr-10 text-base font-semibold text-slate-900">
             {notifyContact ? `${notifyContact.name} · 通知人` : "通知人"}
           </DialogTitle>
@@ -674,7 +722,7 @@ export default function ConsigneesPage() {
             </div>
           ) : (
             <div className="mt-4 overflow-x-auto">
-              <table className="min-w-[820px] border-separate border-spacing-0 text-sm">
+              <table className="min-w-[940px] border-separate border-spacing-0 text-sm">
                 <thead>
                   <tr className="text-left text-xs text-slate-500">
                     <th className="border-b border-slate-200 pb-2 pr-3 font-medium">通知人名称</th>
@@ -706,10 +754,12 @@ export default function ConsigneesPage() {
                         onChange={(event) => setNotifyDraft((prev) => ({ ...prev, email: event.target.value }))}
                       />
                     </td>
-                    <td className="w-36 pt-3 pr-3">
-                      <Input
-                        value={notifyDraft.phone}
-                        onChange={(event) => setNotifyDraft((prev) => ({ ...prev, phone: event.target.value }))}
+                    <td className="w-64 min-w-64 pt-3 pr-3">
+                      <PhoneInputs
+                        label="通知人电话"
+                        phones={notifyDraft.phones}
+                        disabled={savingNotify}
+                        onChange={(phones) => setNotifyDraft((prev) => ({ ...prev, phones }))}
                       />
                     </td>
                     <td className="w-44 pt-3 pr-3">

@@ -25,8 +25,21 @@ from app.schemas.carrier import (
 )
 from app.services.carrier_service import CarrierService
 from app.services.permission_service import PermissionService
+from app.schemas.destination_port import DestinationPortCreate
+from app.services.destination_port_service import DestinationPortService
 
 router = APIRouter(tags=["carriers"])
+
+
+@router.get("/destination-ports", response_model=list[DestinationPortCreate])
+def list_destination_ports(current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    return DestinationPortService(db).list()
+
+
+@router.post("/destination-ports", response_model=DestinationPortCreate)
+def create_destination_port(payload: DestinationPortCreate, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    PermissionService.require_any(current_user, {UserRoleCode.ADMIN, UserRoleCode.ROUTE_STAFF})
+    return DestinationPortService(db).create(payload.code)
 
 
 @router.get("/carriers", response_model=list[CarrierOut])

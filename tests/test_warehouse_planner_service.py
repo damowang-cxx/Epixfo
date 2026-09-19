@@ -2,7 +2,10 @@ from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
 
+import pytest
+
 from app.models import AirWaybill, WarehouseReceipt, WaybillPrebooking
+from app.models.destination_port import DestinationPort
 from app.models.enums import UserRoleCode, WaybillLifecycleStatus
 from app.schemas.warehouse_planner import (
     WarehousePlannerCommitRequest,
@@ -17,7 +20,8 @@ from app.services.warehouse_planner_service import WarehousePlannerService
 
 class FakeDb:
     def __init__(self, objects=None) -> None:
-        self.objects = objects or {}
+        self.objects = {(DestinationPort, code): DestinationPort(code=code) for code in ("AMS", "LHR", "JFK")}
+        self.objects.update(objects or {})
         self.commits = 0
         self.rollbacks = 0
 
@@ -79,7 +83,7 @@ def test_validate_prebooking_requires_formal_waybill_fields() -> None:
     assert result.invalid_count == 1
     messages = {error.message for error in result.results[0].errors}
     assert "waybill_no_required" in messages
-    assert "destination_port_required" not in messages
+    assert "destination_port_required" in messages
     assert "planned_route_required" not in messages
     assert "booked_weight_required" in messages
 
@@ -89,6 +93,7 @@ def test_validate_import_prebooking_requires_waybill_before_commit() -> None:
     row = WarehousePlannerRow(
         source_type="import_prebooking",
         source_id=-1,
+        destination_port="AMS",
         carrier_agent_id=3,
         planned_flight_no="QR8943",
         planned_flight_date=date(2026, 6, 1),
@@ -145,13 +150,14 @@ def test_prebooking_convert_data_can_clear_internal_remark() -> None:
 
 def test_validate_rejects_receipt_bound_to_other_waybill() -> None:
     waybill = SimpleNamespace(id=5, waybill_no="176-29600664", lifecycle_status=WaybillLifecycleStatus.CREATED)
-    receipt = SimpleNamespace(id=9, warehouse_no="WH-9", waybill_id=22, prebooking_id=None)
+    receipt = SimpleNamespace(id=9, warehouse_no="WH-9", waybill_id=22, prebooking_id=None, channel_tags=["AMS"])
     service = _service({(AirWaybill, 5): waybill, (WarehouseReceipt, 9): receipt})
     row = WarehousePlannerRow(
         source_type="waybill",
         source_id=5,
         waybill_no="176-29600664",
         receipt_ids=[9],
+        destination_port="AMS",
     )
 
     result = service.validate_rows(WarehousePlannerRowsRequest(rows=[row]), _route_user())
@@ -192,6 +198,36 @@ def test_commit_all_or_none_stops_before_writes_when_any_row_is_invalid() -> Non
     assert result.success_count == 0
     assert result.failed_count == 1
     assert service.db.commits == 0
+
+
+@pytest.mark.parametrize("tags,override,valid", [
+    (["AMS"], None, True),
+    (["LHR"], None, False),
+    ([], None, False),
+    (["AMS"], [], False),
+    (["LHR"], ["AMS"], True),
+    (["AMS"], ["LHR"], False),
+])
+def test_planner_receipts_use_effective_destination(tags, override, valid):
+    waybill = SimpleNamespace(id=5, waybill_no="176-29600664", lifecycle_status=WaybillLifecycleStatus.CREATED)
+    receipt = SimpleNamespace(id=9, warehouse_no="WH-9", waybill_id=None, prebooking_id=None,
+                              channel_tags=tags, destination_ports_override=override)
+    service = _service({(AirWaybill, 5): waybill, (WarehouseReceipt, 9): receipt})
+    row = WarehousePlannerRow(source_type="waybill", source_id=5, destination_port="AMS", receipt_ids=[9])
+    result = service.validate_rows(WarehousePlannerRowsRequest(rows=[row]), _route_user())
+    assert result.valid_count == int(valid)
+    assert service.db.commits == 0
+    if not valid:
+        assert any(error.field == "receipt_ids" for error in result.results[0].errors)
+
+
+@pytest.mark.parametrize("port,channel,valid", [("JFK", "JFK", True), ("AMS", "LHR", False), ("ZZZ", "ZZZ", False)])
+def test_planner_requires_registered_matching_destination(port, channel, valid):
+    waybill = SimpleNamespace(id=5, waybill_no="176-29600664", lifecycle_status=WaybillLifecycleStatus.CREATED)
+    service = _service({(AirWaybill, 5): waybill})
+    row = WarehousePlannerRow(source_type="waybill", source_id=5, destination_port=port, planning_channel=channel)
+    result = service.validate_rows(WarehousePlannerRowsRequest(rows=[row]), _route_user())
+    assert result.valid_count == int(valid)
 
 
 def test_commit_success_only_saves_successes_and_keeps_failed_rows() -> None:

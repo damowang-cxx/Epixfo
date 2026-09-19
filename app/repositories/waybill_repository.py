@@ -6,7 +6,7 @@ from app.core.platform_patch import patch_platform_wmi
 
 patch_platform_wmi()
 
-from sqlalchemy import Select, case, func, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session, aliased, selectinload
 
 from app.models import (
@@ -21,6 +21,7 @@ from app.models import (
     WaybillStatusEvent,
 )
 from app.models.enums import AlertLevel, WaybillLifecycleStatus
+from app.schemas.waybill import WaybillSort
 
 
 class WaybillRepository:
@@ -52,49 +53,27 @@ class WaybillRepository:
         query: Select[tuple[AirWaybill]],
         skip: int,
         limit: int,
+        sort: WaybillSort = "created_at_desc",
     ) -> list[AirWaybill]:
-        return list(self.db.scalars(self._apply_management_order(query).offset(skip).limit(limit)))
+        return list(self.db.scalars(self._apply_management_order(query, sort).offset(skip).limit(limit)))
 
     def count_filtered(self, query: Select[tuple[AirWaybill]]) -> int:
         count_query = select(func.count()).select_from(query.order_by(None).subquery())
         return int(self.db.scalar(count_query) or 0)
 
-    def _apply_management_order(self, query: Select[tuple[AirWaybill]]) -> Select[tuple[AirWaybill]]:
-        sort_plan = aliased(WaybillPlan)
-        board_waybill = aliased(AirWaybill)
-        board_plan = aliased(WaybillPlan)
-        board_dates = (
-            select(
-                board_waybill.board_id.label("board_id"),
-                func.min(board_plan.planned_flight_date).label("min_planned_flight_date"),
-                func.max(board_plan.planned_flight_date).label("max_planned_flight_date"),
+    def _apply_management_order(
+        self, query: Select[tuple[AirWaybill]], sort: WaybillSort = "created_at_desc",
+    ) -> Select[tuple[AirWaybill]]:
+        query = query.order_by(None)
+        if sort in ("planned_flight_date_asc", "planned_flight_date_desc"):
+            sort_plan = aliased(WaybillPlan)
+            flight_date_order = (
+                sort_plan.planned_flight_date.asc()
+                if sort == "planned_flight_date_asc"
+                else sort_plan.planned_flight_date.desc()
             )
-            .outerjoin(board_plan, board_plan.waybill_id == board_waybill.id)
-            .where(board_waybill.board_id.is_not(None))
-            .group_by(board_waybill.board_id)
-            .subquery()
-        )
-
-        completed_statuses = [WaybillLifecycleStatus.PICKED_UP, WaybillLifecycleStatus.VOIDED]
-        is_completed = AirWaybill.lifecycle_status.in_(completed_statuses)
-        active_sort_date = func.coalesce(board_dates.c.min_planned_flight_date, sort_plan.planned_flight_date)
-        completed_sort_date = func.coalesce(board_dates.c.max_planned_flight_date, sort_plan.planned_flight_date)
-
-        return (
-            query.order_by(None)
-            .outerjoin(sort_plan, sort_plan.waybill_id == AirWaybill.id)
-            .outerjoin(board_dates, board_dates.c.board_id == AirWaybill.board_id)
-            .order_by(
-                case((is_completed, 1), else_=0).asc(),
-                case((is_completed, 0), (active_sort_date.is_(None), 1), else_=0).asc(),
-                case((is_completed, None), else_=active_sort_date).asc(),
-                case((is_completed & completed_sort_date.is_(None), 1), else_=0).asc(),
-                case((is_completed, completed_sort_date), else_=None).desc(),
-                WaybillBoard.board_no.is_(None).asc(),
-                WaybillBoard.board_no.asc(),
-                AirWaybill.id.desc(),
-            )
-        )
+            query = query.outerjoin(sort_plan, sort_plan.waybill_id == AirWaybill.id).order_by(flight_date_order.nulls_last())
+        return query.order_by(AirWaybill.created_at.desc(), AirWaybill.id.desc())
 
     def count_by_status(self, query: Select[tuple[AirWaybill]]) -> dict[WaybillLifecycleStatus, int]:
         """对已应用权限/筛选的 query 做 group_by(lifecycle_status) 计数。
@@ -127,7 +106,7 @@ class WaybillRepository:
         if carrier_code:
             query = query.where(AirWaybill.carrier_code == carrier_code)
         if destination_port:
-            query = query.where(AirWaybill.destination_port == destination_port)
+            query = query.where(func.upper(func.trim(AirWaybill.destination_port)) == destination_port.strip().upper())
         if planned_flight_no:
             query = query.where(WaybillPlan.planned_flight_no == planned_flight_no)
         if planned_flight_date_from:

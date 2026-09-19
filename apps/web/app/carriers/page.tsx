@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Pencil, Plus, Save, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { DestinationPortManager } from "@/components/destination-ports";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
@@ -494,6 +495,7 @@ export default function CarriersPage() {
   return (
     <>
       <PageHeader title="航司配置" description="维护提单前三位前缀对应的航司识别规则和航司代理信息" />
+      <DestinationPortManager />
 
       <Panel
         title="航司识别配置"

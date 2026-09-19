@@ -27,11 +27,13 @@ from app.schemas.waybill import (
     WaybillBulkUpdateResult,
     WaybillCreate,
     WaybillStatusCount,
+    WaybillSort,
     WaybillUpdate,
 )
 from app.services.alert_service import AlertService
 from app.services.carrier_service import CarrierService
 from app.services.consignee_service import ConsigneeService
+from app.services.destination_port_service import DestinationPortService
 from app.services.monitor_service import MonitorService
 from app.services.permission_service import PermissionService, VISIBLE_TO_CUSTOMER_SERVICE
 from app.utils.datetime_utils import compute_monitor_window, compute_next_query_at, local_now, utc_now
@@ -82,6 +84,7 @@ class WaybillService:
 
     def create(self, payload: WaybillCreate, current_user: User, *, auto_commit: bool = True) -> AirWaybill:
         PermissionService.assert_waybill_write(current_user)
+        destination = DestinationPortService(self.db).require(payload.destination_port)
         waybill_no = normalize_waybill_no(payload.waybill_no)
         if not validate_waybill_no(waybill_no):
             raise bad_request("Invalid waybill number")
@@ -105,6 +108,7 @@ class WaybillService:
         )
         if not waybill_data.get("departure_port"):
             waybill_data["departure_port"] = DEFAULT_DEPARTURE_PORT
+        waybill_data["destination_port"] = destination
         waybill = AirWaybill(
             **waybill_data,
             waybill_no=waybill_no,
@@ -144,6 +148,8 @@ class WaybillService:
         if waybill.lifecycle_status == WaybillLifecycleStatus.VOIDED:
             raise bad_request("Voided waybill cannot be updated")
         data = payload.model_dump(exclude_unset=True)
+        if "destination_port" in data:
+            data["destination_port"] = DestinationPortService(self.db).require(data["destination_port"])
         plan_data = self._plan_data_from_update_data(data)
         if "waybill_no" in data:
             self._apply_waybill_no_update(waybill, data.pop("waybill_no"))
@@ -434,6 +440,7 @@ class WaybillService:
         alert_level: AlertLevel | None = None,
         created_at_from: datetime | None = None,
         created_at_to: datetime | None = None,
+        sort: WaybillSort = "created_at_desc",
     ) -> tuple[list[AirWaybill], int, int, int]:
         pagination = normalize_pagination(page, page_size)
         query = self.repo.base_query()
@@ -461,7 +468,7 @@ class WaybillService:
             created_at_to=created_at_to,
         )
         total = self.repo.count_filtered(query)
-        return self.repo.list_filtered(query, pagination.offset, pagination.page_size), total, pagination.page, pagination.page_size
+        return self.repo.list_filtered(query, pagination.offset, pagination.page_size, sort=sort), total, pagination.page, pagination.page_size
 
     def _plan_data_from_payload(self, payload: WaybillCreate | WaybillUpdate) -> dict[str, object]:
         plan_data = {field: getattr(payload, field) for field in PLAN_FIELDS}

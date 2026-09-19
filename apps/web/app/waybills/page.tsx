@@ -3,9 +3,10 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Check, Download, Pencil, Plus, RotateCcw, Search, Trash2, Upload, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Check, Download, Pencil, Plus, RotateCcw, Search, Trash2, Upload, X } from "lucide-react";
 import { AlertLevelBadge, LifecycleBadge, LIFECYCLE_VARIANT, type LifecycleBadgeVariant } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
+import { DestinationPortSelect, useDestinationPorts } from "@/components/destination-ports";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -46,6 +47,8 @@ interface StatusCount {
   status: LifecycleStatus;
   count: number;
 }
+
+type WaybillSort = "created_at_desc" | "planned_flight_date_asc" | "planned_flight_date_desc";
 
 const BULK_CLEAR_VALUE = "__clear__";
 
@@ -303,6 +306,7 @@ export default function WaybillsPage() {
   const { user, hasRole } = useAuth();
   const router = useRouter();
   const airlineFileInputRef = useRef<HTMLInputElement | null>(null);
+  const listRequestRef = useRef(0);
   const canBulkEditWaybills = hasRole("admin") || hasRole("route_staff");
   const canRequestCustomsAccess = hasRole("customs_staff") && !hasRole("admin") && !hasRole("route_staff");
   const [data, setData] = useState<PageResponse<Waybill> | null>(null);
@@ -310,9 +314,13 @@ export default function WaybillsPage() {
   const [waybillNo, setWaybillNo] = useState("");
   const [carrierCode, setCarrierCode] = useState("");
   const [destinationPort, setDestinationPort] = useState("");
+  const { ports: destinationPorts } = useDestinationPorts();
   const [plannedFlightNo, setPlannedFlightNo] = useState("");
+  const [plannedFlightDateFrom, setPlannedFlightDateFrom] = useState("");
+  const [plannedFlightDateTo, setPlannedFlightDateTo] = useState("");
   const [lifecycleStatus, setLifecycleStatus] = useState<LifecycleStatus | "all">("all");
   const [page, setPage] = useState(1);
+  const [sort, setSort] = useState<WaybillSort>("created_at_desc");
   const [message, setMessage] = useState("");
   const [generalCargoMonth, setGeneralCargoMonth] = useState(currentMonthValue);
   const [exportingGeneralCargo, setExportingGeneralCargo] = useState(false);
@@ -340,16 +348,24 @@ export default function WaybillsPage() {
 
   const query = useMemo(() => {
     const params = new URLSearchParams({ page: String(page), page_size: "20" });
+    params.set("sort", sort);
     if (waybillNo) params.set("waybill_no", waybillNo);
     if (carrierCode) params.set("carrier_code", carrierCode);
     if (destinationPort) params.set("destination_port", destinationPort);
     if (plannedFlightNo) params.set("planned_flight_no", plannedFlightNo);
+    if (plannedFlightDateFrom) params.set("planned_flight_date_from", plannedFlightDateFrom);
+    if (plannedFlightDateTo) params.set("planned_flight_date_to", plannedFlightDateTo);
     if (lifecycleStatus !== "all") params.set("lifecycle_status", lifecycleStatus);
     return params;
-  }, [carrierCode, destinationPort, lifecycleStatus, page, plannedFlightNo, waybillNo]);
+  }, [carrierCode, destinationPort, lifecycleStatus, page, plannedFlightDateFrom, plannedFlightDateTo, plannedFlightNo, sort, waybillNo]);
 
   const load = useCallback(() => {
-    apiClient.get<PageResponse<Waybill>>(`/waybills?${query.toString()}`).then(setData);
+    const requestId = ++listRequestRef.current;
+    apiClient.get<PageResponse<Waybill>>(`/waybills?${query.toString()}`).then((result) => {
+      if (requestId === listRequestRef.current) setData(result);
+    }).catch((error) => {
+      if (requestId === listRequestRef.current) setMessage(error instanceof Error ? error.message : "提单列表加载失败");
+    });
   }, [query]);
 
   const loadCounts = useCallback(() => {
@@ -485,6 +501,13 @@ export default function WaybillsPage() {
     setColumnOrder(nextOrder);
     setMessage("已恢复默认列顺序。");
     void saveColumnOrder([]);
+  }
+
+  function changeSort(nextSort: WaybillSort) {
+    if (savingInlineChanges || !confirmAndDiscardEditChanges()) return;
+    setSort(nextSort);
+    setPage(1);
+    setSelectedWaybillIds([]);
   }
 
   function toggleCurrentPageSelection(checked: boolean) {
@@ -1313,12 +1336,14 @@ export default function WaybillsPage() {
               setCarrierCode(event.target.value);
             }}
           />
-          <Input
-            placeholder="目的港"
+          <DestinationPortSelect
+            ports={destinationPorts}
+            emptyLabel="全部目的港"
             value={destinationPort}
-            onChange={(event) => {
+            onChange={(value) => {
               setSelectedWaybillIds([]);
-              setDestinationPort(event.target.value);
+              setDestinationPort(value);
+              setPage(1);
             }}
           />
           <Input
@@ -1346,6 +1371,37 @@ export default function WaybillsPage() {
           <Button variant="secondary" onClick={applyFilters} aria-label="搜索">
             <Search className="h-4 w-4" />
           </Button>
+          <fieldset className="grid gap-2 sm:grid-cols-2 lg:col-span-3">
+            <legend className="sr-only">约定航班起飞日期范围</legend>
+            <div className="grid gap-1">
+              <Label htmlFor="planned-flight-date-from" className="text-xs text-slate-600">约定起飞日期从</Label>
+              <Input
+                id="planned-flight-date-from"
+                type="date"
+                max={plannedFlightDateTo || undefined}
+                value={plannedFlightDateFrom}
+                onChange={(event) => {
+                  setSelectedWaybillIds([]);
+                  setPlannedFlightDateFrom(event.target.value);
+                  setPage(1);
+                }}
+              />
+            </div>
+            <div className="grid gap-1">
+              <Label htmlFor="planned-flight-date-to" className="text-xs text-slate-600">约定起飞日期至</Label>
+              <Input
+                id="planned-flight-date-to"
+                type="date"
+                min={plannedFlightDateFrom || undefined}
+                value={plannedFlightDateTo}
+                onChange={(event) => {
+                  setSelectedWaybillIds([]);
+                  setPlannedFlightDateTo(event.target.value);
+                  setPage(1);
+                }}
+              />
+            </div>
+          </fieldset>
         </div>
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-2">
@@ -1386,6 +1442,10 @@ export default function WaybillsPage() {
               <RotateCcw className="h-4 w-4" />
               恢复默认列顺序
             </Button>
+            <Button type="button" variant="secondary" size="sm" disabled={savingInlineChanges} onClick={() => changeSort("created_at_desc")}>
+              <RotateCcw className="h-4 w-4" />
+              恢复提单默认排序
+            </Button>
           </div>
         </div>
         <Table>
@@ -1409,6 +1469,7 @@ export default function WaybillsPage() {
                 <TH
                   key={column.key}
                   draggable
+                  aria-sort={column.key === "planned_flight_date" ? (sort === "planned_flight_date_asc" ? "ascending" : sort === "planned_flight_date_desc" ? "descending" : "none") : undefined}
                   onDragStart={(event) => {
                     setDraggingColumn(column.key);
                     event.dataTransfer.effectAllowed = "move";
@@ -1426,7 +1487,15 @@ export default function WaybillsPage() {
                   )}
                   title="拖动列标题调整顺序"
                 >
-                  {column.label}
+                  {column.key === "planned_flight_date" ? (
+                    <button type="button" className="inline-flex items-center gap-1.5 rounded py-2 focus-visible:outline-2 focus-visible:outline-offset-2 disabled:opacity-50"
+                      disabled={savingInlineChanges}
+                      title={sort === "planned_flight_date_asc" ? "按起飞日期降序排列" : "按起飞日期升序排列"}
+                      onClick={() => changeSort(sort === "planned_flight_date_asc" ? "planned_flight_date_desc" : "planned_flight_date_asc")}>
+                      {column.label}
+                      {sort === "planned_flight_date_asc" ? <ArrowUp className="h-4 w-4" aria-hidden="true" /> : sort === "planned_flight_date_desc" ? <ArrowDown className="h-4 w-4" aria-hidden="true" /> : <ArrowUpDown className="h-4 w-4" aria-hidden="true" />}
+                    </button>
+                  ) : column.label}
                 </TH>
               ))}
               {editMode && canBulkEditWaybills ? <TH>操作</TH> : null}

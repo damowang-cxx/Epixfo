@@ -43,6 +43,7 @@ from app.schemas.box import (
     WarehouseUploadIntegrityIssue,
 )
 from app.services.permission_service import PermissionService
+from app.services.destination_port_service import DestinationPortService, receipt_destination_ports
 
 
 REQUIRED_COLUMNS = {
@@ -185,6 +186,19 @@ class WarehouseFileService:
         page_size = min(max(page_size, 1), 100)
         rows, total = self.boxes.list_receipts(page=page, page_size=page_size, unbound_only=unbound_only)
         return [self._receipt_list_out(*row) for row in rows], total, page, page_size
+
+    def update_receipt_destination(self, receipt_id: int, ports: list[str] | None, current_user: User) -> WarehouseReceiptListOut:
+        PermissionService.assert_waybill_write(current_user)
+        receipt = self.boxes.get_receipt_by_id(receipt_id)
+        if receipt is None:
+            raise bad_request("warehouse_receipt_not_found")
+        if receipt.waybill_id is not None or receipt.prebooking_id is not None:
+            raise bad_request("只能修改未绑定入仓号的目的港归属")
+        receipt.destination_ports_override = (
+            [DestinationPortService(self.db).require(port) for port in ports] if ports is not None else None
+        )
+        self.db.commit()
+        return self.get_receipt_summary(receipt_id)
 
     def list_receipt_boxes(self, receipt_id: int) -> list[Box]:
         if self.boxes.get_receipt_by_id(receipt_id) is None:
@@ -1889,6 +1903,8 @@ class WarehouseFileService:
             weight_volume_ratio=receipt.weight_volume_ratio,
             channel_tags=list(receipt.channel_tags or []),
             box_count=box_count,
+            destination_ports=receipt_destination_ports(receipt),
+            destination_ports_override=getattr(receipt, "destination_ports_override", None),
             general_cargo_count=general_cargo_count,
             display_order=receipt.display_order,
             uploaded_at=source_uploaded_at or receipt.created_at,

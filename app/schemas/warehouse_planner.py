@@ -13,13 +13,13 @@ from app.schemas.user import UserSummaryOut
 
 PlannerSourceType = Literal["waybill", "prebooking", "import_waybill", "import_prebooking"]
 PlannerCommitMode = Literal["all_or_none", "success_only"]
-PlannerChannel = Literal["AMS", "LHR"]
+PlannerChannel = str
 
 
 class WarehousePlannerRow(BaseModel):
     source_type: PlannerSourceType
     source_id: int
-    planning_channel: PlannerChannel = "AMS"
+    planning_channel: PlannerChannel = Field(default="AMS", max_length=16)
     waybill_no: str | None = Field(default=None, max_length=64)
     carrier_agent_id: int | None = None
     planned_flight_no: str | None = Field(default=None, max_length=32)

@@ -4,6 +4,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type DragE
 import { Download, GripVertical, ListPlus, PanelRightClose, PanelRightOpen, RefreshCw, RotateCcw, Save, Trash2, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DestinationPortSelect, receiptDestinationPorts, useDestinationPorts } from "@/components/destination-ports";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
@@ -57,7 +58,6 @@ const PLANNER_COLUMNS_PREFERENCE_KEY = "warehouse-planner:columns";
 const DEFAULT_MAIN_PANE_PERCENT = 68;
 const MIN_MAIN_PANE_PERCENT = 44;
 const MAX_MAIN_PANE_PERCENT = 82;
-const PLANNER_CHANNELS: PlannerChannel[] = ["AMS", "LHR"];
 
 const DEFAULT_PLANNER_COLUMN_ORDER = [
   "source",
@@ -127,7 +127,7 @@ function rowKey(row: Pick<WarehousePlannerRow, "source_type" | "source_id">) {
 }
 
 function normalizePlannerChannel(value?: string | null): PlannerChannel {
-  return value === "LHR" ? "LHR" : "AMS";
+  return (value || "").trim().toUpperCase();
 }
 
 function candidateToRow(item: WarehousePlannerCandidate, channel: PlannerChannel = "AMS"): WarehousePlannerRow {
@@ -201,10 +201,6 @@ function sourceLabel(value: WarehousePlannerRow["source_type"]) {
   if (value === "prebooking") return "预排仓";
   if (value === "import_waybill") return "导入提单";
   return "导入预排仓";
-}
-
-function channelTags(tags?: string[] | null) {
-  return (tags || []).filter(Boolean);
 }
 
 function clampMainPanePercent(value: number) {
@@ -410,6 +406,7 @@ interface PlannerTableColumn {
 }
 
 export default function WarehousePlannerPage() {
+  const { ports: destinationPorts, error: destinationError } = useDestinationPorts();
   const saveTimerRef = useRef<number | null>(null);
   const splitSaveTimerRef = useRef<number | null>(null);
   const plannerLayoutRef = useRef<HTMLDivElement>(null);
@@ -453,6 +450,9 @@ export default function WarehousePlannerPage() {
     () => [...(candidates?.waybills || []), ...(candidates?.prebookings || [])],
     [candidates]
   );
+  const visibleCandidates = allCandidates.filter((item) => normalizePlannerChannel(item.destination_port) === activePlannerChannel);
+  const visibleReceipts = (candidates?.unbound_receipts || []).filter((item) =>
+    Boolean(activePlannerChannel) && receiptDestinationPorts(item).includes(activePlannerChannel));
   const rowKeySet = useMemo(() => new Set(rows.map(rowKey)), [rows]);
   const assignedReceiptIds = useMemo(() => {
     const ids = new Set<number>();
@@ -462,13 +462,12 @@ export default function WarehousePlannerPage() {
     return ids;
   }, [rows]);
   const channelRows = useMemo(
-    () => ({
-      AMS: rows.filter((row) => normalizePlannerChannel(row.planning_channel) === "AMS"),
-      LHR: rows.filter((row) => normalizePlannerChannel(row.planning_channel) === "LHR")
-    }),
+    () => Object.fromEntries([...new Set(rows.map((row) => normalizePlannerChannel(row.destination_port)))].map((port) =>
+      [port, rows.filter((row) => normalizePlannerChannel(row.destination_port) === port)])),
     [rows]
   );
-  const activeRows = channelRows[activePlannerChannel];
+  const activeRows = useMemo(() => channelRows[activePlannerChannel] || [], [channelRows, activePlannerChannel]);
+  const plannerChannels = [...new Set([...destinationPorts, ...Object.keys(channelRows)])];
   const activeSelectedRows = useMemo(() => activeRows.filter((row) => selectedRows.has(rowKey(row))), [activeRows, selectedRows]);
   const selectedRowKeys = useMemo(() => [...selectedRows], [selectedRows]);
   const selectedRowCount = selectedRows.size;
@@ -493,7 +492,7 @@ export default function WarehousePlannerPage() {
       apiClient.get<CarrierAgent[]>("/carrier-agents"),
       apiClient.get<User[]>("/users")
     ]);
-    setRows(normalizeBoardGroups((draft.rows || []).map((row) => ({ ...row, planning_channel: normalizePlannerChannel(row.planning_channel) }))));
+    setRows(normalizeBoardGroups((draft.rows || []).map((row) => ({ ...row, planning_channel: normalizePlannerChannel(row.destination_port) }))));
     setCandidates(candidateData);
     setAgents(agentData.filter((item) => item.enabled));
     setUsers(userData);
@@ -686,10 +685,10 @@ export default function WarehousePlannerPage() {
   function moveRowOrGroupToChannel(key: string, channel: PlannerChannel) {
     const targetRow = rows.find((row) => rowKey(row) === key);
     if (!targetRow?.board_group_id) {
-      updateRow(key, { planning_channel: channel });
+      updateRow(key, { planning_channel: channel, destination_port: channel });
       return;
     }
-    updateBoardGroup(targetRow.board_group_id, { planning_channel: channel });
+    updateBoardGroup(targetRow.board_group_id, { planning_channel: channel, destination_port: channel });
   }
 
   function handlePlannerColumnDrop(event: DragEvent<HTMLTableCellElement>, targetKey: PlannerColumnKey) {
@@ -736,14 +735,15 @@ export default function WarehousePlannerPage() {
   function addCandidates(items: WarehousePlannerCandidate[], channel: PlannerChannel = activePlannerChannel) {
     setRows((prev) => {
       const existing = new Set(prev.map(rowKey));
-      const additions = items.map((item) => candidateToRow(item, channel)).filter((row) => !existing.has(rowKey(row)));
+      const additions = items.filter((item) => normalizePlannerChannel(item.destination_port) === channel)
+        .map((item) => candidateToRow(item, channel)).filter((row) => !existing.has(rowKey(row)));
       return [...prev, ...additions];
     });
     setSelectedCandidates(new Set());
   }
 
   function selectedCandidateItems() {
-    return allCandidates.filter((item) => selectedCandidates.has(rowKey(item)));
+    return visibleCandidates.filter((item) => selectedCandidates.has(rowKey(item)));
   }
 
   function onCandidateDragStart(event: DragEvent<HTMLDivElement>, item?: WarehousePlannerCandidate) {
@@ -877,7 +877,7 @@ export default function WarehousePlannerPage() {
     const raw = event.dataTransfer.getData(RECEIPT_DRAG_TYPE);
     if (!raw) return;
     event.preventDefault();
-    const ids = (JSON.parse(raw) as number[]).filter((id) => Number.isFinite(id));
+    const ids = (JSON.parse(raw) as number[]).filter((id) => visibleReceipts.some((receipt) => receipt.id === id));
     const targets = targetKey ? [targetKey] : selectedRowKeys;
     if (!targets.length) {
       setMessage("请先选择排仓编辑区里的提单，再拖入入仓号。");
@@ -885,7 +885,7 @@ export default function WarehousePlannerPage() {
     }
     setRows((prev) =>
       prev.map((row) => {
-        if (!targets.includes(rowKey(row))) return row;
+        if (!targets.includes(rowKey(row)) || normalizePlannerChannel(row.destination_port) !== activePlannerChannel) return row;
         return { ...row, receipt_ids: [...new Set([...(row.receipt_ids || []), ...ids])] };
       })
     );
@@ -902,6 +902,12 @@ export default function WarehousePlannerPage() {
     if (field?.kind === "select") value = batchValue === CLEAR_VALUE || batchValue === "" ? null : Number(batchValue);
     if (field?.kind === "date") value = batchValue || null;
     setRows((prev) => {
+      if (batchField === "destination_port") {
+        const groupIds = new Set(prev.filter((row) => keys.includes(rowKey(row)) && row.board_group_id).map((row) => row.board_group_id));
+        const port = normalizePlannerChannel(batchValue);
+        return prev.map((row) => keys.includes(rowKey(row)) || (row.board_group_id && groupIds.has(row.board_group_id))
+          ? { ...row, destination_port: port, planning_channel: port } : row);
+      }
       if (batchField === "booked_volume" || batchField === "booked_weight") {
         const selectedKeySet = new Set(keys);
         const selectedGroupIds = new Set(
@@ -1014,7 +1020,7 @@ export default function WarehousePlannerPage() {
         const existing = new Set(prev.map(rowKey));
         const additions = result.rows
           .filter((row) => !existing.has(rowKey(row)))
-          .map((row) => ({ ...row, planning_channel: activePlannerChannel }));
+          .map((row) => ({ ...row, planning_channel: normalizePlannerChannel(row.destination_port) }));
         return normalizeBoardGroups([...prev, ...additions]);
       });
       setMessage(`批量导入完成：导入 ${result.imported_count} 行，跳过 ${result.skipped_count} 行，提示 ${result.warnings.length} 条。`);
@@ -1233,7 +1239,7 @@ export default function WarehousePlannerPage() {
       key: "destination_port",
       label: PLANNER_COLUMN_LABELS.destination_port,
       render: ({ row, key }) => (
-        <TD><Input className="h-9 min-w-24" value={row.destination_port || ""} onChange={(event) => updateRow(key, { destination_port: event.target.value })} /></TD>
+        <TD><DestinationPortSelect ports={destinationPorts} value={row.destination_port || ""} onChange={(value) => moveRowOrGroupToChannel(key, value)} /></TD>
       )
     },
     planned_route_text: {
@@ -1261,14 +1267,6 @@ export default function WarehousePlannerPage() {
                 移出板组
               </Button>
             ) : null}
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              onClick={() => moveRowOrGroupToChannel(key, activePlannerChannel === "AMS" ? "LHR" : "AMS")}
-            >
-              移到 {activePlannerChannel === "AMS" ? "LHR" : "AMS"}
-            </Button>
             <Button variant="danger" size="sm" onClick={() => removeRow(key)}><Trash2 className="h-4 w-4" /></Button>
           </div>
         </TD>
@@ -1357,15 +1355,21 @@ export default function WarehousePlannerPage() {
               </div>
             }
           >
-          <div className="mb-3 grid max-w-sm grid-cols-2 gap-2">
-            {PLANNER_CHANNELS.map((channel) => (
+          {destinationError ? <p role="alert" className="mb-2 text-sm text-red-700">{destinationError}</p> : null}
+          <div className="mb-3 flex flex-wrap gap-2">
+            {plannerChannels.map((channel) => (
               <Button
                 key={channel}
                 type="button"
                 variant={activePlannerChannel === channel ? "default" : "secondary"}
-                onClick={() => setActivePlannerChannel(channel)}
+                onClick={() => {
+                  setActivePlannerChannel(channel);
+                  setSelectedCandidates(new Set());
+                  setSelectedReceipts(new Set());
+                  setSelectedRows(new Set());
+                }}
               >
-                {channel}（{channelRows[channel].length}）
+                {channel || "待归属"}（{channelRows[channel]?.length || 0}）
               </Button>
             ))}
           </div>
@@ -1486,7 +1490,7 @@ export default function WarehousePlannerPage() {
                     加入排仓
                   </Button>
                   <div className="max-h-[calc(100vh-260px)] space-y-2 overflow-y-auto pr-1">
-                    {allCandidates.map((item) => {
+                    {visibleCandidates.map((item) => {
                       const key = rowKey(item);
                       const added = rowKeySet.has(key);
                       const selected = selectedCandidates.has(key);
@@ -1526,7 +1530,7 @@ export default function WarehousePlannerPage() {
                         </div>
                       );
                     })}
-                    {!allCandidates.length ? <EmptyState title="暂无待排仓提单" description="当前没有满足条件的正式提单或预排仓。" /> : null}
+                    {!visibleCandidates.length ? <EmptyState title="暂无待排仓提单" description="当前目的港没有待排仓提单。" /> : null}
                   </div>
                 </div>
               ) : (
@@ -1541,7 +1545,7 @@ export default function WarehousePlannerPage() {
                   </div>
                   {receiptViewMode === "list" ? (
                     <div className="max-h-[calc(100vh-268px)] space-y-2 overflow-y-auto pr-1">
-                      {(candidates?.unbound_receipts || []).map((receipt) => {
+                      {visibleReceipts.map((receipt) => {
                         const selected = selectedReceipts.has(receipt.id);
                         const assigned = assignedReceiptIds.has(receipt.id);
                         return (
@@ -1596,7 +1600,7 @@ export default function WarehousePlannerPage() {
                                   {assigned ? <Badge variant="gray">已在编辑区</Badge> : null}
                                 </span>
                                 <span className="mt-1 flex flex-wrap gap-1">
-                                  {channelTags(receipt.channel_tags).map((tag) => <Badge key={tag} variant="amber">{tag}</Badge>)}
+                                  {receiptDestinationPorts(receipt).map((tag) => <Badge key={tag} variant="amber">{tag}</Badge>)}
                                 </span>
                                 <span className="mt-1 grid gap-0.5 text-xs text-slate-500">
                                   <span>入仓号：{receipt.warehouse_no}</span>
@@ -1611,13 +1615,13 @@ export default function WarehousePlannerPage() {
                           </div>
                         );
                       })}
-                      {!candidates?.unbound_receipts.length ? <EmptyState title="暂无未绑定入仓号" description="未绑定箱号模块上传后会显示在这里。" /> : null}
+                      {!visibleReceipts.length ? <EmptyState title="暂无未绑定入仓号" description="当前目的港没有未绑定入仓号。" /> : null}
                     </div>
                   ) : (
                     <div className="max-h-[calc(100vh-268px)] overflow-y-auto pr-1">
-                      {candidates?.unbound_receipts.length ? (
+                      {visibleReceipts.length ? (
                         <div className="grid grid-cols-[repeat(auto-fit,minmax(138px,1fr))] gap-2">
-                          {candidates.unbound_receipts.map((receipt) => {
+                          {visibleReceipts.map((receipt) => {
                             const selected = selectedReceipts.has(receipt.id);
                             const assigned = assignedReceiptIds.has(receipt.id);
                             const fileName = receipt.source_file_name || receipt.warehouse_no;
@@ -1715,6 +1719,9 @@ export default function WarehousePlannerPage() {
             </Select>
             {(() => {
               const field = BATCH_FIELDS.find((item) => item.key === batchField);
+              if (batchField === "destination_port") {
+                return <DestinationPortSelect ports={destinationPorts} value={batchValue} onChange={setBatchValue} />;
+              }
               if (field?.kind === "select" && batchField === "carrier_agent_id") {
                 return (
                   <Select value={batchValue || CLEAR_VALUE} onValueChange={setBatchValue}>

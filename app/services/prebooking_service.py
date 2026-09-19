@@ -287,6 +287,7 @@ class PrebookingService:
 
     def _validate_convert_payload(self, data: dict) -> None:
         required = {
+            "destination_port": "destination_port_required",
             "waybill_no": "waybill_no_required",
             "carrier_agent_id": "carrier_agent_required",
             "booked_weight": "booked_weight_required",

@@ -7,6 +7,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.models.enums import UserRoleCode, WaybillLifecycleStatus
+from app.models.destination_port import DestinationPort
 from app.schemas.waybill import WaybillCreate, WaybillUpdate
 from app.services.waybill_service import WaybillService
 from app.utils.datetime_utils import app_timezone
@@ -39,6 +40,9 @@ class FakeDb:
 
     def scalar(self, _stmt):
         return None
+
+    def get(self, model, key):
+        return DestinationPort(code=key) if model is DestinationPort and key == "AMS" else None
 
 
 class FakeRepo:
@@ -122,6 +126,7 @@ def test_create_waybill_parses_planned_flight_info_and_monitor_window(monkeypatc
     waybill = service.create(
         WaybillCreate(
             waybill_no="784-83707805",
+            destination_port="AMS",
             planned_flight_info="QR8943/01",
             planned_route_text="CAN-DOH-AMS",
         ),

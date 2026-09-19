@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CalendarClock, CheckCircle2, Edit, RefreshCw, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { DestinationPortSelect, useDestinationPorts } from "@/components/destination-ports";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -105,6 +106,7 @@ function channelTags(tags?: string[] | null) {
 }
 
 export default function PrebookingsPage() {
+  const { ports: destinationPorts } = useDestinationPorts();
   const router = useRouter();
   const [data, setData] = useState<PageResponse<WaybillPrebooking> | null>(null);
   const [page, setPage] = useState(1);
@@ -654,7 +656,7 @@ export default function PrebookingsPage() {
                 <SelectContent>{agents.map((agent) => <SelectItem key={agent.id} value={String(agent.id)}>{agent.agent_name}</SelectItem>)}</SelectContent>
               </Select>
               <Input placeholder="始发港" value={convertDraft.departure_port} onChange={(event) => setConvertDraft((prev) => prev && ({ ...prev, departure_port: event.target.value }))} />
-              <Input placeholder="目的港" value={convertDraft.destination_port} onChange={(event) => setConvertDraft((prev) => prev && ({ ...prev, destination_port: event.target.value }))} />
+              <DestinationPortSelect ports={destinationPorts} emptyLabel="选择目的港（必填）" value={convertDraft.destination_port} onChange={(value) => setConvertDraft((prev) => prev && ({ ...prev, destination_port: value }))} />
               <Input placeholder="航班信息，例如 QR8943/01" value={convertDraft.planned_flight_info} onChange={(event) => setConvertDraft((prev) => prev && ({ ...prev, planned_flight_info: event.target.value }))} />
               <div className="grid gap-1.5">
                 <Label htmlFor="prebooking-convert-outbound-date">出仓日期</Label>
@@ -669,7 +671,7 @@ export default function PrebookingsPage() {
           ) : null}
           <div className="mt-5 flex justify-end gap-2">
             <Button variant="secondary" disabled={saving} onClick={() => setConvertOpen(false)}>取消</Button>
-            <Button disabled={saving || !convertDraft} onClick={() => void convertPrebooking()}>确认转正式</Button>
+            <Button disabled={saving || !convertDraft?.destination_port} onClick={() => void convertPrebooking()}>确认转正式</Button>
           </div>
         </DialogContent>
       </Dialog>

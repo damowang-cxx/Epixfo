@@ -39,6 +39,7 @@ from app.schemas.warehouse_planner import (
 from app.schemas.waybill import WaybillCreate, WaybillUpdate
 from app.services.board_service import BoardService
 from app.services.permission_service import PermissionService
+from app.services.destination_port_service import DestinationPortService, normalize_destination, receipt_destination_ports
 from app.services.prebooking_service import PrebookingService
 from app.services.warehouse_file_service import WarehouseFileService
 from app.services.waybill_bulk_import_service import WaybillBulkImportService, WaybillImportTemplateParser
@@ -315,7 +316,6 @@ class WarehousePlannerService:
                     (AirWaybill.outbound_date.is_(None) | ~has_receipt),
                 )
                 .order_by(AirWaybill.outbound_date.is_(None).desc(), AirWaybill.id.desc())
-                .limit(100)
             )
         )
 
@@ -325,7 +325,6 @@ class WarehousePlannerService:
                 self.prebookings.base_query()
                 .where(WaybillPrebooking.status == "draft")
                 .order_by(WaybillPrebooking.planned_flight_date.asc(), WaybillPrebooking.id.desc())
-                .limit(100)
             )
         )
 
@@ -530,6 +529,12 @@ class WarehousePlannerService:
 
     def _validate_row(self, row: WarehousePlannerRow, current_user: User) -> WarehousePlannerRowResult:
         errors: list[WarehousePlannerRowError] = []
+        try:
+            port = DestinationPortService(self.db).require(row.destination_port)
+            if port != normalize_channel(row.planning_channel):
+                errors.append(WarehousePlannerRowError(field="destination_port", message="提单目的港与排仓目的港不一致"))
+        except HTTPException as exc:
+            errors.append(WarehousePlannerRowError(field="destination_port", message=str(exc.detail)))
         if row.source_type == "waybill":
             waybill = self.db.get(AirWaybill, row.source_id)
             if waybill is None:
@@ -610,6 +615,7 @@ class WarehousePlannerService:
             data["departure_port"] = DEFAULT_DEPARTURE_PORT
         required = {
             "waybill_no": "waybill_no_required",
+            "destination_port": "destination_port_required",
             "carrier_agent_id": "carrier_agent_required",
         }
         if not (row and row.board_group_id and row.board_booked_weight is not None):
@@ -637,6 +643,8 @@ class WarehousePlannerService:
             if receipt is None:
                 errors.append(WarehousePlannerRowError(field="receipt_ids", message=f"warehouse_receipt_not_found:{receipt_id}"))
                 continue
+            if normalize_destination(row.destination_port) not in receipt_destination_ports(receipt):
+                errors.append(WarehousePlannerRowError(field="receipt_ids", message=f"入仓号目的港归属不匹配或未设置:{receipt.warehouse_no}"))
             if target_new_waybill:
                 if receipt.waybill_id is not None:
                     errors.append(WarehousePlannerRowError(field="receipt_ids", message=f"receipt_bound_to_waybill:{receipt.warehouse_no}"))
@@ -880,7 +888,7 @@ def _format_decimal(value: Decimal | None) -> str:
 
 
 def normalize_channel(value: str | None) -> str:
-    return "LHR" if value == "LHR" else "AMS"
+    return normalize_destination(value)
 
 
 def _source_label(source_type: str) -> str:

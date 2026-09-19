@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Archive, Calculator, ChevronDown, ChevronRight, Download, GripVertical, MoveRight, Pencil, RefreshCw, Trash2, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { ReceiptDestinationEditor, receiptDestinationPorts, useDestinationPorts } from "@/components/destination-ports";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -305,6 +306,7 @@ function successWarningCount(item: BatchUploadSuccess) {
 }
 
 export default function WarehouseReceiptsPage() {
+  const { ports: destinationPorts } = useDestinationPorts();
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const [receipts, setReceipts] = useState<PageResponse<WarehouseReceipt> | null>(null);
   const [receiptPage, setReceiptPage] = useState(1);
@@ -377,6 +379,11 @@ export default function WarehouseReceiptsPage() {
       .get<PageResponse<WarehouseReceipt>>(`/warehouse-receipts/unbound?page=${receiptPage}&page_size=20`)
       .then(setReceipts);
   }, [receiptPage]);
+
+  function applyReceiptDestination(receipt: WarehouseReceipt) {
+    setReceipts((prev) => prev ? { ...prev, items: prev.items.map((item) => item.id === receipt.id ? receipt : item) } : prev);
+    setAllReceipts((prev) => prev.map((item) => item.id === receipt.id ? receipt : item));
+  }
 
   const loadReceiptPage = useCallback((page: number) => {
     return apiClient
@@ -1022,7 +1029,7 @@ export default function WarehouseReceiptsPage() {
                           {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                           <span className="font-semibold text-slate-900">{receipt.warehouse_no}</span>
                           <Badge>{receipt.box_count ?? 0} 箱</Badge>
-                          {channelTags(receipt.channel_tags).map((tag) => (
+                          {receiptDestinationPorts(receipt).map((tag) => (
                             <Badge key={tag} variant="amber">
                               {tag}
                             </Badge>
@@ -1030,6 +1037,7 @@ export default function WarehouseReceiptsPage() {
                         </button>
                       </div>
                       <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                        <ReceiptDestinationEditor receipt={receipt} ports={destinationPorts} onSaved={applyReceiptDestination} />
                         <span>重量 {formatDecimal(receipt.total_weight)}</span>
                         <span>方数 {formatDecimal(receipt.total_volume)}</span>
                         {(receipt.general_cargo_count ?? 0) > 0 ? <span>普货：{receipt.general_cargo_count}件</span> : null}
@@ -1070,7 +1078,7 @@ export default function WarehouseReceiptsPage() {
                       <span>上传时间：{formatDateTime(receipt.uploaded_at)}</span>
                       <span>总数量：{compact(receipt.total_quantity)}</span>
                       <span>重量/方：{formatDecimal(receipt.weight_volume_ratio)}</span>
-                      <span>标记：{channelTags(receipt.channel_tags).join(" / ") || "-"}</span>
+                      <span>目的港：{receiptDestinationPorts(receipt).join(" / ") || "未归属"}</span>
                     </div>
                     {expanded ? (
                       <div className="space-y-2 px-3 pb-3">
@@ -1313,7 +1321,6 @@ export default function WarehouseReceiptsPage() {
                       <TBody>
                         {unboundReceiptSummaries.map((receipt) => {
                           const fileName = receipt.source_file_name || receipt.warehouse_no;
-                          const tags = channelTags(receipt.channel_tags);
                           return (
                             <TR key={receipt.id}>
                               <TD>
@@ -1324,15 +1331,7 @@ export default function WarehouseReceiptsPage() {
                               <TD>{formatDateTime(receipt.uploaded_at)}</TD>
                               <TD>{receipt.box_count ?? 0}</TD>
                               <TD>
-                                {tags.length ? (
-                                  <span className="flex flex-wrap gap-1">
-                                    {tags.map((tag) => (
-                                      <Badge key={tag} variant="amber">{tag}</Badge>
-                                    ))}
-                                  </span>
-                                ) : (
-                                  "-"
-                                )}
+                                <ReceiptDestinationEditor receipt={receipt} ports={destinationPorts} onSaved={applyReceiptDestination} />
                               </TD>
                               <TD>{compact(receipt.total_quantity)}</TD>
                               <TD>{formatDecimal(receipt.total_weight)}</TD>
@@ -1821,7 +1820,7 @@ export default function WarehouseReceiptsPage() {
                         <div className="divide-y divide-slate-100">
                           {group.items.map((item) => {
                             const selected = targetReceiptId === String(item.id);
-                            const tags = channelTags(item.channel_tags);
+                            const tags = receiptDestinationPorts(item);
                             return (
                               <button
                                 key={item.id}

@@ -2,6 +2,7 @@
 
 from app.models.alert import WaybillAlert
 from app.models.audit import AuditLog
+from app.models.destination_port import DestinationPort
 from app.models.auth import UserRefreshToken
 from app.models.box import Box, BoxDocument, BoxItem, WarehouseReceipt
 from app.models.carrier import Carrier, CarrierAgent, CarrierPrefixMapping, CarrierQueryAdapter, CarrierQueryConfig
@@ -37,6 +38,7 @@ __all__ = [
     "Consignee",
     "ConsigneeContact",
     "ConsigneeNotifyParty",
+    "DestinationPort",
     "AutoFlightQuerySettings",
     "Role",
     "User",

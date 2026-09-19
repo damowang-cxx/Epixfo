@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -16,6 +16,8 @@ from app.schemas.board import BoardSummaryOut
 from app.schemas.carrier import CarrierAgentOut
 from app.schemas.consignee import ConsigneeContactOut
 from app.schemas.user import UserSummaryOut
+
+WaybillSort = Literal["created_at_desc", "planned_flight_date_asc", "planned_flight_date_desc"]
 
 
 class WaybillPlanIn(BaseModel):

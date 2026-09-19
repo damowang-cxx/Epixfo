@@ -37,7 +37,7 @@ class ConsigneeContactCreate(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     address: str | None = None
     email: str | None = Field(default=None, max_length=255)
-    phone: str | None = Field(default=None, max_length=64)
+    phone: str | None = None
     tax_info: str | None = None
     notify_info: str | None = None
     remark: str | None = None
@@ -48,7 +48,7 @@ class ConsigneeContactUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=128)
     address: str | None = None
     email: str | None = Field(default=None, max_length=255)
-    phone: str | None = Field(default=None, max_length=64)
+    phone: str | None = None
     tax_info: str | None = None
     notify_info: str | None = None
     remark: str | None = None
@@ -78,7 +78,7 @@ class ConsigneeNotifyPartyUpsert(BaseModel):
     name: str | None = Field(default=None, max_length=128)
     address: str | None = None
     email: str | None = Field(default=None, max_length=255)
-    phone: str | None = Field(default=None, max_length=64)
+    phone: str | None = None
     tax_info: str | None = None
     remark: str | None = None
     enabled: bool = True

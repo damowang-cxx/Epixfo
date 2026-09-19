@@ -241,6 +241,8 @@ export interface BoxConflictInfo {
 }
 
 export interface WarehouseReceipt {
+  destination_ports?: string[];
+  destination_ports_override?: string[] | null;
   id: number;
   warehouse_no: string;
   waybill_id?: number | null;
@@ -399,7 +401,7 @@ export interface WarehouseReceiptBatchDeleteResult {
 
 export type PlannerSourceType = "waybill" | "prebooking" | "import_waybill" | "import_prebooking";
 export type PlannerCommitMode = "all_or_none" | "success_only";
-export type PlannerChannel = "AMS" | "LHR";
+export type PlannerChannel = string;
 
 export interface WarehousePlannerRow {
   source_type: PlannerSourceType;

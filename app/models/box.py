@@ -52,6 +52,12 @@ class WarehouseReceipt(Base, TimestampMixin):
     weight_volume_ratio: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 3))
     channel_tags: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
     display_order: Mapped[Optional[int]] = mapped_column(Integer)
+    destination_ports_override: Mapped[Optional[list[str]]] = mapped_column(JSONB(none_as_null=True))
+
+    @property
+    def destination_ports(self) -> list[str]:
+        from app.services.destination_port_service import receipt_destination_ports
+        return receipt_destination_ports(self)
 
     source_document: Mapped[Optional[BoxDocument]] = relationship(back_populates="receipts")
     prebooking = relationship("WaybillPrebooking", back_populates="receipts")

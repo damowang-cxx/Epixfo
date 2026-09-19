@@ -33,6 +33,8 @@ class WarehouseReceiptOut(BaseModel):
     total_volume: Decimal | None = None
     weight_volume_ratio: Decimal | None = None
     channel_tags: list[str] = Field(default_factory=list)
+    destination_ports: list[str] = Field(default_factory=list)
+    destination_ports_override: list[str] | None = None
     general_cargo_count: int = 0
     display_order: int | None = None
     uploaded_at: datetime
@@ -56,6 +58,8 @@ class WarehouseReceiptListOut(BaseModel):
     total_volume: Decimal | None = None
     weight_volume_ratio: Decimal | None = None
     channel_tags: list[str] = Field(default_factory=list)
+    destination_ports: list[str] = Field(default_factory=list)
+    destination_ports_override: list[str] | None = None
     box_count: int
     general_cargo_count: int = 0
     display_order: int | None = None
