@@ -124,6 +124,7 @@ export interface Waybill {
   board_id?: number | null;
   board?: BoardSummary | null;
   warehouse_no?: string | null;
+  warehouse_receipts?: Array<{ id: number; warehouse_no: string }>;
   outbound_date?: string | null;
   consignee?: string | null;
   document_operator_id?: number | null;

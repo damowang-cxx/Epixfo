@@ -4,6 +4,7 @@ import re
 from datetime import date
 from decimal import Decimal, ROUND_DOWN
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 
 from app.core.platform_patch import patch_platform_wmi
@@ -22,6 +23,7 @@ from app.models import AirWaybill, Box, WarehouseReceipt, WaybillPlan
 from app.models.enums import WaybillLifecycleStatus
 from app.repositories.box_repository import BoxRepository
 from app.utils.planned_flight import extract_planned_flight_no
+from app.utils.warehouse_rows import is_warehouse_summary_row
 
 
 DECIMAL_001 = Decimal("0.001")
@@ -48,6 +50,17 @@ class CustomsExportService:
         stream = BytesIO()
         workbook.save(stream)
         return stream.getvalue()
+
+    def waybill_export_filename(self, waybill: AirWaybill) -> str:
+        receipts = self.db.scalars(
+            select(WarehouseReceipt)
+            .options(selectinload(WarehouseReceipt.source_document))
+            .where(WarehouseReceipt.waybill_id == waybill.id)
+            .order_by(WarehouseReceipt.id.asc())
+        )
+        parts = [_safe_export_filename_part(waybill.waybill_no)]
+        parts.extend(_receipt_export_filename_part(receipt) for receipt in receipts)
+        return "_".join(parts) + ".xlsx"
 
     def build_monthly_general_cargo_export(self, year: int, month: int) -> bytes:
         workbook = Workbook()
@@ -115,12 +128,19 @@ class CustomsExportService:
         total_weight = Decimal("0.000")
         total_volume = Decimal("0.000")
 
+        boxes = [box for box in boxes if not is_warehouse_summary_row(
+            box.box_no, box.warehouse_waybill_no, box.goods_name, box.quantity,
+        )]
         ordered_boxes = [box for box in boxes if not getattr(box, "is_general_cargo", False)]
         ordered_boxes.extend(box for box in boxes if getattr(box, "is_general_cargo", False))
 
         for box in ordered_boxes:
             is_general_cargo = bool(getattr(box, "is_general_cargo", False))
-            items = list(box.items or [])
+            items = [item for item in (box.items or []) if not is_warehouse_summary_row(
+                None, item.warehouse_waybill_no, item.goods_name, item.quantity,
+            )]
+            if box.items and not items:
+                continue
             if not items:
                 total_weight += _to_decimal(box.weight) or Decimal("0.000")
                 total_volume += _to_decimal(box.volume) or Decimal("0.000")
@@ -465,6 +485,19 @@ def _receipt_file_name(receipt: WarehouseReceipt) -> str:
     return source_file_name or _clean(getattr(receipt, "warehouse_no", None))
 
 
+def _receipt_export_filename_part(receipt: WarehouseReceipt) -> str:
+    source_document = getattr(receipt, "source_document", None)
+    source_name = _clean(getattr(source_document, "file_name", None))
+    if source_name:
+        return _safe_export_filename_part(Path(source_name).stem)
+    return _safe_export_filename_part(getattr(receipt, "warehouse_no", None) or "入仓号文件")
+
+
+def _safe_export_filename_part(value: Any) -> str:
+    text = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", str(value or "").strip())
+    return text.rstrip(". ") or "未命名"
+
+
 def _format_decimal_3(value: Decimal | int | float | str | None) -> str:
     decimal = _to_decimal(value)
     if decimal is None:
@@ -476,8 +509,8 @@ def _format_decimal_trim(value: Decimal | int | float | str | None) -> str:
     decimal = _to_decimal(value)
     if decimal is None:
         return ""
-    text = str(decimal.normalize())
-    return text if "E" not in text else format(decimal, "f").rstrip("0").rstrip(".")
+    text = format(decimal, "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
 
 
 def _format_box_volume_info(box: Box) -> str:

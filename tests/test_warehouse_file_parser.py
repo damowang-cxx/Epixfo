@@ -18,6 +18,29 @@ def _xlsx_bytes(rows: list[list[object]]) -> bytes:
     return stream.getvalue()
 
 
+@pytest.mark.parametrize("summary", [
+    [None, None, None, "合计", 999, 999, 999],
+    ["总计", None, None, None, 999, 999, 999],
+    [None, None, "总方数", None, None, 999, None],
+])
+def test_parser_discards_file_summary_rows_without_appending_to_last_box(summary):
+    content = _xlsx_bytes([
+        ["外箱条码", "提单号码", "品名", "数量", "重量", "收货体积信息", "收货重量/方"],
+        ["BOX-001", "AWB-1", "Shoes", 2, 100, "100*100*100", None],
+        [None, "AWB-2", "Bags", 3, 200, None, None],
+        summary,
+    ])
+    result = parse_warehouse_xlsx("totals.xlsx", content)
+    assert result.errors == []
+    assert len(result.boxes) == 1
+    assert len(result.boxes[0].items) == 2
+    assert result.boxes[0].weight == Decimal("300.000")
+    assert result.boxes[0].quantity == 5
+    assert result.boxes[0].volume == Decimal("1.000")
+    assert result.skipped_count == 1
+    assert len(result.barcode_cells) == 1
+
+
 def test_parse_warehouse_xlsx_success_and_calculates_ratio() -> None:
     content = _xlsx_bytes(
         [

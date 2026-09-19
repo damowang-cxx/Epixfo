@@ -189,6 +189,7 @@ interface CargoBoxesTableProps {
   warehouseNo?: string | null;
   warehouseReceiptId?: number | null;
   allowCreate?: boolean;
+  summaryOnly?: boolean;
   readonly?: boolean;
   onBoxUpdated?: (box: CargoBox) => void;
   onBoxDeleted?: (boxId: number) => void;
@@ -204,6 +205,7 @@ export function CargoBoxesTable({
   warehouseNo,
   warehouseReceiptId,
   allowCreate = true,
+  summaryOnly = false,
   readonly = false,
   onBoxUpdated,
   onBoxDeleted,
@@ -255,9 +257,10 @@ export function CargoBoxesTable({
       boxes.reduce(
         (total, item) => ({
           weight: total.weight + toNumber(item.weight),
-          volume: total.volume + toNumber(item.volume)
+          volume: total.volume + toNumber(item.volume),
+          quantity: total.quantity + toNumber(item.quantity)
         }),
-        { weight: 0, volume: 0 }
+        { weight: 0, volume: 0, quantity: 0 }
       ),
     [boxes]
   );
@@ -535,6 +538,18 @@ export function CargoBoxesTable({
 
   return (
     <>
+    {summaryOnly ? (
+      <div aria-label="已绑定入仓货物汇总" className="mb-4 flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-slate-200 pb-3 text-sm">
+        <span>总箱数：<strong>{boxes.length}</strong></span>
+        <span>总数量：<strong>{warehouseTotals.quantity}</strong></span>
+        <span>总重量：<strong>{formatDecimal(warehouseTotals.weight)}</strong></span>
+        <span>总方数(CBM)：<strong>{formatDecimal(warehouseTotals.volume)}</strong></span>
+        <span>重量/方：<strong>{formatDecimal(warehouseTotals.volume > 0 ? warehouseTotals.weight / warehouseTotals.volume : 0)}</strong></span>
+        {canManageBoxes ? <Button type="button" variant="secondary" size="sm" disabled={saving || !boxes.length} onClick={openVolumeCalculationDialog}>
+          <Calculator className="h-4 w-4" />总方数计算
+        </Button> : null}
+      </div>
+    ) : <>
     <div className="space-y-3">
       {canManageBoxes ? (
         <div className="flex flex-wrap items-center gap-2 rounded-md border border-slate-200 bg-slate-50 p-2 text-sm">
@@ -966,12 +981,13 @@ export function CargoBoxesTable({
           </div>
         </DialogContent>
       </Dialog>
+      </>}
       <Dialog open={volumeCalcOpen} onOpenChange={(open) => !saving && setVolumeCalcOpen(open)}>
         <DialogContent>
           <DialogTitle className="pr-10 text-base font-semibold text-slate-900">方数计算</DialogTitle>
           <div className="mt-3 space-y-3">
             <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-              当前总方数 {formatDecimal(warehouseTotals.volume)} CBM。请输入希望当前入仓号调整到的目标总方数；系统会按整数长宽高调整有尺寸的一箱一件箱号，结果允许落在目标值到目标值 +0.5 CBM 区间，一箱多件或缺少长宽高的箱号保持原始方数。
+              当前总方数 {formatDecimal(warehouseTotals.volume)} CBM。请输入希望{summaryOnly ? "当前提单全部已绑定入仓文件" : "当前入仓号"}调整到的目标总方数；系统会按整数长宽高调整有尺寸的一箱一件箱号，结果允许落在目标值到目标值 +0.5 CBM 区间，一箱多件或缺少长宽高的箱号保持原始方数。
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium text-slate-700" htmlFor="target-volume">

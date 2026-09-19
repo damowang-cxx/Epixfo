@@ -205,6 +205,13 @@ class WaybillAirlineFileBatchUploadResult(BaseModel):
     failures: list[WaybillAirlineFileBatchFailure]
 
 
+class WaybillWarehouseReceiptOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    warehouse_no: str
+
+
 class WaybillOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -218,6 +225,7 @@ class WaybillOut(BaseModel):
     carrier_agent_id: int | None = None
     carrier_agent: CarrierAgentOut | None = None
     warehouse_no: str | None = None
+    warehouse_receipts: list[WaybillWarehouseReceiptOut] = Field(default_factory=list)
     outbound_date: date | None = None
     consignee: str | None = None
     consignee_contact_id: int | None = None

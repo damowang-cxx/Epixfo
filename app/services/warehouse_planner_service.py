@@ -83,6 +83,16 @@ def _row_field_was_set(row: WarehousePlannerRow, field: str) -> bool:
     return field in getattr(row, "model_fields_set", set())
 
 
+def _needs_warehouse_planning_clause():
+    has_bound_receipt = (
+        select(WarehouseReceipt.id)
+        .where(WarehouseReceipt.waybill_id == AirWaybill.id)
+        .correlate(AirWaybill)
+        .exists()
+    )
+    return AirWaybill.outbound_date.is_(None) | ~has_bound_receipt
+
+
 class WarehousePlannerService:
     def __init__(self, db: Session):
         self.db = db
@@ -302,7 +312,6 @@ class WarehousePlannerService:
             page += 1
 
     def _candidate_waybills(self) -> list[AirWaybill]:
-        has_receipt = select(WarehouseReceipt.id).where(WarehouseReceipt.waybill_id == AirWaybill.id).exists()
         return list(
             self.db.scalars(
                 select(AirWaybill)
@@ -313,7 +322,7 @@ class WarehousePlannerService:
                 )
                 .where(
                     AirWaybill.lifecycle_status.notin_(list(ACTIVE_EXCLUDED_STATUSES)),
-                    (AirWaybill.outbound_date.is_(None) | ~has_receipt),
+                    _needs_warehouse_planning_clause(),
                 )
                 .order_by(AirWaybill.outbound_date.is_(None).desc(), AirWaybill.id.desc())
             )

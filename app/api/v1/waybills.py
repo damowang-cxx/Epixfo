@@ -287,8 +287,9 @@ def waybill_boxes(waybill_id: int, current_user=Depends(get_current_user), db: S
 @router.get("/{waybill_id}/customs-export")
 def customs_export(waybill_id: int, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
     waybill = WaybillService(db).get_visible(waybill_id, current_user)
-    content = CustomsExportService(db).build_waybill_export(waybill)
-    filename = f"清关数据_{waybill.waybill_no}.xlsx"
+    export_service = CustomsExportService(db)
+    content = export_service.build_waybill_export(waybill)
+    filename = export_service.waybill_export_filename(waybill)
     encoded_filename = quote(filename)
     return StreamingResponse(
         BytesIO(content),

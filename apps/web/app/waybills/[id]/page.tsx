@@ -401,6 +401,8 @@ export default function WaybillDetailPage() {
   async function unbindWarehouseReceipt(receiptId: number, warehouseNo?: string | null) {
     if (!id || !canEditBoxes) return;
     const displayName = warehouseNo || `#${receiptId}`;
+    const isLastReceipt = (waybill?.warehouse_receipts || []).length === 1
+      && waybill?.warehouse_receipts?.[0]?.id === receiptId;
     if (!window.confirm(`确认解绑入仓号 ${displayName}？解绑后该入仓号文件会回到未绑定箱号区。`)) return;
     setUnbindingReceiptId(receiptId);
     setMessage("");
@@ -408,9 +410,15 @@ export default function WaybillDetailPage() {
       await apiClient.delete<void>(`/waybills/${id}/warehouse-receipts/${receiptId}`);
       setBoxes((current) => current.filter((box) => box.warehouse_receipt_id !== receiptId));
       setWaybill((current) =>
-        current && current.warehouse_no === warehouseNo ? { ...current, warehouse_no: null } : current
+        current ? {
+          ...current,
+          warehouse_no: current.warehouse_no === warehouseNo ? null : current.warehouse_no,
+          warehouse_receipts: (current.warehouse_receipts || []).filter((receipt) => receipt.id !== receiptId)
+        } : current
       );
-      setMessage(`入仓号 ${displayName} 已解绑，已回到未绑定箱号区。`);
+      setMessage(isLastReceipt
+        ? `入仓号 ${displayName} 已解绑；该提单已无绑定入仓文件，并重新进入排仓编辑器待排仓列表。`
+        : `入仓号 ${displayName} 已解绑，已回到未绑定箱号区。`);
       load();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "解绑入仓号失败。");
@@ -629,6 +637,15 @@ export default function WaybillDetailPage() {
               ) : null
             }
           >
+            <CargoBoxesTable
+              summaryOnly
+              boxes={boxes}
+              waybillId={waybill.id}
+              readonly={!canEditBoxes}
+              onChanged={load}
+              onError={setMessage}
+              onMessage={setMessage}
+            />
             {boxGroups.length ? (
               <div className="space-y-4">
                 {boxGroups.map((group) => (

@@ -1040,6 +1040,80 @@ def test_recalculate_box_volumes_fits_single_item_boxes_to_target_range_with_int
     assert service.db.committed is True
 
 
+def _multi_receipt_volume_service():
+    waybill = SimpleNamespace(id=7, waybill_no="784-00000001", warehouse_no="WH-B", updated_by=None)
+    service = WarehouseFileService.__new__(WarehouseFileService)
+    service.db = FakeDb()
+    service.boxes = FakeBoxRepository()
+    service.waybills = FakeWaybillRepository(waybill)
+    first = WarehouseReceipt(id=88, warehouse_no="WH-A", waybill_id=7, total_quantity=1)
+    second = WarehouseReceipt(id=89, warehouse_no="WH-B", waybill_id=7, total_quantity=1)
+    service.boxes.receipts_by_no = {"WH-A": first, "WH-B": second}
+    boxes = [
+        _fake_box(4, "BOX-A", "100.000", "1.930", original_volume_info="100*100*193"),
+        _fake_box(5, "BOX-B", "200.000", "1.940", original_volume_info="100*100*194"),
+    ]
+    boxes[1].warehouse_receipt_id = 89
+    for box in boxes:
+        box.quantity = 1
+        box.raw_data = {"source_note": "keep me"}
+        box.weight_volume_ratio = Decimal("51.813") if box.id == 4 else Decimal("103.093")
+    service.boxes.boxes_list = boxes
+    return service, SimpleNamespace(id=5, is_superuser=True, roles=[]), first, second
+
+
+def test_multi_receipt_total_calculation_and_unbind_restore_original_data():
+    service, user, first, second = _multi_receipt_volume_service()
+    result = service.recalculate_box_volumes(7, Decimal("4.500"), user)
+    assert Decimal("4.500") <= result.new_total_volume <= Decimal("5.000")
+    assert result.original_total_volume == Decimal("3.870")
+    assert first.total_volume + second.total_volume == result.new_total_volume
+    assert all(box.raw_data["volume_recalculation"]["integer_dimensions"] for box in service.boxes.boxes_list)
+    service.recalculate_box_volumes(7, Decimal("4.600"), user)
+    first_adjusted = first.total_volume
+    service._latest_bound_receipt_warehouse_no = lambda _: "WH-A" if first.waybill_id else None
+
+    service.unbind_receipt_from_waybill(7, second.id, user)
+    detached = service.boxes.boxes_list[1]
+    assert second.total_volume == Decimal("1.940")
+    assert second.total_weight == Decimal("200.000")
+    assert detached.volume == Decimal("1.940")
+    assert detached.weight_volume_ratio == Decimal("103.093")
+    assert detached.original_volume_info == "100*100*194"
+    assert detached.raw_data == {"source_note": "keep me"}
+    assert detached.current_waybill_id is None
+    assert first.total_volume == first_adjusted
+    assert service.waybills.get(7).warehouse_no == "WH-A"
+    assert [box.id for box in service.boxes.list_by_waybill(7)] == [4]
+
+    service.unbind_receipt_from_waybill(7, first.id, user)
+    assert first.total_volume == Decimal("1.930")
+    assert service.waybills.get(7).warehouse_no is None
+    assert service.boxes.list_by_waybill(7) == []
+
+
+def test_single_receipt_calculation_reports_only_its_own_volume():
+    service, user, first, second = _multi_receipt_volume_service()
+    result = service.recalculate_box_volumes(7, Decimal("2.500"), user, warehouse_receipt_id=first.id)
+    assert Decimal("2.500") <= result.new_total_volume <= Decimal("3.000")
+    assert result.new_total_volume == first.total_volume
+    assert len(result.boxes) == 2
+    assert service.boxes.boxes_list[1].volume == Decimal("1.940")
+    assert "volume_recalculation" not in service.boxes.boxes_list[1].raw_data
+
+
+def test_unbinding_box_restores_legacy_calculation_without_snapshot():
+    service, user, first, second = _multi_receipt_volume_service()
+    box = service.boxes.boxes_list[0]
+    box.volume = Decimal("3.000")
+    box.raw_data["volume_recalculation"] = {"base_volume": "1.930", "calculated_volume_info": "100*100*300(3)"}
+    service.batch_unbind_boxes([box.id], user)
+    assert box.volume == Decimal("1.930")
+    assert box.raw_data == {"source_note": "keep me"}
+    assert box.warehouse_receipt_id is None
+    assert first.total_volume == Decimal("0.000")
+
+
 def test_recalculate_box_volumes_accepts_target_range_when_exact_integer_fit_is_unnecessary() -> None:
     waybill = SimpleNamespace(id=7, waybill_no="784-00000001", warehouse_no="AMS-IN-001")
     service = WarehouseFileService.__new__(WarehouseFileService)

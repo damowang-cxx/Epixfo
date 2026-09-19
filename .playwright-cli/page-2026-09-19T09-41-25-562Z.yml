@@ -1,0 +1,139 @@
+- generic:
+  - generic [aria-hidden]:
+    - complementary:
+      - generic:
+        - link:
+          - /url: /
+      - navigation:
+        - link:
+          - /url: /
+          - generic: 总览
+        - link:
+          - /url: /waybills
+          - generic: 提单管理
+        - link:
+          - /url: /alerts
+          - generic: 异常中心
+      - generic:
+        - button:
+          - generic: 收起导航
+    - generic:
+      - banner:
+        - generic:
+          - generic: 物流航空头程提单监控后台
+          - generic:
+            - generic: 客服
+            - generic: page-size-test
+            - button
+      - main:
+        - generic:
+          - generic:
+            - heading [level=1]: 提单管理
+            - paragraph: 录入、筛选、追踪航空头程提单
+          - generic:
+            - link:
+              - /url: /waybills/new
+              - text: 新建提单
+        - generic:
+          - generic:
+            - heading [level=2]: 状态总览
+          - generic:
+            - generic:
+              - button:
+                - generic: 全部
+                - generic: "0"
+              - button:
+                - generic: 已创建
+                - generic: "0"
+              - button:
+                - generic: 待监控
+                - generic: "0"
+              - button:
+                - generic: 监控中
+                - generic: "0"
+              - button:
+                - generic: 已入仓
+                - generic: "0"
+              - button:
+                - generic: 已装机
+                - generic: "0"
+              - button:
+                - generic: 已起飞
+                - generic: "0"
+              - button:
+                - generic: 已到达
+                - generic: "0"
+              - button:
+                - generic: 已通知提取
+                - generic: "0"
+              - button:
+                - generic: 已提取
+                - generic: "0"
+              - button:
+                - generic: 已作废
+                - generic: "0"
+        - generic:
+          - generic:
+            - generic:
+              - textbox:
+                - /placeholder: 提单号
+              - textbox:
+                - /placeholder: 航司代码
+              - combobox:
+                - generic: 全部目的港
+              - textbox:
+                - /placeholder: 计划航班
+              - combobox:
+                - generic: 全部状态
+              - button
+              - group:
+                - generic: 约定航班起飞日期范围
+                - generic:
+                  - generic: 约定起飞日期从
+                  - textbox
+                - generic:
+                  - generic: 约定起飞日期至
+                  - textbox
+            - generic:
+              - generic:
+                - button: 恢复默认列顺序
+                - button: 恢复提单默认排序
+            - generic:
+              - table:
+                - rowgroup:
+                  - row:
+                    - columnheader: 提单号
+                    - columnheader: 收件人
+                    - columnheader: 订舱方数/板总方数
+                    - columnheader: 订舱重量
+                    - columnheader: 密度
+                    - columnheader: 报价
+                    - columnheader: 含T
+                    - columnheader: 指定清关人员
+                    - columnheader: 清关资料
+                    - columnheader: 航代
+                    - columnheader: 入仓号/入仓文件
+                    - columnheader: 出仓日期
+                    - columnheader: 始发港
+                    - columnheader: 目的港
+                    - columnheader: 计划航班
+                    - columnheader:
+                      - button: 约定航班起飞日期
+                    - columnheader: 官方预计航班日期
+                    - columnheader: 生命周期
+                    - columnheader: 异常
+            - generic:
+              - generic: 共 150 条
+              - generic:
+                - generic: 每页
+                - combobox [expanded]:
+                  - generic: 50 条
+                - generic: 第 1 页
+                - button [disabled]: 上一页
+                - button: 下一页
+  - button "Open Next.js Dev Tools" [ref=e8] [cursor=pointer]
+  - alert
+  - listbox [ref=e180]:
+    - option "20 条" [ref=e181]
+    - option "50 条" [active] [selected] [ref=e184]
+    - option "100 条" [ref=e190]

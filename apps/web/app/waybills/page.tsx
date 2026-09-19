@@ -49,8 +49,10 @@ interface StatusCount {
 }
 
 type WaybillSort = "created_at_desc" | "planned_flight_date_asc" | "planned_flight_date_desc";
+type WaybillPageSize = 20 | 50 | 100;
 
 const BULK_CLEAR_VALUE = "__clear__";
+const WAYBILL_PAGE_SIZE_OPTIONS: WaybillPageSize[] = [20, 50, 100];
 
 type BulkUpdateFieldKind = "select" | "date" | "text" | "number" | "boolean";
 type InlineDraftChanges = Partial<Record<WaybillInlineUpdateField, WaybillInlineUpdateValue>>;
@@ -320,6 +322,7 @@ export default function WaybillsPage() {
   const [plannedFlightDateTo, setPlannedFlightDateTo] = useState("");
   const [lifecycleStatus, setLifecycleStatus] = useState<LifecycleStatus | "all">("all");
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<WaybillPageSize>(20);
   const [sort, setSort] = useState<WaybillSort>("created_at_desc");
   const [message, setMessage] = useState("");
   const [generalCargoMonth, setGeneralCargoMonth] = useState(currentMonthValue);
@@ -347,7 +350,7 @@ export default function WaybillsPage() {
   const [users, setUsers] = useState<User[]>([]);
 
   const query = useMemo(() => {
-    const params = new URLSearchParams({ page: String(page), page_size: "20" });
+    const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
     params.set("sort", sort);
     if (waybillNo) params.set("waybill_no", waybillNo);
     if (carrierCode) params.set("carrier_code", carrierCode);
@@ -357,7 +360,7 @@ export default function WaybillsPage() {
     if (plannedFlightDateTo) params.set("planned_flight_date_to", plannedFlightDateTo);
     if (lifecycleStatus !== "all") params.set("lifecycle_status", lifecycleStatus);
     return params;
-  }, [carrierCode, destinationPort, lifecycleStatus, page, plannedFlightDateFrom, plannedFlightDateTo, plannedFlightNo, sort, waybillNo]);
+  }, [carrierCode, destinationPort, lifecycleStatus, page, pageSize, plannedFlightDateFrom, plannedFlightDateTo, plannedFlightNo, sort, waybillNo]);
 
   const load = useCallback(() => {
     const requestId = ++listRequestRef.current;
@@ -506,6 +509,15 @@ export default function WaybillsPage() {
   function changeSort(nextSort: WaybillSort) {
     if (savingInlineChanges || !confirmAndDiscardEditChanges()) return;
     setSort(nextSort);
+    setPage(1);
+    setSelectedWaybillIds([]);
+  }
+
+  function changePageSize(value: string) {
+    if (!confirmAndDiscardEditChanges()) return;
+    const nextPageSize = Number(value) as WaybillPageSize;
+    if (!WAYBILL_PAGE_SIZE_OPTIONS.includes(nextPageSize)) return;
+    setPageSize(nextPageSize);
     setPage(1);
     setSelectedWaybillIds([]);
   }
@@ -1164,7 +1176,9 @@ export default function WaybillsPage() {
         render: ({ item }) => (
           <TD>
             <div className="flex min-w-40 flex-col items-start gap-1">
-              {item.warehouse_no ? <span className="font-medium text-slate-800">{item.warehouse_no}</span> : <span className="text-slate-400">-</span>}
+              {item.warehouse_receipts?.length ? item.warehouse_receipts.map((receipt) => (
+                <span key={receipt.id} className="font-medium text-slate-800">{receipt.warehouse_no}</span>
+              )) : <span className="text-slate-400">-</span>}
             </div>
           </TD>
         )
@@ -1552,9 +1566,21 @@ export default function WaybillsPage() {
             })}
           </TBody>
         </Table>
-        <div className="mt-4 flex items-center justify-between text-sm text-slate-500">
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-slate-500">
           <span>共 {data?.total ?? 0} 条</span>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <span>每页</span>
+            <Select value={String(pageSize)} onValueChange={changePageSize}>
+              <SelectTrigger className="h-8 w-24" aria-label="每页显示提单数">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {WAYBILL_PAGE_SIZE_OPTIONS.map((size) => (
+                  <SelectItem key={size} value={String(size)}>{size} 条</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <span>第 {page} 页</span>
             <Button
               variant="secondary"
               size="sm"

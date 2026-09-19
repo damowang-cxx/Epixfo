@@ -4,11 +4,13 @@ from datetime import date
 from decimal import Decimal
 from io import BytesIO
 from types import SimpleNamespace
+from urllib.parse import quote
 
 import pytest
 from openpyxl import load_workbook
 
 from app.api.v1.waybills import general_cargo_export
+from app.api.v1 import waybills as waybill_routes
 from app.core.exceptions import AppHTTPException
 from app.models.enums import UserRoleCode
 from app.services.customs_export_service import CustomsExportService
@@ -31,6 +33,12 @@ def _make_service(boxes):
 def _make_monthly_service(rows):
     service = CustomsExportService.__new__(CustomsExportService)
     service._list_monthly_general_cargo_rows = lambda year, month: rows
+    return service
+
+
+def _make_filename_service(receipts):
+    service = CustomsExportService.__new__(CustomsExportService)
+    service.db = SimpleNamespace(scalars=lambda statement: receipts)
     return service
 
 
@@ -69,6 +77,76 @@ def _make_receipt(**overrides):
 
 def _load_export(workbook_bytes: bytes):
     return load_workbook(BytesIO(workbook_bytes))
+
+
+def test_customs_export_filename_includes_every_bound_receipt_source_file():
+    receipts = [
+        _make_receipt(warehouse_no="WH-A", source_document=SimpleNamespace(file_name="AMS 入仓 A.xlsx")),
+        _make_receipt(warehouse_no="WH-B", source_document=SimpleNamespace(file_name="AMS-入仓-B.xlsx")),
+    ]
+
+    filename = _make_filename_service(receipts).waybill_export_filename(_make_waybill())
+
+    assert filename == "176-29600664_AMS 入仓 A_AMS-入仓-B.xlsx"
+
+
+def test_customs_export_filename_falls_back_to_warehouse_no_and_sanitizes_invalid_characters():
+    receipts = [
+        _make_receipt(warehouse_no="WH:A/01", source_document=None),
+        _make_receipt(warehouse_no="WH-B", source_document=SimpleNamespace(file_name="folder?B.xlsx")),
+    ]
+
+    filename = _make_filename_service(receipts).waybill_export_filename(_make_waybill(waybill_no="176/29600664"))
+
+    assert filename == "176_29600664_WH_A_01_folder_B.xlsx"
+
+
+def test_customs_export_route_uses_composed_download_filename(monkeypatch: pytest.MonkeyPatch):
+    waybill = _make_waybill()
+    expected_filename = "176-29600664_WH-A_WH-B.xlsx"
+    monkeypatch.setattr(
+        waybill_routes,
+        "WaybillService",
+        lambda db: SimpleNamespace(get_visible=lambda waybill_id, current_user: waybill),
+    )
+    monkeypatch.setattr(
+        waybill_routes,
+        "CustomsExportService",
+        lambda db: SimpleNamespace(
+            build_waybill_export=lambda item: b"xlsx",
+            waybill_export_filename=lambda item: expected_filename,
+        ),
+    )
+
+    response = waybill_routes.customs_export(waybill.id, current_user=SimpleNamespace(), db=SimpleNamespace())
+
+    assert response.headers["content-disposition"] == f"attachment; filename*=UTF-8''{quote(expected_filename)}"
+
+
+def test_customs_export_combines_all_receipts_and_uses_one_current_system_total():
+    boxes = [SimpleNamespace(
+        box_no=f"BOX-{index}", warehouse_waybill_no=f"AWB-{index}", goods_name="Goods",
+        warehouse_receipt_id=index, quantity=1, weight=Decimal("100.000"),
+        original_volume_info="100*100*100", volume=Decimal("1.250"),
+        raw_data={"source_total": "999", "volume_recalculation": {"calculated_volume_info": "100*100*125(1.250)"}},
+        items=[],
+    ) for index in (1, 2)]
+    boxes[1].items = [
+        SimpleNamespace(warehouse_waybill_no="AWB-2A", goods_name="Shoes", quantity=2, weight=Decimal("40.000")),
+        SimpleNamespace(warehouse_waybill_no="AWB-2B", goods_name="Bags", quantity=3, weight=Decimal("60.000")),
+        SimpleNamespace(warehouse_waybill_no=None, goods_name=None, quantity="合计", weight=Decimal("999.000")),
+    ]
+    workbook = _load_export(_make_service(boxes).build_waybill_export(_make_waybill()))
+    sheet = workbook["入仓数据"]
+    assert sheet.max_row == 5
+    assert [sheet.cell(row, 2).value for row in (2, 3, 4)] == ["AWB-1", "AWB-2A", "AWB-2B"]
+    assert sheet.cell(2, 5).value == "100"
+    assert sheet.cell(2, 6).value == "100*100*125"
+    assert sheet.cell(3, 6).value == "100*100*125"
+    assert sheet.cell(4, 7).value is None
+    assert [cell.value for cell in sheet[5]][3:7] == ["合计", "200", "80.000", "2.500"]
+    assert sum(cell.value == "合计" for row in sheet for cell in row) == 1
+    assert all("999" not in str(cell.value) for row in sheet for cell in row)
 
 
 def test_customs_export_includes_two_sheets_and_single_box_row() -> None:

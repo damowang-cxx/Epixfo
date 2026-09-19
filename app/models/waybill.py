@@ -214,6 +214,10 @@ class AirWaybill(Base, TimestampMixin):
     consignee_contact = relationship("ConsigneeContact", lazy="joined")
     customs_staff = relationship("User", foreign_keys=[customs_staff_id], lazy="joined")
     customs_data_uploaded_by_user = relationship("User", foreign_keys=[customs_data_uploaded_by], lazy="joined")
+    warehouse_receipts = relationship(
+        "WarehouseReceipt", foreign_keys="WarehouseReceipt.waybill_id",
+        viewonly=True, lazy="selectin", order_by="WarehouseReceipt.id",
+    )
     board: Mapped[Optional[WaybillBoard]] = relationship(back_populates="waybills")
     plan: Mapped[Optional[WaybillPlan]] = relationship(back_populates="waybill", cascade="all, delete-orphan")
     official_info: Mapped[Optional[WaybillOfficialInfo]] = relationship(

@@ -44,6 +44,7 @@ from app.schemas.box import (
 )
 from app.services.permission_service import PermissionService
 from app.services.destination_port_service import DestinationPortService, receipt_destination_ports
+from app.utils.warehouse_rows import is_warehouse_summary_row
 
 
 REQUIRED_COLUMNS = {
@@ -854,6 +855,14 @@ class WarehouseFileService:
         touched_receipt_ids = {box.warehouse_receipt_id for box in boxes if box.warehouse_receipt_id is not None}
         for box in boxes:
             old_volume = box.volume or Decimal("0.000")
+            raw_data = dict(box.raw_data or {})
+            previous_recalculation = raw_data.get("volume_recalculation") or {}
+            original_values = previous_recalculation.get("original_values") or {
+                "volume": str(box.volume) if box.volume is not None else None,
+                "weight_volume_ratio": str(box.weight_volume_ratio) if box.weight_volume_ratio is not None else None,
+            }
+            if previous_recalculation and "original_values" not in previous_recalculation:
+                original_values = {"volume": str(base_volumes[box.id])}
             new_volume = fitted_volumes.get(box.id, base_volumes[box.id])
             box.volume = new_volume
             box.weight_volume_ratio = (
@@ -866,10 +875,10 @@ class WarehouseFileService:
                 if box.id in fitted_dimensions
                 else _calculated_volume_info(box, new_volume)
             )
-            raw_data = dict(box.raw_data or {})
             recalculation = {
                 "source": "target_volume_integer_dimensions",
                 "base_volume": str(base_volumes[box.id]),
+                "original_values": original_values,
                 "old_volume": str(old_volume.quantize(DECIMAL_001, rounding=ROUND_HALF_UP)),
                 "new_volume": str(new_volume),
                 "calculated_volume_info": calculated_volume_info,
@@ -894,7 +903,8 @@ class WarehouseFileService:
             self._refresh_receipt_totals(self.boxes.get_receipt_by_id(receipt_id))
         self.db.commit()
         updated_boxes = result_boxes_loader()
-        new_total_volume = sum((item.volume or Decimal("0.000") for item in updated_boxes), Decimal("0.000")).quantize(
+        calculated_box_ids = {box.id for box in boxes}
+        new_total_volume = sum((item.volume or Decimal("0.000") for item in updated_boxes if item.id in calculated_box_ids), Decimal("0.000")).quantize(
             DECIMAL_001,
             rounding=ROUND_HALF_UP,
         )
@@ -1231,12 +1241,14 @@ class WarehouseFileService:
                 document.bound_waybill_id = None
 
         for box in self.boxes.list_by_receipt_id(receipt.id):
+            _restore_box_original_volume(box)
             box.current_waybill_id = None
             box.status = "unbound"
             box.never_bound_direct_upload = False
             box.unbound_reason = None
             box.unbound_remark = None
 
+        self.db.flush()
         waybill.warehouse_no = self._latest_bound_receipt_warehouse_no(waybill.id)
         waybill.updated_by = current_user.id
         self._refresh_receipt_totals(receipt)
@@ -1451,12 +1463,14 @@ class WarehouseFileService:
         touched_receipt_ids = {box.warehouse_receipt_id for box in boxes if box.warehouse_receipt_id is not None}
         remark = unbound_remark.strip() if unbound_remark else None
         for box in boxes:
+            _restore_box_original_volume(box)
             box.warehouse_receipt_id = None
             box.current_waybill_id = None
             box.status = "unbound"
             box.never_bound_direct_upload = False
             box.unbound_reason = unbound_reason
             box.unbound_remark = remark
+        self.db.flush()
         for receipt_id in touched_receipt_ids:
             self._refresh_receipt_totals(self.boxes.get_receipt_by_id(receipt_id))
         self.db.commit()
@@ -1983,6 +1997,16 @@ def parse_warehouse_xlsx(file_name: str, content: bytes) -> WarehouseFileParseRe
             skipped_count += 1
             continue
 
+        if is_warehouse_summary_row(
+            _optional_text(values, column_map["outer_barcode"]),
+            _optional_text(values, column_map["warehouse_waybill_no"]),
+            _optional_text(values, column_map["goods_name"]),
+            _optional_column_text(values, column_map, "quantity"),
+        ):
+            skipped_count += 1
+            last_valid_box_no = None
+            continue
+
         raw_data = {
             normalized_headers[idx]: _raw_json_value(values[idx] if idx < len(values) else None)
             for idx in range(len(normalized_headers))
@@ -2399,10 +2423,25 @@ def _integer_dimension_candidates_for_box(
         if previous is None or candidate.score < previous.score:
             candidates_by_units[units] = candidate
 
-    return sorted(
+    ranked = sorted(
         candidates_by_units.values(),
         key=lambda item: (item.score, abs(item.volume - ideal_volume), abs(item.volume - base_volume)),
-    )[:MAX_DIMENSION_CANDIDATES_PER_BOX]
+    )
+    # Keep candidates on both sides of the target; lowest-offset pruning alone
+    # can discard every reachable solution when the target differs substantially.
+    anchors = []
+    for candidates in (
+        [item for item in ranked if item.volume <= ideal_volume],
+        [item for item in ranked if item.volume >= ideal_volume],
+    ):
+        if candidates:
+            anchors.append(min(candidates, key=lambda item: (abs(item.volume - ideal_volume), item.score)))
+    selected = {item.units: item for item in anchors}
+    for item in ranked:
+        if len(selected) >= MAX_DIMENSION_CANDIDATES_PER_BOX:
+            break
+        selected.setdefault(item.units, item)
+    return sorted(selected.values(), key=lambda item: (item.score, abs(item.volume - ideal_volume)))
 
 
 def _integer_dimension_candidate_score(
@@ -2471,6 +2510,27 @@ def _channel_prefix(box_no: str | None) -> str | None:
         return None
     prefix = text[:3]
     return prefix if re.fullmatch(r"[A-Z]{3}", prefix) else None
+
+
+def _restore_box_original_volume(box: Box) -> None:
+    raw_data = dict(getattr(box, "raw_data", None) or {})
+    recalculation = raw_data.get("volume_recalculation")
+    if not isinstance(recalculation, dict):
+        return
+    original_values = recalculation.get("original_values") or {}
+    box.volume = (
+        _decimal_from_optional_value(original_values["volume"])
+        if "volume" in original_values else _box_original_volume(box)
+    )
+    if "weight_volume_ratio" in original_values:
+        box.weight_volume_ratio = _decimal_from_optional_value(original_values["weight_volume_ratio"])
+    else:
+        box.weight_volume_ratio = (
+            ((box.weight or Decimal("0.000")) / box.volume).quantize(DECIMAL_001, rounding=ROUND_HALF_UP)
+            if box.volume and box.volume > 0 else Decimal("0.000")
+        )
+    raw_data.pop("volume_recalculation")
+    box.raw_data = raw_data
 
 
 def _box_original_volume(box: Box) -> Decimal:
