@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { CircleAlert, Plus } from "lucide-react";
+import { CircleAlert, Plus, Trash2 } from "lucide-react";
 import type { WarehouseReceipt } from "@/lib/types";
 import { apiClient } from "@/lib/client-api";
 import { Button } from "@/components/ui/button";
@@ -47,6 +47,7 @@ export function DestinationPortManager() {
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [deletingPort, setDeletingPort] = useState<string | null>(null);
   async function add() {
     const value = code.trim().toUpperCase();
     if (!/^[A-Z0-9]{3,16}$/.test(value)) { setError("请输入 3～16 位字母或数字目的港代码"); return; }
@@ -59,13 +60,29 @@ export function DestinationPortManager() {
     } catch (error) { setError(error instanceof Error ? error.message : "目的港添加失败"); }
     finally { setSaving(false); }
   }
+  async function remove(port: string) {
+    if (!window.confirm(`确认删除目的港 ${port}？正在使用的目的港无法删除。`)) return;
+    setDeletingPort(port);
+    setError("");
+    try {
+      await apiClient.delete(`/destination-ports/${encodeURIComponent(port)}`);
+      await reload();
+    } catch (error) { setError(error instanceof Error ? error.message : "目的港删除失败"); }
+    finally { setDeletingPort(null); }
+  }
   return <Panel title="目的港管理" className="mb-4">
     <div className="flex flex-wrap items-center gap-3">
-      {ports.map((port) => <span key={port} className="font-medium">{port}</span>)}
+      {ports.map((port) => <div key={port} className="flex h-9 items-center gap-1 rounded border border-slate-200 pl-2 text-sm font-medium">
+        <span>{port}</span>
+        <Button type="button" variant="ghost" size="icon" className="h-8 w-8" title={`删除目的港 ${port}`}
+          aria-label={`删除目的港 ${port}`} disabled={saving || deletingPort !== null} onClick={() => void remove(port)}>
+          <Trash2 className="h-4 w-4 text-red-600" />
+        </Button>
+      </div>)}
       <Input aria-label="新增目的港代码" placeholder="目的港代码" className="w-40" maxLength={16} value={code}
-        disabled={saving} onChange={(event) => setCode(event.target.value.toUpperCase())}
+        disabled={saving || deletingPort !== null} onChange={(event) => setCode(event.target.value.toUpperCase())}
         onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void add(); } }} />
-      <Button type="button" size="icon" title="增加目的港" aria-label="增加目的港" disabled={saving} onClick={() => void add()}><Plus className="h-4 w-4" /></Button>
+      <Button type="button" size="icon" title="增加目的港" aria-label="增加目的港" disabled={saving || deletingPort !== null} onClick={() => void add()}><Plus className="h-4 w-4" /></Button>
     </div>
     {error || loadError ? <p role="alert" className="mt-2 text-sm text-red-700">{error || loadError}</p> : null}
   </Panel>;

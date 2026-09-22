@@ -36,12 +36,16 @@ def test_waybill_returns_to_planner_candidates_after_last_receipt_is_unbound():
     with engine.begin() as connection:
         connection.exec_driver_sql("CREATE TABLE air_waybills (id INTEGER PRIMARY KEY, outbound_date DATE)")
         connection.exec_driver_sql("CREATE TABLE warehouse_receipts (id INTEGER PRIMARY KEY, waybill_id INTEGER, warehouse_no TEXT)")
-        connection.exec_driver_sql("INSERT INTO air_waybills VALUES (1, '2026-09-20'), (2, NULL), (3, '2026-09-20')")
-        connection.exec_driver_sql("INSERT INTO warehouse_receipts VALUES (1, 1, 'WH-A'), (2, 2, 'WH-B')")
+        connection.exec_driver_sql("INSERT INTO air_waybills VALUES (1, '2026-09-20'), (2, NULL), (3, '2026-09-20'), (4, NULL)")
+        connection.exec_driver_sql("INSERT INTO warehouse_receipts VALUES (1, 1, 'WH-A'), (2, 1, 'WH-B'), (3, 2, 'WH-C')")
 
     candidate_query = select(AirWaybill.id).where(_needs_warehouse_planning_clause()).order_by(AirWaybill.id)
     with Session(engine) as session:
-        assert list(session.scalars(candidate_query)) == [2, 3]
+        assert list(session.scalars(candidate_query)) == [3, 4]
         session.connection().exec_driver_sql("UPDATE warehouse_receipts SET waybill_id = NULL WHERE id = 1")
-        assert list(session.scalars(candidate_query)) == [1, 2, 3]
+        assert list(session.scalars(candidate_query)) == [3, 4]
+        session.connection().exec_driver_sql("UPDATE warehouse_receipts SET waybill_id = NULL WHERE id = 2")
+        assert list(session.scalars(candidate_query)) == [1, 3, 4]
+        session.connection().exec_driver_sql("UPDATE warehouse_receipts SET waybill_id = NULL WHERE id = 3")
+        assert list(session.scalars(candidate_query)) == [1, 2, 3, 4]
     engine.dispose()

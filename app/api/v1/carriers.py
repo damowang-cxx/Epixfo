@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 
 from app.core.platform_patch import patch_platform_wmi
 
@@ -40,6 +40,13 @@ def list_destination_ports(current_user=Depends(get_current_user), db: Session =
 def create_destination_port(payload: DestinationPortCreate, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
     PermissionService.require_any(current_user, {UserRoleCode.ADMIN, UserRoleCode.ROUTE_STAFF})
     return DestinationPortService(db).create(payload.code)
+
+
+@router.delete("/destination-ports/{code}", status_code=204)
+def delete_destination_port(code: str, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    PermissionService.require_any(current_user, {UserRoleCode.ADMIN, UserRoleCode.ROUTE_STAFF})
+    DestinationPortService(db).delete(code)
+    return Response(status_code=204)
 
 
 @router.get("/carriers", response_model=list[CarrierOut])

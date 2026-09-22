@@ -90,7 +90,7 @@ def _needs_warehouse_planning_clause():
         .correlate(AirWaybill)
         .exists()
     )
-    return AirWaybill.outbound_date.is_(None) | ~has_bound_receipt
+    return ~has_bound_receipt
 
 
 class WarehousePlannerService:

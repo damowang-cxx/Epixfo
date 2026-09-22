@@ -4,7 +4,9 @@ import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.dialects import postgresql
 
+from app.api.v1.carriers import delete_destination_port
 from app.models.destination_port import DestinationPort
 from app.schemas.destination_port import DestinationPortCreate, ReceiptDestinationUpdate
 from app.schemas.waybill import WaybillCreate
@@ -19,12 +21,23 @@ class FakeDb:
         self.commits = 0
         self.rollbacks = 0
         self.added = []
+        self.deleted = []
+        self.scalar_results = []
+        self.statements = []
 
     def get(self, model, key):
         return self.ports.get(key) if model is DestinationPort else None
 
     def add(self, item):
         self.added.append(item)
+
+    def delete(self, item):
+        self.deleted.append(item)
+        self.ports.pop(item.code)
+
+    def scalar(self, statement):
+        self.statements.append(statement)
+        return self.scalar_results.pop(0) if self.scalar_results else None
 
     def commit(self):
         self.commits += 1
@@ -71,6 +84,61 @@ def test_destination_creation_and_duplicate_rollback():
     with pytest.raises(HTTPException):
         DestinationPortService(db).create("AMS")
     assert db.rollbacks == 1
+
+
+def test_unused_destination_can_be_deleted():
+    db = FakeDb()
+
+    DestinationPortService(db).delete(" jfk ")
+
+    assert [item.code for item in db.deleted] == ["JFK"]
+    assert "JFK" not in db.ports
+    assert db.commits == 1
+
+
+def test_receipt_uses_manual_destination_instead_of_raw_channel_tags():
+    db = FakeDb()
+
+    DestinationPortService(db).delete("JFK")
+
+    automatic_receipt_query = str(db.statements[-1].compile(dialect=postgresql.dialect()))
+    assert "destination_ports_override IS NULL" in automatic_receipt_query
+    assert "channel_tags @>" in automatic_receipt_query
+
+
+@pytest.mark.parametrize("scalar_results", [[1], [None, 1], [None, None, 1], [None, None, None, 1]])
+def test_destination_in_use_cannot_be_deleted(scalar_results):
+    db = FakeDb()
+    db.scalar_results = scalar_results
+
+    with pytest.raises(HTTPException) as error:
+        DestinationPortService(db).delete("AMS")
+
+    assert error.value.status_code == 400
+    assert "AMS" in error.value.detail
+    assert db.deleted == []
+    assert db.commits == 0
+
+
+def test_delete_missing_destination_returns_not_found():
+    db = FakeDb()
+
+    with pytest.raises(HTTPException) as error:
+        DestinationPortService(db).delete("CDG")
+
+    assert error.value.status_code == 404
+    assert db.deleted == []
+
+
+@pytest.mark.parametrize("role", ["customer_service", "customs_staff"])
+def test_delete_destination_requires_management_role(role):
+    db = FakeDb()
+
+    with pytest.raises(HTTPException) as error:
+        delete_destination_port("AMS", current_user=user(role), db=db)
+
+    assert error.value.status_code == 403
+    assert db.deleted == []
 
 
 @pytest.mark.parametrize("ports,effective", [([" jfk "], ["JFK"]), ([], []), (None, ["AMS"])])
